@@ -40,8 +40,13 @@ class Random(Agent):
             # add a small delay before resetting after GAME_OVER to avoid timeout
             action = GameAction.RESET
         else:
-            # else choose a random action that isnt reset
-            action = random.choice([a for a in GameAction if a is not GameAction.RESET])
+            if latest_frame.available_actions:
+                pool = [
+                    GameAction.from_id(a) for a in latest_frame.available_actions
+                ]
+            else:
+                pool = [a for a in GameAction if a is not GameAction.RESET]
+            action = random.choice(pool)
 
         if action.is_simple():
             action.reasoning = f"RNG told me to pick {action.value}"

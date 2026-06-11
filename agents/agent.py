@@ -80,7 +80,7 @@ class Agent(ABC):
                 ),
             )
             if frame := self.take_action(action):
-                self.append_frame(frame)
+                self.append_frame(frame, action)
                 logger.info(
                     f"{self.game_id} - {action.name}: count {self.action_counter}, levels completed {frame.levels_completed}, avg fps {self.fps})"
                 )
@@ -123,12 +123,33 @@ class Agent(ABC):
             f"created new recording for {self.name} into {self.recorder.filename}"
         )
 
-    def append_frame(self, frame: FrameData) -> None:
+    def _action_input_for_record(self, action: GameAction) -> dict[str, Any]:
+        """Serialize the action the agent took for recordings.
+
+        The API's ``frame.action_input`` is often RESET (id=0) even after a
+        real step; store what we actually sent so playback and analysis can
+        pair actions with resulting frames reliably.
+        """
+        reasoning = getattr(action, "reasoning", None)
+        if reasoning is not None and not isinstance(reasoning, dict):
+            reasoning = {"text": str(reasoning)}
+        data = action.action_data.model_dump()
+        data["game_id"] = self.game_id
+        return {
+            "id": action.value,
+            "data": data,
+            "reasoning": reasoning,
+        }
+
+    def append_frame(self, frame: FrameData, action: GameAction | None = None) -> None:
         self.frames.append(frame)
         if frame.guid:
             self.guid = frame.guid
         if hasattr(self, "recorder") and not self.is_playback:
-            self.recorder.record(json.loads(frame.model_dump_json()))
+            record_data = json.loads(frame.model_dump_json())
+            if action is not None:
+                record_data["action_input"] = self._action_input_for_record(action)
+            self.recorder.record(record_data)
 
     def do_action_request(self, action: GameAction) -> FrameData:
         data = action.action_data.model_dump()
