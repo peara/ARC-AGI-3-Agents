@@ -20,4 +20,8 @@ tests/recordings/not-a-recording.txt
 # Long-term memory
 memory.db
 
+# Perception debug outputs (regenerable PNGs)
+perception_out/
+motion_out/
+
 environment_files/
