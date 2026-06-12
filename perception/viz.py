@@ -96,6 +96,57 @@ def overlay_objects(
     return canvas
 
 
+def draw_motion(
+    delta: object,
+    matches: object,
+    *,
+    scale: int = 10,
+    title: str | None = None,
+) -> Image.Image:
+    """Visualize one transition.
+
+    Paints the *new* grid, tints vanished cells (red) and appeared cells
+    (green), and draws displacement arrows for each matched moving object.
+    ``delta`` is a motion.Delta; ``matches`` is an iterable of motion.Match.
+    """
+    grid_new = np.asarray(delta.new)  # type: ignore[attr-defined]
+    base = render_grid(grid_new, scale).convert("RGB")
+    pad = 16 if title else 0
+    canvas = Image.new("RGB", (base.width, base.height + pad), (15, 15, 15))
+    canvas.paste(base, (0, pad))
+    draw = ImageDraw.Draw(canvas, "RGBA")
+    font = ImageFont.load_default()
+    if title:
+        draw.text((3, 2), title, fill=(255, 255, 255), font=font)
+
+    def _tint(mask: np.ndarray, color: tuple[int, int, int, int]) -> None:
+        ys, xs = np.nonzero(mask)
+        for r, c in zip(ys.tolist(), xs.tolist()):
+            draw.rectangle(
+                [c * scale, r * scale + pad,
+                 (c + 1) * scale - 1, (r + 1) * scale - 1 + pad],
+                fill=color,
+            )
+
+    _tint(delta.vanished, (255, 0, 0, 110))  # type: ignore[attr-defined]
+    _tint(delta.appeared, (0, 255, 0, 110))  # type: ignore[attr-defined]
+
+    for m in matches:  # type: ignore[union-attr]
+        ar, ac = m.a.centroid
+        br, bc = m.b.centroid
+        x0, y0 = ac * scale + scale / 2, ar * scale + scale / 2 + pad
+        x1, y1 = bc * scale + scale / 2, br * scale + scale / 2 + pad
+        draw.line([(x0, y0), (x1, y1)], fill=(255, 255, 0, 255), width=2)
+        draw.ellipse([x1 - 3, y1 - 3, x1 + 3, y1 + 3], fill=(255, 255, 0, 255))
+        draw.text(
+            (x1 + 3, y1 + 3),
+            f"c{m.color}/{m.size} {m.displacement}",
+            fill=(255, 255, 0, 255),
+            font=font,
+        )
+    return canvas
+
+
 def hstack(images: list[Image.Image], gap: int = 6) -> Image.Image:
     """Concatenate images horizontally for side-by-side hypothesis comparison."""
     if not images:

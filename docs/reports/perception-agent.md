@@ -57,7 +57,7 @@ reusable, and rungs 1–4 need **no training and no network**.
 1. **Static perception** — connected-component candidate objects under multiple
    grouping hypotheses (don't commit to one segmentation). ✅ done
 2. **Delta + common-fate binding** — cluster cells that change together across
-   steps to merge/split candidates. ⬜ next
+   steps to merge/split candidates. ✅ done
 3. **Controllable-object identification** — correlate `ACTION1`–`ACTION4` with
    object motion to tag "the agent". ⬜
 4. **EffectModel + roles** — running action→effect statistics per object;
@@ -138,19 +138,104 @@ are not offered in this game state.
 
 → Ready for Rung 2 (delta + common-fate) and Rung 3 (controllable-object ID).
 
+### Rung 2 — delta + common-fate (done, exploratory)
+
+Code: `perception/motion.py` (`compute_delta`, `track_objects`, `bind_common_fate`,
+`build_transitions`, `aggregate_by_action`), `perception/viz.py:draw_motion`,
+`scripts/analyze_motion.py`. Tracking = `shape_key` + nearest-centroid match;
+common fate = group matches by shared displacement vector.
+
+Run:
+
+```bash
+PYTHONPATH=. python3 scripts/analyze_motion.py \
+  recordings/ls20-9607627b.random.80.4778fe67-*.recording.jsonl --steps 1,2,3,7
+```
+
+**Findings (each one a real discovery from the instruments, not assumed):**
+
+1. **The player is a *compound* object bound by common fate.** Colour 9 (15 px)
+   and colour 12 (10 px) translate by the *same* vector on every move
+   (agreement 1.0). So "the agent" = {c9 ∪ c12}, 25 px — discovered, not
+   hardcoded. Confirms C3. `langgraph_thinking`'s "colour 12 = player" is only
+   half the object.
+2. **Action→displacement map (dr, dc), confirmed via tracking:**
+   ACTION1 `(-5,0)` up · ACTION2 `(+5,0)` down · ACTION3 `(0,-5)` left ·
+   ACTION4 `(0,+5)` right. Moves are 5-cell steps.
+3. **`appeared`/`vanished` never fire on ls20 — all motion is `recolored`.**
+   The playfield *floor* is colour 3 (non-background); true background is
+   colour 4 (outer border). The player moves over floor, so cells go
+   non-bg→non-bg. ⇒ A single global background is the wrong model; we need a
+   **local/floor-aware background** or to lean on the `recolored` channel +
+   tracking rather than appeared/vanished.
+4. **Blocked move = a crisp signature: `changed≈2`, `moving_objs=0`.** When the
+   player walks into a wall it doesn't move; only ~2 cells change (likely an
+   energy/step HUD counter). Cheap, reliable "I hit a wall / nothing happened"
+   detector — useful for search pruning later.
+5. **Whole-screen flash, invisible to metadata (steps 42–43).** Frame 42 is a
+   *single colour* (all 4096 cells = colour 11), then frame 43 repaints the
+   level. Throughout: `state=NOT_FINISHED`, `levels_completed=0`,
+   `full_reset=False` — so this is **not** a death/level event and the event
+   metadata never flags it. Death (`state=GAME_OVER`) and level-complete
+   (`levels_completed` increments) *are* in metadata, so we don't need a
+   transition detector for those; but unknown perceptual events like this flash
+   exist. ⇒ Need a cheap **degenerate-frame guard** (`n_unique==1` or
+   near-total delta) so flashes don't corrupt tracking (the all-colour-11 frame
+   would otherwise become one giant bogus object). These outliers also inflate
+   naive per-action means (action 2 mean_changed 281 vs action 1's 44).
+6. **Tracking noise is visible and rare.** Floor fragments occasionally form a
+   matching `shape_key` and produce a spurious large-displacement match (n=1,
+   colour 3). Low frequency; filterable by size/agreement/Δ magnitude.
+
+Visual confirmation: `motion_out/motion_003.png` shows both c9 and c12 with
+parallel `(0,+5)` arrows.
+
+### Emerging insight: object *kinds* need different identity mechanisms
+
+"Object" is not one thing. Each kind is re-identified across frames by a
+*different* correspondence cue, and a single matcher can't cover all of them
+(a mover keeps its shape but changes position; an in-place HUD counter keeps its
+position but changes shape). This motivates a persistent object registry with
+multiple matchers and per-object property trajectories.
+
+| Object kind | Re-identification cue | Defining property |
+|-------------|----------------------|-------------------|
+| Player / movers | common fate (shared displacement) | translation |
+| HUD counter | in-place positional/support overlap | size/length over time (monotonic) |
+| Walls / floor / structure | persistence (unchanged) | stable position |
+| Key ↔ door (the **goal**) | shape match under linear transform (scale/rotate) | compound-shape signature |
+| Flash / transition frames | perceptual anomaly (1 colour / huge delta) | absent from metadata |
+
+The key↔door relation is special: it is (likely) the **win condition** — a
+compound shape (inner pattern inside a box) that must be matched between the
+bottom-left key and the top-middle door under scale (and possibly rotation),
+where even the box sizes differ. A dedicated transform-invariant matcher, built
+*on top of* stable object identities.
+
 ## 6. Open questions / next steps
 
-- [ ] Rung 2: implement frame-delta extraction + common-fate clustering on the
-      new labeled recording.
-- [ ] Rung 3: auto-identify controllable object via ACTION1–4 motion correlation.
-- [ ] Decide object identity/tracking across frames (use `shape_key` + centroid
-      nearest-match).
+- [x] Rung 2: frame-delta + common-fate clustering on labeled recording.
+- [ ] **Persistent object registry** (next): stable IDs across an episode via
+      multiple cues (displacement / positional overlap / persistence) + per-object
+      property trajectories. Lets roles emerge from data; resolves "are these two
+      blobs the same object across frames?".
+- [ ] **Degenerate-frame guard**: skip/flag frames with `n_unique==1` or
+      near-total delta so flashes/transitions don't corrupt tracking.
+- [ ] **Key↔door transform-invariant matcher**: canonicalize compound shapes
+      (extract inner pattern, normalize scale/rotation) to detect the goal relation.
+- [ ] **Floor-aware background**: model per-region background so appeared/vanished
+      become meaningful (needed for pickups/doors, not just movement).
+- [ ] Rung 3: promote common-fate result to an explicit "controllable object"
+      tag using the action→displacement consistency (already 1.0 agreement here).
+- [ ] Merge multi-colour movers into one tracked entity (compound-object id).
 - [ ] How to merge multi-layer frames when games have >1 layer.
 - [ ] Validate perception on a non-ls20 game to test game-agnosticism (C1).
 
 ## 7. Artifacts
 
-- Code: `perception/`, `scripts/perceive_recording.py`, recording fix in `agents/agent.py`
+- Code: `perception/objects.py`, `perception/motion.py`, `perception/viz.py`,
+  `scripts/perceive_recording.py`, `scripts/analyze_motion.py`,
+  recording fix in `agents/agent.py`
 - Reference recording: `recordings/ls20-9607627b.random.80.4778fe67-*.recording.jsonl`
-- Sample outputs: `perception_out/frame_*.png`
+- Sample outputs: `perception_out/frame_*.png`, `motion_out/motion_*.png`
 - Related: `docs/diary/2026-06-09.md` (background research, leaderboard notes)
