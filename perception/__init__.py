@@ -27,6 +27,13 @@ from .objects import (
     segment_hypotheses,
     to_grid,
 )
+from .entities import Entity, EntityCatalog, build_entities
+from .roles import (
+    HeuristicRoleAssignerV1,
+    RolePatch,
+    assign_roles,
+    detect_controllable,
+)
 from .registry import (
     FrameEvent,
     Observation,
@@ -66,4 +73,11 @@ __all__ = [
     "derive_roles",
     "is_degenerate",
     "run_registry",
+    "Entity",
+    "EntityCatalog",
+    "build_entities",
+    "HeuristicRoleAssignerV1",
+    "RolePatch",
+    "assign_roles",
+    "detect_controllable",
 ]

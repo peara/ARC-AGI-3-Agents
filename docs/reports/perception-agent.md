@@ -4,7 +4,7 @@
 > the reasoning behind them, what we've built, and what we found, so we can
 > refer back and revise as evidence comes in.
 >
-> Last updated: 2026-06-11
+> Last updated: 2026-06-13
 
 ---
 
@@ -60,8 +60,8 @@ reusable, and rungs 1–4 need **no training and no network**.
    steps to merge/split candidates. ✅ done
 2.5 **Persistent object registry** — stable ids across an episode; roles &
    entities derived from trajectories. ✅ done
-3. **Controllable-object identification** — correlate `ACTION1`–`ACTION4` with
-   object motion to tag "the agent". ⬜
+3. **Controllable-object identification** — correlate actions with object motion;
+   tag controllable entity + observed motion-by-action. ✅ done (v1 heuristic)
 4. **EffectModel + roles** — running action→effect statistics per object;
    classify wall / pickup / hazard / door by *consequence*. ⬜
 5. **Active disambiguation + planning** — information-gain probes, then
@@ -260,34 +260,75 @@ PYTHONPATH=. python3 scripts/track_recording.py \
    constant in this run — needs a recording where energy visibly depletes, or a
    finer in-place-change detector. Open.
 
+### Rung 3 — entity layer + controllable detection (done, v1)
+
+Code: `perception/entities.py` (`Entity`, `EntityCatalog`, `build_entities`),
+`perception/roles.py` (`detect_controllable`, `HeuristicRoleAssignerV1`,
+`assign_roles`), updated `scripts/track_recording.py`.
+
+Design:
+
+- **Three layers:** Track (atom, action-agnostic) → Entity (grouped tracks) →
+  role/affordance labels (action-aware derivation only).
+- **`build_entities`:** common-fate compounds + singleton leftovers. Container
+  grouping (key/door) deferred — see what we get first without it.
+- **`assign_roles`:** pluggable assigner; v1 runs `detect_controllable` only.
+  Detectors emit `RolePatch`es; failure returns an unchanged catalog (no crash).
+- **Safe accessors:** `catalog.controllable()`, `catalog.observed_motion_by_action()`
+  — callers must handle `None` when detection fails on other games.
+- **Naming:** role `"controllable"` + affordance `controllable=True`; observed
+  stats in meta as `motion_by_action` (not ground-truth physics).
+
+Run:
+
+```bash
+PYTHONPATH=. python3 scripts/track_recording.py \
+  recordings/ls20-9607627b.random.80.4778fe67-*.recording.jsonl --frames 0,10
+```
+
+**Findings (ls20, 81 frames):**
+
+1. **Controllable entity recovered:** entity `#0` compound `{#14, #18}` (c9∪c12),
+   `motion_agreement=1.0`. Matches Rung 2 common-fate player. ✓
+2. **Observed motion-by-action:** `{1:(-5,0), 2:(+5,0), 3:(0,-5), 4:(0,+5)}` —
+   same map as motion analysis; now attached to the entity catalog. ✓
+3. **Structural floor excluded from controllable detection.** Track `#3` still
+   reads as `mover` in per-track `derive_roles`, but is not tagged controllable
+   (structural filter in detector). Partial fix for the false-positive mover. ✓
+4. **Failure path is safe.** Forcing impossible agreement → `controllable()` is
+   `None`, catalog otherwise intact (22 singleton/compound entities, no labels).
+5. **Heuristic is game-shape-specific.** Action→displacement correlation works on
+   ls20 but may fail on click-only or non-translational control — by design the
+   detector returns no patch rather than guessing.
+
 ## 6. Open questions / next steps
 
 - [x] Rung 2.5: persistent object registry + derived roles/entities.
+- [x] Rung 2: frame-delta + common-fate clustering on labeled recording.
+- [x] Rung 3: entity layer + controllable detection (v1 heuristic).
+- [x] Degenerate-frame guard (in registry).
+- [x] Merge multi-colour movers into one entity (compound via common fate).
 - [ ] Refine `derive_roles` mover criterion (fraction-of-life / action-correlated,
       exclude structural) so the floor stops reading as a mover.
-- [ ] Refine `derive_entities` containment (cell-containment, skip oversized
-      outers) to drop floor-bbox noise.
-- [x] Rung 2: frame-delta + common-fate clustering on labeled recording.
-- [ ] **Persistent object registry** (next): stable IDs across an episode via
-      multiple cues (displacement / positional overlap / persistence) + per-object
-      property trajectories. Lets roles emerge from data; resolves "are these two
-      blobs the same object across frames?".
-- [ ] **Degenerate-frame guard**: skip/flag frames with `n_unique==1` or
-      near-total delta so flashes/transitions don't corrupt tracking.
+- [ ] Container entity grouping (cell-containment, skip oversized outers) for
+      key/door compounds — deferred from v1 `build_entities`.
 - [ ] **Key↔door transform-invariant matcher**: canonicalize compound shapes
       (extract inner pattern, normalize scale/rotation) to detect the goal relation.
 - [ ] **Floor-aware background**: model per-region background so appeared/vanished
       become meaningful (needed for pickups/doors, not just movement).
-- [ ] Rung 3: promote common-fate result to an explicit "controllable object"
-      tag using the action→displacement consistency (already 1.0 agreement here).
-- [ ] Merge multi-colour movers into one tracked entity (compound-object id).
+- [ ] Additional role detectors (`solid`, `interactable`) — Rung 4.
 - [ ] How to merge multi-layer frames when games have >1 layer.
 - [ ] Validate perception on a non-ls20 game to test game-agnosticism (C1).
+
+> The predictive layer that consumes this perception output (forward model that
+> predicts the next state given an action) is scoped in a separate design doc:
+> `docs/brainstorms/effect-model.md`.
 
 ## 7. Artifacts
 
 - Code: `perception/objects.py`, `perception/motion.py`, `perception/registry.py`,
-  `perception/viz.py`, `scripts/perceive_recording.py`, `scripts/analyze_motion.py`,
+  `perception/entities.py`, `perception/roles.py`, `perception/viz.py`,
+  `scripts/perceive_recording.py`, `scripts/analyze_motion.py`,
   `scripts/track_recording.py`, recording fix in `agents/agent.py`
 - Reference recording: `recordings/ls20-9607627b.random.80.4778fe67-*.recording.jsonl`
 - Sample outputs: `perception_out/frame_*.png`, `motion_out/motion_*.png`,

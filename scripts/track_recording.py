@@ -5,9 +5,8 @@ Usage:
         [--frames 0,10,40] [--out track_out] [--scale 10]
 
 Tracks colour-pure atoms across the whole episode (action-agnostic), then
-prints per-track roles, derived entities (common-fate + containment), and
-notable frame events (degenerate flashes, merge/split candidates). Dumps
-stable-id overlays for chosen frames so identities can be checked by eye.
+builds entities and assigns roles. Prints per-track heuristics, entity catalog,
+and frame events. Dumps stable-id overlays for chosen frames.
 """
 
 from __future__ import annotations
@@ -17,7 +16,8 @@ import os
 
 from perception import (
     ObjectRegistry,
-    derive_entities,
+    assign_roles,
+    build_entities,
     derive_roles,
     load_recording_frames,
 )
@@ -64,16 +64,28 @@ def main() -> None:
                   f"n_move={r['n_move']:>2} size={r['size_range']} "
                   f"cen_span={r['centroid_span']} struct={r['structural']}")
 
-    print("\n=== derived entities ===")
-    ents = derive_entities(reg)
-    if not ents:
-        print("  (none)")
-    for e in ents:
-        if e["reason"] == "common_fate":
-            print(f"  common_fate: tracks {e['members']} colors {e['colors']}")
-        else:
-            print(f"  containment: #{e['inner']} inside #{e['outer']} "
-                  f"({e['frames']} frames)")
+    catalog = build_entities(reg)
+    catalog = assign_roles(catalog, reg, _action_ids)
+
+    print("\n=== entities ===")
+    ctrl = catalog.controllable()
+    if ctrl is None:
+        print("  (no controllable entity detected)")
+    for eid in sorted(catalog.entities):
+        ent = catalog.entities[eid]
+        colors = sorted({reg.tracks[t].color for t in ent.members})
+        line = (f"  #{eid:<3} {ent.composition:<10} members={sorted(ent.members)} "
+                f"colors={colors}")
+        if ent.role:
+            line += f" role={ent.role}"
+        print(line)
+        if ent.affordances.get("controllable") is True:
+            motion = catalog.observed_motion_by_action()
+            agreement = ent.meta.get("motion_agreement")
+            print(f"         affordances={ent.affordances}")
+            if motion is not None:
+                print(f"         observed_motion_by_action={motion} "
+                      f"agreement={agreement}")
 
     print("\n=== frame events ===")
     from collections import Counter
