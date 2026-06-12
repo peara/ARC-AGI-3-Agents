@@ -27,6 +27,16 @@ from .objects import (
     segment_hypotheses,
     to_grid,
 )
+from .registry import (
+    FrameEvent,
+    Observation,
+    ObjectRegistry,
+    Track,
+    derive_entities,
+    derive_roles,
+    is_degenerate,
+    run_registry,
+)
 
 __all__ = [
     "GameObject",
@@ -48,4 +58,12 @@ __all__ = [
     "compute_delta",
     "load_recording_frames",
     "track_objects",
+    "FrameEvent",
+    "Observation",
+    "ObjectRegistry",
+    "Track",
+    "derive_entities",
+    "derive_roles",
+    "is_degenerate",
+    "run_registry",
 ]

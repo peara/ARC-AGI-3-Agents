@@ -58,6 +58,8 @@ reusable, and rungs 1–4 need **no training and no network**.
    grouping hypotheses (don't commit to one segmentation). ✅ done
 2. **Delta + common-fate binding** — cluster cells that change together across
    steps to merge/split candidates. ✅ done
+2.5 **Persistent object registry** — stable ids across an episode; roles &
+   entities derived from trajectories. ✅ done
 3. **Controllable-object identification** — correlate `ACTION1`–`ACTION4` with
    object motion to tag "the agent". ⬜
 4. **EffectModel + roles** — running action→effect statistics per object;
@@ -212,8 +214,59 @@ bottom-left key and the top-middle door under scale (and possibly rotation),
 where even the box sizes differ. A dedicated transform-invariant matcher, built
 *on top of* stable object identities.
 
+### Rung 2.5 — persistent object registry (done, lean v1)
+
+Code: `perception/registry.py` (`ObjectRegistry`, `is_degenerate`, `derive_roles`,
+`derive_entities`), `perception/viz.py:overlay_tracks`,
+`scripts/track_recording.py`.
+
+Design (agreed): atoms = colour-pure CCs; **action-agnostic** matching cascade
+(A rigid shape+colour+nearest-centroid, B cell-IoU+colour for in-place mutators,
+C containment); 1-to-1 with appear/disappear; degenerate-frame guard carries ids
+across flashes; floor handled by tagging huge atoms `structural`. Roles & entities
+are a separate derived pass so they emerge from trajectories.
+
+Run:
+
+```bash
+PYTHONPATH=. python3 scripts/track_recording.py \
+  recordings/ls20-9607627b.random.80.4778fe67-*.recording.jsonl --frames 0,10,41,43
+```
+
+**Findings (ls20, 81 frames):**
+
+1. **Stable ids held for the whole episode.** 23 tracks, almost all `n_obs=80`,
+   `lifespan=81` — including across the colour-11 flash at frame 42. The
+   degenerate guard fired exactly once (frame 42, `n_unique==1`) and ids carried
+   across the gap. ✓
+2. **Player recovered as a common-fate entity:** tracks `#14 (c9)` + `#18 (c12)`,
+   both `n_move=56`, `centroid_span≈40` — discovered, not assumed. ✓
+3. **Compound key/door surfaced by containment** (visual: `track_out/track_010.png`):
+   - `#7` (gray box, bottom-left) = **key**, contains pattern `#15` (c9, size 20).
+   - `#6` (gray box, top) = **door**, contains pattern `#12` (c9, size 5).
+   - `#15` (size 20) vs `#12` (size 5) = the **same-shape / different-scale**
+     relation — the goal signal for Rung "key↔door".
+4. **Two known v1 rough edges (keep simple, refine later):**
+   - **Floor false-positive "mover".** `#3` (floor, c3, ~890 px) tagged `mover`
+     because the flash induced `n_move=2`. Mover criterion is too loose
+     (`n_move>=2`); should require motion as a fraction of lifespan or
+     action-correlation (Rung 3), and/or exclude `structural`.
+   - **Containment over-fires via huge bbox.** The floor's bbox spans the room,
+     so "everything inside #3" (21 containment hits, most spurious). Fix: use
+     **cell-containment** not bbox, and/or skip `structural`/oversized outers.
+     The real compound relations (#15⊂#7, #12⊂#6) are present but buried.
+5. **No `counter` role detected yet.** Expected an energy/HUD counter (the
+   "2 cells change on blocked move" from Rung 2). Gray bars `#5`/`#8` stayed
+   constant in this run — needs a recording where energy visibly depletes, or a
+   finer in-place-change detector. Open.
+
 ## 6. Open questions / next steps
 
+- [x] Rung 2.5: persistent object registry + derived roles/entities.
+- [ ] Refine `derive_roles` mover criterion (fraction-of-life / action-correlated,
+      exclude structural) so the floor stops reading as a mover.
+- [ ] Refine `derive_entities` containment (cell-containment, skip oversized
+      outers) to drop floor-bbox noise.
 - [x] Rung 2: frame-delta + common-fate clustering on labeled recording.
 - [ ] **Persistent object registry** (next): stable IDs across an episode via
       multiple cues (displacement / positional overlap / persistence) + per-object
@@ -233,9 +286,10 @@ where even the box sizes differ. A dedicated transform-invariant matcher, built
 
 ## 7. Artifacts
 
-- Code: `perception/objects.py`, `perception/motion.py`, `perception/viz.py`,
-  `scripts/perceive_recording.py`, `scripts/analyze_motion.py`,
-  recording fix in `agents/agent.py`
+- Code: `perception/objects.py`, `perception/motion.py`, `perception/registry.py`,
+  `perception/viz.py`, `scripts/perceive_recording.py`, `scripts/analyze_motion.py`,
+  `scripts/track_recording.py`, recording fix in `agents/agent.py`
 - Reference recording: `recordings/ls20-9607627b.random.80.4778fe67-*.recording.jsonl`
-- Sample outputs: `perception_out/frame_*.png`, `motion_out/motion_*.png`
+- Sample outputs: `perception_out/frame_*.png`, `motion_out/motion_*.png`,
+  `track_out/track_*.png`
 - Related: `docs/diary/2026-06-09.md` (background research, leaderboard notes)

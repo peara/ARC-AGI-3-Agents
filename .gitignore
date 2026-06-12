@@ -23,5 +23,6 @@ memory.db
 # Perception debug outputs (regenerable PNGs)
 perception_out/
 motion_out/
+track_out/
 
 environment_files/

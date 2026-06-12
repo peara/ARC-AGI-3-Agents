@@ -147,6 +147,44 @@ def draw_motion(
     return canvas
 
 
+def overlay_tracks(
+    grid: Grid,
+    tracked: object,
+    *,
+    scale: int = 10,
+    title: str | None = None,
+) -> Image.Image:
+    """Overlay stable-id boxes on a frame.
+
+    ``tracked`` is an iterable of (track_id, observation) where observation has
+    ``.bbox``, ``.color``, ``.size``. Box colour is keyed by track id so the
+    same object keeps the same outline colour across frames.
+    """
+    base = render_grid(grid, scale).convert("RGB")
+    pad = 16 if title else 0
+    canvas = Image.new("RGB", (base.width, base.height + pad), (15, 15, 15))
+    canvas.paste(base, (0, pad))
+    draw = ImageDraw.Draw(canvas)
+    font = ImageFont.load_default()
+    if title:
+        draw.text((3, 2), title, fill=(255, 255, 255), font=font)
+
+    for tid, obs in tracked:  # type: ignore[union-attr]
+        rmin, cmin, rmax, cmax = obs.bbox
+        outline = _OUTLINE_COLORS[tid % len(_OUTLINE_COLORS)]
+        draw.rectangle(
+            [cmin * scale, rmin * scale + pad,
+             (cmax + 1) * scale - 1, (rmax + 1) * scale - 1 + pad],
+            outline=outline, width=1,
+        )
+        draw.text(
+            (cmin * scale + 1, rmin * scale + pad + 1),
+            f"#{tid}",
+            fill=outline, font=font,
+        )
+    return canvas
+
+
 def hstack(images: list[Image.Image], gap: int = 6) -> Image.Image:
     """Concatenate images horizontally for side-by-side hypothesis comparison."""
     if not images:
