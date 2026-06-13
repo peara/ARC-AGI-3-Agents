@@ -1,7 +1,7 @@
 """Run the persistent object registry over a recording and report.
 
 Usage:
-    PYTHONPATH=. python3 scripts/track_recording.py RECORDING.jsonl \
+    uv run python scripts/track_recording.py RECORDING.jsonl \
         [--frames 0,10,40] [--out track_out] [--scale 10]
 
 Tracks colour-pure atoms across the whole episode (action-agnostic), then

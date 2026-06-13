@@ -34,6 +34,23 @@ from .roles import (
     assign_roles,
     detect_controllable,
 )
+from .planning import (
+    MovementModel,
+    PlanSpec,
+    SceneState,
+    entity_pos_at,
+    goal_pos,
+    learn_movement_model,
+    plan_bfs,
+    predict_move,
+    replay_predicted,
+    snapshot,
+)
+from .recording_eval import (
+    collect_observed_steps,
+    plan_and_evaluate,
+    verify_plan_on_recording,
+)
 from .registry import (
     FrameEvent,
     Observation,
@@ -80,4 +97,17 @@ __all__ = [
     "RolePatch",
     "assign_roles",
     "detect_controllable",
+    "MovementModel",
+    "PlanSpec",
+    "SceneState",
+    "entity_pos_at",
+    "goal_pos",
+    "learn_movement_model",
+    "plan_bfs",
+    "predict_move",
+    "replay_predicted",
+    "snapshot",
+    "collect_observed_steps",
+    "plan_and_evaluate",
+    "verify_plan_on_recording",
 ]

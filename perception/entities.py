@@ -56,10 +56,16 @@ class EntityCatalog:
 
     def controllable(self) -> Entity | None:
         """Entity tagged controllable, or None if detection did not run or failed."""
-        for ent in self.entities.values():
-            if ent.affordances.get("controllable") is True:
-                return ent
-        return None
+        hits = self.controllables()
+        return hits[0] if len(hits) == 1 else (hits[0] if hits else None)
+
+    def controllables(self) -> list[Entity]:
+        """All entities tagged controllable (may be empty or many)."""
+        return [
+            ent
+            for ent in self.entities.values()
+            if ent.affordances.get("controllable") is True
+        ]
 
     def observed_motion_by_action(self) -> dict[int, tuple[int, int]] | None:
         """Observed action→displacement from controllable detector, if any."""

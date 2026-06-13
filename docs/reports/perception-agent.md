@@ -64,8 +64,8 @@ reusable, and rungs 1–4 need **no training and no network**.
    tag controllable entity + observed motion-by-action. ✅ done (v1 heuristic)
 4. **EffectModel + roles** — running action→effect statistics per object;
    classify wall / pickup / hazard / door by *consequence*. ⬜
-5. **Active disambiguation + planning** — information-gain probes, then
-   BFS/greedy on the abstracted state. Optional learned forward model here. ⬜
+5. **Partial-state planning** — snapshot → empirical predict → BFS on a
+   caller-defined subset of state; verify against recordings. ✅ v1 (movement)
 
 Where the LLM fits (dev only, not Kaggle eval): consume the **compact symbolic
 scene** the perception layer emits and propose high-level hypotheses ("looks
@@ -90,7 +90,7 @@ New, dependency-light (`numpy` + `pillow`), Kaggle-portable package:
 Run example:
 
 ```bash
-PYTHONPATH=. python3 scripts/perceive_recording.py \
+uv run python scripts/perceive_recording.py \
   recordings/ls20-9607627b.random.80.*.recording.jsonl --frames 0,2,5
 ```
 
@@ -150,7 +150,7 @@ common fate = group matches by shared displacement vector.
 Run:
 
 ```bash
-PYTHONPATH=. python3 scripts/analyze_motion.py \
+uv run python scripts/analyze_motion.py \
   recordings/ls20-9607627b.random.80.4778fe67-*.recording.jsonl --steps 1,2,3,7
 ```
 
@@ -229,7 +229,7 @@ are a separate derived pass so they emerge from trajectories.
 Run:
 
 ```bash
-PYTHONPATH=. python3 scripts/track_recording.py \
+uv run python scripts/track_recording.py \
   recordings/ls20-9607627b.random.80.4778fe67-*.recording.jsonl --frames 0,10,41,43
 ```
 
@@ -282,7 +282,7 @@ Design:
 Run:
 
 ```bash
-PYTHONPATH=. python3 scripts/track_recording.py \
+uv run python scripts/track_recording.py \
   recordings/ls20-9607627b.random.80.4778fe67-*.recording.jsonl --frames 0,10
 ```
 
@@ -301,11 +301,61 @@ PYTHONPATH=. python3 scripts/track_recording.py \
    ls20 but may fail on click-only or non-translational control — by design the
    detector returns no patch rather than guessing.
 
+### Rung 5 — partial-state planning (done, v1 movement)
+
+Code: `perception/planning.py` (`SceneState`, `PlanSpec`, `snapshot`,
+`learn_movement_model`, `predict_move`, `plan_bfs`),
+`perception/recording_eval.py` (offline plan verification against a recording),
+`scripts/plan_recording.py`, `tests/reference_recordings.json`,
+`tests/unit/test_planning.py`.
+
+Design:
+
+- **`SceneState` is ephemeral** — built per BFS call from a caller `PlanSpec`
+  (which entity ids, which dims, goal predicate). Agent/LLM chooses the spec;
+  BFS does not own persistent state.
+- **Goals use entity ids**, not roles — supports multi-controllable games; roles
+  are only a discovery aid (`catalog.controllables()`).
+- **Partial state:** only `relevant` dims are hashed and planned over; volatile
+  dims (e.g. stamina) can be recorded but excluded from dedup.
+- **No wall ontology:** movement model learns observed `(pos, action) → next_pos`
+  and `(pos, action) → block` from the episode; unseen pairs extrapolate via
+  `motion_by_action` only. Open-loop verify checks each step against recording
+  where observed (`matched` / `extrapolated` / `diverged`).
+- **Dev loop:** `tests/reference_recordings.json` lists plan cases per game;
+  pytest parametrizes over them. Add a recording + entity id + frame pair to
+  test a new game. Run with `uv` — see `tests/README.md`.
+
+Run:
+
+```bash
+uv sync --group dev
+uv run pytest tests/unit/test_planning.py -v
+
+uv run python scripts/plan_recording.py --manifest-case ls20-random-legal-e0-f0-g10 \
+  --verify-segments
+```
+
+**Findings (ls20, manifest cases):**
+
+1. **BFS finds paths between frame positions.** Frame 0→10: plan `[4, 1]` (2 steps);
+   frame 0→40: 6 steps; predict replay reaches goal. ✓
+2. **Segment verify: all steps `matched` on 0→10 case** — plan steps align with
+   observed `(pos, action)` transitions from the recording (no extrapolation needed
+   on that short path). ✓
+3. **Movement model: 30 known transitions, 9 known blocks** — all from observation,
+   not assumed solids. ✓
+4. **Live verify/replan deferred** — recording validates observed physics; live
+   agent loop (execute → re-snapshot → replan) is the next increment for unseen
+   `(pos, action)` pairs.
+
 ## 6. Open questions / next steps
 
 - [x] Rung 2.5: persistent object registry + derived roles/entities.
 - [x] Rung 2: frame-delta + common-fate clustering on labeled recording.
 - [x] Rung 3: entity layer + controllable detection (v1 heuristic).
+- [x] Rung 5 (v1): partial-state snapshot + empirical movement model + BFS +
+      recording-based verification loop.
 - [x] Degenerate-frame guard (in registry).
 - [x] Merge multi-colour movers into one entity (compound via common fate).
 - [ ] Refine `derive_roles` mover criterion (fraction-of-life / action-correlated,
@@ -316,9 +366,10 @@ PYTHONPATH=. python3 scripts/track_recording.py \
       (extract inner pattern, normalize scale/rotation) to detect the goal relation.
 - [ ] **Floor-aware background**: model per-region background so appeared/vanished
       become meaningful (needed for pickups/doors, not just movement).
-- [ ] Additional role detectors (`solid`, `interactable`) — Rung 4.
+- [ ] Additional role detectors + richer `predict` (Rung 4 / EffectModel).
+- [ ] Live planner agent: execute plan → re-snapshot → detect divergence → replan.
+- [ ] Add non-ls20 entries to `tests/reference_recordings.json` (C1).
 - [ ] How to merge multi-layer frames when games have >1 layer.
-- [ ] Validate perception on a non-ls20 game to test game-agnosticism (C1).
 
 > The predictive layer that consumes this perception output (forward model that
 > predicts the next state given an action) is scoped in a separate design doc:
@@ -327,9 +378,12 @@ PYTHONPATH=. python3 scripts/track_recording.py \
 ## 7. Artifacts
 
 - Code: `perception/objects.py`, `perception/motion.py`, `perception/registry.py`,
-  `perception/entities.py`, `perception/roles.py`, `perception/viz.py`,
+  `perception/entities.py`, `perception/roles.py`, `perception/planning.py`,
+  `perception/recording_eval.py`, `perception/viz.py`,
   `scripts/perceive_recording.py`, `scripts/analyze_motion.py`,
-  `scripts/track_recording.py`, recording fix in `agents/agent.py`
+  `scripts/track_recording.py`, `scripts/plan_recording.py`,
+  `tests/reference_recordings.json`, `tests/unit/test_planning.py`,
+  recording fix in `agents/agent.py`
 - Reference recording: `recordings/ls20-9607627b.random.80.4778fe67-*.recording.jsonl`
 - Sample outputs: `perception_out/frame_*.png`, `motion_out/motion_*.png`,
   `track_out/track_*.png`

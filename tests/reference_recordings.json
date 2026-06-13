@@ -1,0 +1,12 @@
+{
+  "recordings": [
+    {
+      "name": "ls20-random-legal",
+      "path": "recordings/ls20-9607627b.random.80.4778fe67-d8c5-4853-90d8-36aff85bb079.recording.jsonl",
+      "plan_cases": [
+        {"entity_id": 0, "start_frame": 0, "goal_frame": 10},
+        {"entity_id": 0, "start_frame": 0, "goal_frame": 40}
+      ]
+    }
+  ]
+}

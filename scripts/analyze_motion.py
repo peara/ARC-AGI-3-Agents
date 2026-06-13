@@ -1,7 +1,7 @@
 """Rung-2 exploration: delta + common-fate analysis of a recording.
 
 Usage:
-    PYTHONPATH=. python3 scripts/analyze_motion.py RECORDING.jsonl \
+    uv run python scripts/analyze_motion.py RECORDING.jsonl \
         [--steps 1,2,3] [--out motion_out] [--scale 10] [--grouping color] \
         [--connectivity 4]
 
