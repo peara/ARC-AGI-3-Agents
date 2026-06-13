@@ -6,8 +6,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from effects import Pos
-
-from ..session import SceneSnapshot
+from perception.session import SceneSnapshot
 
 
 @dataclass

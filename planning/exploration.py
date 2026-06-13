@@ -4,17 +4,24 @@ from __future__ import annotations
 
 import random
 
-from effects import MovementModel, Pos, SceneState, predict_move, replay_predicted
+from effects import (
+    MovementModel,
+    Pos,
+    SceneState,
+    learn_movement_model,
+    predict_move,
+    replay_predicted,
+)
+from perception.session import RESET_ACTION, SceneSnapshot
 
-from ..planning import PlanSpec, plan_bfs, snapshot
-from ..policies.exploration import (
+from .heuristics import (
     ExplorationConfig,
     curiosity_entity_target,
     reach_radius,
     within,
 )
-from ..session import RESET_ACTION, SceneSnapshot
 from .protocol import PlannerStatus
+from .search import PlanSpec, plan_bfs, snapshot
 
 
 class ExplorationPolicy:
@@ -48,8 +55,6 @@ class ExplorationPolicy:
         self._last_diverged = False
         self.rng = random.Random(self.cfg.seed)
 
-    # ----------------------------------------------------------------- observe
-
     def on_observed(self, scene: SceneSnapshot) -> None:
         """Verify last prediction and update exploration bookkeeping."""
         self._last_scene = scene
@@ -69,8 +74,6 @@ class ExplorationPolicy:
             self._last_diverged = True
             self.plan = []
 
-    # ------------------------------------------------------------------ decide
-
     def decide(
         self,
         scene: SceneSnapshot,
@@ -87,7 +90,14 @@ class ExplorationPolicy:
         if controllable_id is None or scene.n_observed < self.cfg.min_random_steps:
             return self._random_action(actions, phase="explore_random")
 
-        self._model = scene.movement_model(controllable_id)
+        self._model = learn_movement_model(
+            scene.registry,
+            scene.catalog,
+            list(scene.action_ids),
+            controllable_id,
+            grid_rows=scene.grid_rows,
+            grid_cols=scene.grid_cols,
+        )
         if self._model is None or not self._model.motion_by_action:
             return self._random_action(actions, phase="explore_random")
 
@@ -120,8 +130,6 @@ class ExplorationPolicy:
             self._expect = (before, action, after)
         else:
             self._expect = None
-
-    # ------------------------------------------------------------- planning
 
     def _plan_toward_unknown(
         self,
@@ -181,8 +189,6 @@ class ExplorationPolicy:
             return
 
         self.plan = []
-
-    # ------------------------------------------------------------- internals
 
     def _snapshot_state(
         self, scene: SceneSnapshot, controllable_id: int

@@ -1,12 +1,11 @@
 """Game-agnostic perception layer for ARC-AGI-3 frames.
 
 Package layout:
-  session/   — live episode state (``PerceptionSession``, ``SceneSnapshot``); import ``perception.session``
-  policies/  — pure heuristics and config (no env I/O)
-  planners/  — action planners implementing ``Planner``; import ``perception.planners``
-  planning.py — BFS search over ``effects.predict``; import ``perception.planning``
+  session/   — live episode state (``PerceptionSession``, ``SceneSnapshot``)
   registry.py, entities.py, roles.py — perception ladder rungs 2.5–3
   objects.py, motion.py — static segmentation and delta analysis
+
+Search and policies live in ``planning/``; forward models in ``effects/``.
 """
 
 from .entities import Entity, EntityCatalog, build_entities

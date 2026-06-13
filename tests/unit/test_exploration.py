@@ -5,9 +5,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from perception.planners import ExplorationPolicy
-from perception.policies import ExplorationConfig
+from effects import learn_movement_model
 from perception.session import RESET_ACTION, PerceptionSession
+from planning import ExplorationConfig, ExplorationPolicy
 from tests.perception_fixtures import load_manifest
 
 SIM_STEP = 3
@@ -94,8 +94,8 @@ class TestExplorationLoopSimulated:
         assert policy.controllable_id is not None
 
     def test_learned_motion_matches_truth(self):
-        _, policy, scene, _ = _run_loop(steps=40)
-        model = scene.movement_model()
+        _, policy, _, _ = _run_loop(steps=40)
+        model = policy.model
         assert model is not None and model.motion_by_action
         for action, disp in model.motion_by_action.items():
             assert disp == SIM_MOTION[action]
@@ -107,9 +107,9 @@ class TestExplorationLoopSimulated:
         assert "frontier" in phases
 
     def test_verify_loop_triggers_replan_on_wall(self):
-        _, policy, scene, statuses = _run_loop(steps=60)
+        _, policy, _, statuses = _run_loop(steps=60)
         assert any(s.diverged for s in statuses)
-        model = scene.movement_model()
+        model = policy.model
         assert model is not None
         assert len(model.known_blocks) >= 1
 
@@ -127,7 +127,12 @@ class TestPerceptionSession:
         session, _ = PerceptionSession.from_recording(cases[0].recording.path)
         scene = session.snapshot()
         assert scene.controllable_id() is not None
-        model = scene.movement_model()
+        model = learn_movement_model(
+            scene.registry,
+            scene.catalog,
+            list(scene.action_ids),
+            scene.controllable_id(),
+        )
         assert model is not None and model.motion_by_action
         for disp in model.motion_by_action.values():
             assert max(abs(disp[0]), abs(disp[1])) == 5

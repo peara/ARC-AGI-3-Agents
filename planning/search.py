@@ -1,8 +1,4 @@
-"""Partial-state search: snapshot → predict (effects) → BFS.
-
-SceneState and the movement model live in ``effects``; this module owns search
-over the successor from ``effects.predict`` / ``predict_move``.
-"""
+"""Partial-state BFS over ``effects.predict`` / ``predict_move``."""
 
 from __future__ import annotations
 
@@ -10,17 +6,10 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Callable
 
-from effects.kinematics import (
-    MovementModel,
-    entity_pos_at,
-    predict_move,
-)
-from effects.state import SceneState
-
-from .entities import EntityCatalog
-from .registry import ObjectRegistry
-
-Pos = tuple[int, int]
+from effects.kinematics import MovementModel, entity_pos_at, predict_move
+from effects.state import Pos, SceneState
+from perception.entities import EntityCatalog
+from perception.registry import ObjectRegistry
 
 
 @dataclass

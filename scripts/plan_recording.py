@@ -20,15 +20,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from effects import entity_pos_at, learn_movement_model, replay_predicted
 from perception import (
     ObjectRegistry,
     assign_roles,
     build_entities,
     load_recording_frames,
 )
-from effects import entity_pos_at, learn_movement_model, replay_predicted
-from perception.planning import PlanSpec, goal_pos, plan_bfs, snapshot
-from perception.recording_eval import plan_and_evaluate, verify_plan_on_recording
+from planning import PlanSpec, goal_pos, plan_bfs, snapshot
+from planning.recording_eval import plan_and_evaluate, verify_plan_on_recording
 from tests.perception_fixtures import (
     build_perception_stack,
     load_manifest,

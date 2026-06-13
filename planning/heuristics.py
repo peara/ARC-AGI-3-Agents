@@ -1,12 +1,11 @@
-"""Pure curiosity heuristics — no planner state."""
+"""Pure exploration heuristics — no planner state."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 from effects import MovementModel, Pos
-
-from ..session.snapshot import SceneSnapshot
+from perception.session import SceneSnapshot
 
 
 @dataclass

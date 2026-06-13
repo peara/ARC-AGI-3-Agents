@@ -19,14 +19,13 @@ never on the eval path.
 
 - `main.py` — entry point. Loop: `main.py → Swarm → one Agent per game → Agent.choose_action()/is_done()`.
 - `agents/` — upstream harness. `agent.py` (base contract), `swarm.py`, `recorder.py`, `templates/` (random, curiosity, llm, langgraph, smolagents, openclaw, …). Agents are registered by lowercased class name in `agents/__init__.py:AVAILABLE_AGENTS`.
-- `perception/` — **our work**. Game-agnostic perception ladder:
+- `perception/` — observational extraction (frames → registry → `SceneSnapshot`)
   - `objects.py`, `motion.py` — static segmentation + delta / common-fate analysis
-  - `registry.py`, `entities.py`, `roles.py` — persistent object registry, entities, roles (controllable/counter detection)
+  - `registry.py`, `entities.py`, `roles.py` — persistent object registry, entities, roles
   - `session/` — live episode state (`PerceptionSession`, `SceneSnapshot`)
-  - `policies/` — pure heuristics/config (no I/O); `planners/` — action planners reading snapshots
-  - `planning.py` — BFS search over `effects.predict` (offline pathfinding)
-  - `recording_eval.py`, `viz.py` — offline verification + overlay rendering
+  - `viz.py` — overlay rendering
 - `effects/` — forward prediction (`predict(state, action)`); kinematics v1 in `kinematics.py`
+- `planning/` — search + policies (`plan_bfs`, `ExplorationPolicy`, recording eval)
 - `scripts/` — offline analysis over `*.recording.jsonl` (`perceive_recording.py`, `track_recording.py`, `analyze_motion.py`, `plan_recording.py`).
 - `recordings/` — game replays used as offline fixtures. `tests/reference_recordings.json` is the manifest.
 - `docs/` — plans. `reports/` are living design docs (e.g. `perception-agent.md`), `brainstorms/` are future-session stubs, `diary/` are dated notes. **Keep design docs updated when behaviour changes.**

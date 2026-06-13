@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from effects import entity_pos_at, learn_movement_model
-from perception.recording_eval import collect_observed_steps, plan_and_evaluate
+from planning.recording_eval import collect_observed_steps, plan_and_evaluate
 from tests.perception_fixtures import (
     MANIFEST_PATH,
     PlanCase,

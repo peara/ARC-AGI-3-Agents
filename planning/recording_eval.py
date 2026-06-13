@@ -1,9 +1,4 @@
-"""Offline evaluation of plans against a fixed recording (any game).
-
-A recording is one observed trajectory. We can validate that each plan step
-either matches an observed (pos, action) -> next_pos transition from that
-episode, or is an extrapolation with no contradicting observation.
-"""
+"""Offline evaluation of plans against a fixed recording (any game)."""
 
 from __future__ import annotations
 
@@ -18,10 +13,10 @@ from effects import (
     predict_move,
     replay_predicted,
 )
+from perception.entities import EntityCatalog
+from perception.registry import ObjectRegistry
 
-from .entities import EntityCatalog
-from .planning import PlanSpec, goal_pos, plan_bfs, snapshot
-from .registry import ObjectRegistry
+from .search import PlanSpec, goal_pos, plan_bfs, snapshot
 
 ObservedStep = tuple[Pos, int, Pos]
 

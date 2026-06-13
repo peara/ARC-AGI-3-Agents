@@ -24,14 +24,11 @@ action→effect *after the fact*.
 |---------|----------------|
 | `perception/` | Observe frames → registry, catalog, `SceneSnapshot.summary()` |
 | `effects/` | Learn models from perception; `predict(state, action)` |
-| `perception/planning.py` | Search only: `plan_bfs`, `PlanSpec`, `goal_pos`, `snapshot` |
+| `planning/` | Search (`plan_bfs`), adapters (`snapshot`), policies (`ExplorationPolicy`) |
 
-Import direction: `effects → perception` (reads registry/catalog). Planners and
-`perception/planning.py` import `effects`, not the reverse.
-
-The kinematics core (`MovementModel`, `learn_movement_model`, `predict_move`) lived
-in `perception/planning.py` during Rung 5–6; slice 1 moves it into `effects/` so
-perception stays observational.
+Import direction: `effects → perception` (reads registry/catalog).
+`planning → effects + perception`. Perception does not import planning or effects
+for prediction (session uses `entity_pos_at` only for observed positions).
 
 ## What perception already supplies
 
@@ -87,5 +84,5 @@ LLM hypothesis proposal stays dev-only, never on the Kaggle eval path.
 ## Artifacts
 
 - Code: `effects/` (`state.py`, `kinematics.py`, `predict.py`)
-- Search: `perception/planning.py` (BFS over `effects.predict` / `predict_move`)
+- Search: `planning/` (BFS over `effects.predict` / `predict_move`)
 - Tests: `tests/unit/test_planning.py` (recording-backed, unchanged behaviour)

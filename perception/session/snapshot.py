@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from effects import MovementModel, Pos, entity_pos_at, learn_movement_model
+from effects import Pos, entity_pos_at
 
 from ..entities import Entity, EntityCatalog
 from ..registry import ObjectRegistry, derive_roles
@@ -56,19 +56,6 @@ class SceneSnapshot:
     def entity_pos(self, entity_id: int) -> Pos | None:
         return entity_pos_at(
             self.registry, self.catalog, entity_id, self.frame_idx
-        )
-
-    def movement_model(self, entity_id: int | None = None) -> MovementModel | None:
-        eid = entity_id if entity_id is not None else self.controllable_id()
-        if eid is None:
-            return None
-        return learn_movement_model(
-            self.registry,
-            self.catalog,
-            list(self.action_ids),
-            eid,
-            grid_rows=self.grid_rows,
-            grid_cols=self.grid_cols,
         )
 
     def _entity_trajectory(self, entity_id: int) -> dict[str, object]:

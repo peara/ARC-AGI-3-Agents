@@ -4,7 +4,7 @@
 > the reasoning behind them, what we've built, and what we found, so we can
 > refer back and revise as evidence comes in.
 >
-> Last updated: 2026-06-13 (effects package slice 1: kinematics refactor)
+> Last updated: 2026-06-13 (planning package; perception observational-only)
 
 ---
 
@@ -306,8 +306,7 @@ uv run python scripts/track_recording.py \
 ### Rung 5 — partial-state planning (done, v1 movement)
 
 Code: `effects/` (`SceneState`, `MovementModel`, `learn_movement_model`, `predict`,
-`predict_move`), `perception/planning.py` (`PlanSpec`, `snapshot`, `plan_bfs`),
-`perception/recording_eval.py` (offline plan verification against a recording),
+`predict_move`), `planning/` (`PlanSpec`, `snapshot`, `plan_bfs`, `recording_eval`),
 `scripts/plan_recording.py`, `tests/reference_recordings.json`,
 `tests/unit/test_planning.py`.
 
@@ -354,8 +353,7 @@ uv run python scripts/plan_recording.py --manifest-case ls20-random-legal-e0-f0-
 ### Rung 6 — curiosity-driven live agent (done, v1)
 
 Code: `perception/session/` (`PerceptionSession`, `SceneSnapshot`),
-`perception/policies/exploration.py` (`ExplorationConfig`, curiosity heuristics),
-`perception/planners/exploration.py` (`ExplorationPolicy`, `Planner` protocol),
+`planning/` (`ExplorationConfig`, `ExplorationPolicy`, `Planner` protocol),
 `agents/templates/curiosity_agent.py` (`Curiosity` agent),
 `tests/unit/test_exploration.py`.
 
@@ -461,7 +459,7 @@ and never assigns game semantics. Downstream EffectModel and LLM planners consum
       detection → BFS toward unknown → per-step verify/replan.
 - [x] Live planner agent: execute plan → re-snapshot → detect divergence → replan
       (`ExplorationPolicy`; absorbs new blocks into the movement model).
-- [x] Split perception session from planner (`perception/session/`, `perception/planners/`).
+- [x] Split perception session from planner (`perception/session/`, `planning/`).
 - [x] Degenerate-frame guard (in registry).
 - [x] Merge multi-colour movers into one entity (compound via common fate).
 - [x] Refine `derive_roles` mover criterion (fraction-of-life, exclude structural).
@@ -485,10 +483,9 @@ and never assigns game semantics. Downstream EffectModel and LLM planners consum
 
 ## 7. Artifacts
 
-- Code: `effects/`, `perception/objects.py`, `perception/motion.py`, `perception/registry.py`,
-  `perception/entities.py`, `perception/roles.py`, `perception/planning.py`,
-  `perception/recording_eval.py`, `perception/session/`, `perception/policies/`,
-  `perception/planners/`, `perception/viz.py`, `agents/templates/curiosity_agent.py`,
+- Code: `effects/`, `planning/`, `perception/objects.py`, `perception/motion.py`, `perception/registry.py`,
+  `perception/entities.py`, `perception/roles.py`, `perception/session/`,
+  `perception/viz.py`, `agents/templates/curiosity_agent.py`,
   `scripts/perceive_recording.py`, `scripts/analyze_motion.py`,
   `scripts/track_recording.py`, `scripts/plan_recording.py`,
   `tests/reference_recordings.json`, `tests/unit/test_planning.py`,

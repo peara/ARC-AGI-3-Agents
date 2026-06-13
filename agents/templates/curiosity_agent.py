@@ -11,9 +11,12 @@ from typing import Any
 
 from arcengine import FrameData, GameAction, GameState
 
-from perception.planners import ExplorationPolicy, PlannerStatus
-from perception.policies import ExplorationConfig
 from perception.session import RESET_ACTION, PerceptionSession, SceneSnapshot
+from planning import (
+    ExplorationConfig,
+    ExplorationPolicy,
+    PlannerStatus,
+)
 
 from ..agent import Agent
 
