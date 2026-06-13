@@ -51,6 +51,12 @@ from .recording_eval import (
     plan_and_evaluate,
     verify_plan_on_recording,
 )
+from .exploration import (
+    RESET_ACTION,
+    ExplorationConfig,
+    ExplorationPlanner,
+    PlannerStatus,
+)
 from .registry import (
     FrameEvent,
     Observation,
@@ -110,4 +116,8 @@ __all__ = [
     "collect_observed_steps",
     "plan_and_evaluate",
     "verify_plan_on_recording",
+    "RESET_ACTION",
+    "ExplorationConfig",
+    "ExplorationPlanner",
+    "PlannerStatus",
 ]

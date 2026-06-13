@@ -4,7 +4,7 @@
 > the reasoning behind them, what we've built, and what we found, so we can
 > refer back and revise as evidence comes in.
 >
-> Last updated: 2026-06-13
+> Last updated: 2026-06-13 (Rung 6: curiosity-driven live agent)
 
 ---
 
@@ -66,6 +66,8 @@ reusable, and rungs 1–4 need **no training and no network**.
    classify wall / pickup / hazard / door by *consequence*. ⬜
 5. **Partial-state planning** — snapshot → empirical predict → BFS on a
    caller-defined subset of state; verify against recordings. ✅ v1 (movement)
+6. **Curiosity-driven live agent** — random cold start until a controllable
+   emerges, then BFS toward the *unknown* with a per-step verify→replan loop. ✅ v1
 
 Where the LLM fits (dev only, not Kaggle eval): consume the **compact symbolic
 scene** the perception layer emits and propose high-level hypotheses ("looks
@@ -347,7 +349,64 @@ uv run python scripts/plan_recording.py --manifest-case ls20-random-legal-e0-f0-
    not assumed solids. ✓
 4. **Live verify/replan deferred** — recording validates observed physics; live
    agent loop (execute → re-snapshot → replan) is the next increment for unseen
-   `(pos, action)` pairs.
+   `(pos, action)` pairs. → built in Rung 6.
+
+### Rung 6 — curiosity-driven live agent (done, v1)
+
+Code: `perception/exploration.py` (`ExplorationPlanner`, `ExplorationConfig`,
+`PlannerStatus`), `agents/templates/curiosity_agent.py` (`Curiosity` agent),
+`tests/unit/test_exploration.py`.
+
+The idea (from the design discussion): confidence drives behaviour. At the start
+*nothing is confirmed* — we don't know which blob we control — so the agent acts
+randomly to generate action→effect evidence. Once `detect_controllable` fires, it
+switches to using the movement model + BFS to steer the controllable entity
+toward the **unknown**, closing the live loop Rung 5 could only check offline.
+
+Design:
+
+- **Two layers, mirroring the offline split.** `ExplorationPlanner` speaks in
+  *action ids and grids only* (never `GameAction`), so the exact same object runs
+  online (inside the agent) and offline (replayed against a recording or a
+  simulated grid world) — that is what makes the loop unit-testable. The
+  `Curiosity` agent is a thin driver that owns the env handshake (RESET / done /
+  complex-action `(x,y)` args) and feeds frames in.
+- **Phase 1 — cold start (curiosity = ignorance).** Until a controllable entity
+  is confirmed *and* `min_random_steps` probes have run, pick a random legal
+  action. The registry/roles pipeline watches passively (it is action-agnostic by
+  design), so the random phase *is* the data-collection phase.
+- **Phase 2 — BFS toward the unknown.** With a controllable entity in hand, learn
+  the movement model and pick a curiosity target in two tiers: (1) the nearest
+  **unconfirmed, non-structural entity** (likely interactive — a thing to bump
+  into), else (2) the nearest **unvisited frontier cell** (`goal = pos ∉ visited`).
+  BFS plans to it; the agent executes one step at a time.
+- **Verify → replan loop (the new bit).** Before sending action `a`, the planner
+  records its expectation `(pos_before, a, predicted_after)`. On the next
+  observation it compares `predicted_after` to the actual position. A mismatch —
+  an extrapolated move that was actually **blocked**, lost tracking, or an
+  unexpected jump — drops the stale plan. No separate wall ontology is needed:
+  the live transition/block is already in the registry, so the next
+  `learn_movement_model()` absorbs it and the replan routes around it.
+
+**Findings (offline `GridWorld` sim + reference recording):**
+
+1. **The whole loop runs without game knowledge.** In a boxed 30×30 room the
+   planner discovers which 3×3 blob is the player, learns the *exact*
+   action→displacement map (matches simulator truth), then leaves the random
+   phase for `frontier` BFS. ✓
+2. **Verify loop fires on a genuine surprise.** When BFS extrapolates a move
+   through an unseen wall, the step `diverged`, the plan was dropped, and the
+   block was absorbed into `model.known_blocks` (≥1) so later plans avoid it. ✓
+3. **Curiosity spreads the agent out.** Visited-cell count grows well beyond
+   idling — the frontier goal keeps pulling the controllable into unexplored
+   lattice. ✓
+4. **Real-data wiring confirmed.** Replaying the ls20 reference recording through
+   `ExplorationPlanner.observe()` recovers the controllable and a 5-cell-step
+   motion model — same result as the dedicated Rung 3 detector. ✓
+5. **Open edges (v1).** Rebuilds entities+roles every frame (fine at ls20 scale,
+   may need incremental update on busy games). Tier-1 entity targeting re-issues
+   BFS for unreachable entities each replan (wasted budget, not wrong). Action
+   budget (RHAE) not yet optimised — this is a research driver, `MAX_ACTIONS=200`.
 
 ## 6. Open questions / next steps
 
@@ -356,6 +415,10 @@ uv run python scripts/plan_recording.py --manifest-case ls20-random-legal-e0-f0-
 - [x] Rung 3: entity layer + controllable detection (v1 heuristic).
 - [x] Rung 5 (v1): partial-state snapshot + empirical movement model + BFS +
       recording-based verification loop.
+- [x] Rung 6 (v1): curiosity-driven live agent — random cold start → controllable
+      detection → BFS toward unknown → per-step verify/replan.
+- [x] Live planner agent: execute plan → re-snapshot → detect divergence → replan
+      (`ExplorationPlanner`; absorbs new blocks into the movement model).
 - [x] Degenerate-frame guard (in registry).
 - [x] Merge multi-colour movers into one entity (compound via common fate).
 - [ ] Refine `derive_roles` mover criterion (fraction-of-life / action-correlated,
@@ -367,7 +430,8 @@ uv run python scripts/plan_recording.py --manifest-case ls20-random-legal-e0-f0-
 - [ ] **Floor-aware background**: model per-region background so appeared/vanished
       become meaningful (needed for pickups/doors, not just movement).
 - [ ] Additional role detectors + richer `predict` (Rung 4 / EffectModel).
-- [ ] Live planner agent: execute plan → re-snapshot → detect divergence → replan.
+- [ ] Curiosity v2: confirm/refute entity roles by *consequence* of bumping into
+      them (feed Rung 4 EffectModel); incremental (not per-frame) catalog rebuild.
 - [ ] Add non-ls20 entries to `tests/reference_recordings.json` (C1).
 - [ ] How to merge multi-layer frames when games have >1 layer.
 
@@ -379,11 +443,12 @@ uv run python scripts/plan_recording.py --manifest-case ls20-random-legal-e0-f0-
 
 - Code: `perception/objects.py`, `perception/motion.py`, `perception/registry.py`,
   `perception/entities.py`, `perception/roles.py`, `perception/planning.py`,
-  `perception/recording_eval.py`, `perception/viz.py`,
+  `perception/recording_eval.py`, `perception/exploration.py`, `perception/viz.py`,
+  `agents/templates/curiosity_agent.py`,
   `scripts/perceive_recording.py`, `scripts/analyze_motion.py`,
   `scripts/track_recording.py`, `scripts/plan_recording.py`,
   `tests/reference_recordings.json`, `tests/unit/test_planning.py`,
-  recording fix in `agents/agent.py`
+  `tests/unit/test_exploration.py`, recording fix in `agents/agent.py`
 - Reference recording: `recordings/ls20-9607627b.random.80.4778fe67-*.recording.jsonl`
 - Sample outputs: `perception_out/frame_*.png`, `motion_out/motion_*.png`,
   `track_out/track_*.png`
