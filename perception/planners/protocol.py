@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from ..planning import Pos
+from effects import Pos
+
 from ..session import SceneSnapshot
 
 

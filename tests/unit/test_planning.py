@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from perception.planning import learn_movement_model
+from effects import entity_pos_at, learn_movement_model
 from perception.recording_eval import collect_observed_steps, plan_and_evaluate
 from tests.perception_fixtures import (
     MANIFEST_PATH,
@@ -99,8 +99,6 @@ class TestPlanningOnRecordings:
             assert step.predicted_pos is not None
 
     def test_goal_matches_recording_end_frame(self, stack, plan_case: PlanCase):
-        from perception.planning import entity_pos_at
-
         result = plan_and_evaluate(
             stack.registry,
             stack.catalog,

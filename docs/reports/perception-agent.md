@@ -4,7 +4,7 @@
 > the reasoning behind them, what we've built, and what we found, so we can
 > refer back and revise as evidence comes in.
 >
-> Last updated: 2026-06-13 (Phase-1 wrap-up: `summary()` contract + g50t)
+> Last updated: 2026-06-13 (effects package slice 1: kinematics refactor)
 
 ---
 
@@ -62,9 +62,9 @@ reusable, and rungs 1–4 need **no training and no network**.
    entities derived from trajectories. ✅ done
 3. **Controllable-object identification** — correlate actions with object motion;
    tag controllable entity + observed motion-by-action. ✅ done (v1 heuristic)
-4. **EffectModel + roles** — running action→effect statistics per object;
-   classify wall / pickup / hazard / door by *consequence*. ⬜
-5. **Partial-state planning** — snapshot → empirical predict → BFS on a
+4. **EffectModel + roles** — `effects.predict` + relational rules (terminal, overlap→effect);
+   classify wall / pickup / hazard / door by *consequence*. ⬜ slice 1: kinematics ✅
+5. **Partial-state planning** — snapshot → `effects.predict` → BFS on a
    caller-defined subset of state; verify against recordings. ✅ v1 (movement)
 6. **Curiosity-driven live agent** — random cold start until a controllable
    emerges, then BFS toward the *unknown* with a per-step verify→replan loop. ✅ v1
@@ -305,8 +305,8 @@ uv run python scripts/track_recording.py \
 
 ### Rung 5 — partial-state planning (done, v1 movement)
 
-Code: `perception/planning.py` (`SceneState`, `PlanSpec`, `snapshot`,
-`learn_movement_model`, `predict_move`, `plan_bfs`),
+Code: `effects/` (`SceneState`, `MovementModel`, `learn_movement_model`, `predict`,
+`predict_move`), `perception/planning.py` (`PlanSpec`, `snapshot`, `plan_bfs`),
 `perception/recording_eval.py` (offline plan verification against a recording),
 `scripts/plan_recording.py`, `tests/reference_recordings.json`,
 `tests/unit/test_planning.py`.
@@ -471,22 +471,21 @@ and never assigns game semantics. Downstream EffectModel and LLM planners consum
       (extract inner pattern, normalize scale/rotation) to detect the goal relation.
 - [ ] **Floor-aware background**: model per-region background so appeared/vanished
       become meaningful (needed for pickups/doors, not just movement).
-- [ ] Additional role detectors + richer `predict` (Rung 4 / EffectModel).
+- [ ] Additional role detectors + richer `effects.predict` (relational/terminal rules).
 - [ ] Curiosity v2: confirm/refute entity roles by *consequence* of bumping into
-      them (feed Rung 4 EffectModel); incremental (not per-frame) catalog rebuild.
+      them (feed `effects` rule store); incremental (not per-frame) catalog rebuild.
 - [x] Add non-ls20 entries to `tests/reference_recordings.json` (C1: g50t).
 - [x] Multi-sub-frame API frames: temporal animation stacks; use last sub-frame
       as settled state (`to_grid`, `n_subframes`, animation events in `summary()`).
 - [x] Phase-1 perception boundary: `SceneSnapshot.summary()` contract + counter
       detector + determinism beacon.
 
-> The predictive layer that consumes this perception output (forward model that
-> predicts the next state given an action) is scoped in a separate design doc:
-> `docs/brainstorms/effect-model.md`.
+> The predictive layer that consumes this perception output is scoped in
+> `docs/brainstorms/effect-model.md` (`effects/` package).
 
 ## 7. Artifacts
 
-- Code: `perception/objects.py`, `perception/motion.py`, `perception/registry.py`,
+- Code: `effects/`, `perception/objects.py`, `perception/motion.py`, `perception/registry.py`,
   `perception/entities.py`, `perception/roles.py`, `perception/planning.py`,
   `perception/recording_eval.py`, `perception/session/`, `perception/policies/`,
   `perception/planners/`, `perception/viz.py`, `agents/templates/curiosity_agent.py`,

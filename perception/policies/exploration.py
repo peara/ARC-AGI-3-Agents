@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..planning import MovementModel, Pos
+from effects import MovementModel, Pos
+
 from ..session.snapshot import SceneSnapshot
 
 

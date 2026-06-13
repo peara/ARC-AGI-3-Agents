@@ -26,15 +26,8 @@ from perception import (
     build_entities,
     load_recording_frames,
 )
-from perception.planning import (
-    PlanSpec,
-    entity_pos_at,
-    goal_pos,
-    learn_movement_model,
-    plan_bfs,
-    replay_predicted,
-    snapshot,
-)
+from effects import entity_pos_at, learn_movement_model, replay_predicted
+from perception.planning import PlanSpec, goal_pos, plan_bfs, snapshot
 from perception.recording_eval import plan_and_evaluate, verify_plan_on_recording
 from tests.perception_fixtures import (
     build_perception_stack,

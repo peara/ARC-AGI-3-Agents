@@ -6,13 +6,9 @@ import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from effects import MovementModel, Pos, entity_pos_at, learn_movement_model
+
 from ..entities import Entity, EntityCatalog
-from ..planning import (
-    MovementModel,
-    Pos,
-    entity_pos_at,
-    learn_movement_model,
-)
 from ..registry import ObjectRegistry, derive_roles
 
 if TYPE_CHECKING:

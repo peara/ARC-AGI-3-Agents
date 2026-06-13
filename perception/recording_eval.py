@@ -9,20 +9,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .entities import EntityCatalog
-from .planning import (
+from effects import (
     MovementModel,
-    PlanSpec,
     Pos,
     SceneState,
     entity_pos_at,
-    goal_pos,
     learn_movement_model,
-    plan_bfs,
     predict_move,
     replay_predicted,
-    snapshot,
 )
+
+from .entities import EntityCatalog
+from .planning import PlanSpec, goal_pos, plan_bfs, snapshot
 from .registry import ObjectRegistry
 
 ObservedStep = tuple[Pos, int, Pos]

@@ -4,16 +4,9 @@ from __future__ import annotations
 
 import random
 
-from ..planning import (
-    MovementModel,
-    PlanSpec,
-    Pos,
-    SceneState,
-    plan_bfs,
-    predict_move,
-    replay_predicted,
-    snapshot,
-)
+from effects import MovementModel, Pos, SceneState, predict_move, replay_predicted
+
+from ..planning import PlanSpec, plan_bfs, snapshot
 from ..policies.exploration import (
     ExplorationConfig,
     curiosity_entity_target,

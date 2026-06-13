@@ -1,20 +1,21 @@
 """Game-agnostic perception layer for ARC-AGI-3 frames.
 
 Package layout:
-  session/   — live episode state (``PerceptionSession``, ``SceneSnapshot``)
+  session/   — live episode state (``PerceptionSession``, ``SceneSnapshot``); import ``perception.session``
   policies/  — pure heuristics and config (no env I/O)
-  planners/  — action planners implementing ``Planner`` (read snapshots, return actions)
-  planning.py — BFS / movement model primitives (offline pathfinding engine)
+  planners/  — action planners implementing ``Planner``; import ``perception.planners``
+  planning.py — BFS search over ``effects.predict``; import ``perception.planning``
   registry.py, entities.py, roles.py — perception ladder rungs 2.5–3
   objects.py, motion.py — static segmentation and delta analysis
 """
 
+from .entities import Entity, EntityCatalog, build_entities
 from .motion import (
     ActionMotionStats,
     Delta,
     Match,
-    Transition,
     TrackResult,
+    Transition,
     aggregate_by_action,
     bind_common_fate,
     build_transitions,
@@ -34,43 +35,22 @@ from .objects import (
     segment_hypotheses,
     to_grid,
 )
-from .entities import Entity, EntityCatalog, build_entities
+from .registry import (
+    FrameEvent,
+    ObjectRegistry,
+    Observation,
+    Track,
+    derive_entities,
+    derive_roles,
+    is_degenerate,
+    run_registry,
+)
 from .roles import (
     HeuristicRoleAssignerV1,
     RolePatch,
     assign_roles,
     detect_controllable,
     detect_counter,
-)
-from .planning import (
-    MovementModel,
-    PlanSpec,
-    SceneState,
-    entity_pos_at,
-    goal_pos,
-    learn_movement_model,
-    plan_bfs,
-    predict_move,
-    replay_predicted,
-    snapshot,
-)
-from .recording_eval import (
-    collect_observed_steps,
-    plan_and_evaluate,
-    verify_plan_on_recording,
-)
-from .session import RESET_ACTION, PerceptionSession, SceneSnapshot
-from .policies import ExplorationConfig
-from .planners import ExplorationPolicy, Planner, PlannerStatus
-from .registry import (
-    FrameEvent,
-    Observation,
-    ObjectRegistry,
-    Track,
-    derive_entities,
-    derive_roles,
-    is_degenerate,
-    run_registry,
 )
 
 __all__ = [
@@ -111,24 +91,4 @@ __all__ = [
     "assign_roles",
     "detect_controllable",
     "detect_counter",
-    "MovementModel",
-    "PlanSpec",
-    "SceneState",
-    "entity_pos_at",
-    "goal_pos",
-    "learn_movement_model",
-    "plan_bfs",
-    "predict_move",
-    "replay_predicted",
-    "snapshot",
-    "collect_observed_steps",
-    "plan_and_evaluate",
-    "verify_plan_on_recording",
-    "RESET_ACTION",
-    "PerceptionSession",
-    "SceneSnapshot",
-    "ExplorationConfig",
-    "ExplorationPolicy",
-    "Planner",
-    "PlannerStatus",
 ]
