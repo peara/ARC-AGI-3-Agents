@@ -40,7 +40,7 @@ def main() -> None:
     ap.add_argument("--connectivity", type=int, default=4, choices=[4, 8])
     args = ap.parse_args()
 
-    frames, action_ids = load_recording_frames(args.recording)
+    frames, action_ids, _ = load_recording_frames(args.recording)
     print(f"loaded {len(frames)} frames from {args.recording}")
 
     transitions = build_transitions(

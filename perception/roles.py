@@ -12,7 +12,9 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from .entities import Entity, EntityCatalog
-from .registry import ObjectRegistry
+from .registry import ObjectRegistry, Track
+
+_RESET_ACTION = 0  # RESET is never a movement control (mirror session.RESET_ACTION)
 
 
 @dataclass(frozen=True)
@@ -99,18 +101,23 @@ def _controllable_tracks(
 
         by_action: dict[int, list[tuple[int, int]]] = defaultdict(list)
         for aid, disp in moving:
+            if aid == _RESET_ACTION:  # RESET is never a movement control
+                continue
             by_action[aid].append(disp)
 
+        # Per-action map keeps only actions whose own displacement is consistent,
+        # so noisy actions (e.g. a replay/reset key) don't pollute the map.
         action_map: dict[int, tuple[int, int]] = {}
         agree_num = 0
         agree_den = 0
         for aid, disps in by_action.items():
             dom, count = Counter(disps).most_common(1)[0]
-            action_map[aid] = dom
             agree_num += count
             agree_den += len(disps)
+            if count / len(disps) >= agree:
+                action_map[aid] = dom
 
-        if agree_den and agree_num / agree_den >= agree:
+        if agree_den and agree_num / agree_den >= agree and action_map:
             candidates.add(tid)
             per_track_maps[tid] = action_map
 
@@ -120,6 +127,59 @@ def _controllable_tracks(
             merged[aid] = disp
 
     return candidates, merged
+
+
+def _is_counter_track(
+    track: Track,
+    *,
+    min_growth: int = 2,
+    min_monotone: float = 0.7,
+    max_move_fraction: float = 0.3,
+) -> bool:
+    """In-place track whose size grows near-monotonically (HUD / tally bar)."""
+    if not track.observations:
+        return False
+    if sum(o.structural for o in track.observations) > track.n_obs / 2:
+        return False
+    sizes = [o.size for o in track.observations]
+    if len(sizes) < 2 or max(sizes) - min(sizes) < min_growth:
+        return False
+    disps = [d for _, d in track.displacements()]
+    n_move = sum(1 for d in disps if d != (0, 0))
+    if disps and n_move / len(disps) > max_move_fraction:
+        return False
+    increases = sum(1 for a, b in zip(sizes, sizes[1:]) if b >= a)
+    return increases / max(1, len(sizes) - 1) >= min_monotone
+
+
+def detect_counter(
+    catalog: EntityCatalog,
+    reg: ObjectRegistry,
+    action_ids: list[int],
+    *,
+    min_growth: int = 2,
+) -> list[RolePatch]:
+    """Heuristic: singleton entity whose track size grows in-place."""
+    patches: list[RolePatch] = []
+    for ent in catalog.entities.values():
+        if ent.composition != "singleton" or len(ent.members) != 1:
+            continue
+        tid = next(iter(ent.members))
+        track = reg.tracks.get(tid)
+        if track is None or not _is_counter_track(track, min_growth=min_growth):
+            continue
+        sizes = [o.size for o in track.observations]
+        patches.append(
+            RolePatch(
+                entity_id=ent.id,
+                role="counter",
+                meta={
+                    "size_range": (min(sizes), max(sizes)),
+                    "detector": "in_place_growth_v1",
+                },
+            )
+        )
+    return patches
 
 
 def detect_controllable(
@@ -140,14 +200,22 @@ def detect_controllable(
     if not controllable:
         return []
 
+    # An entity is the controllable when it CONTAINS controllable track(s) and
+    # no structural member. Co-moving non-threshold members (e.g. a small dot
+    # bound by common fate) belong to the same physical thing, so we do not
+    # require every member to independently pass the agreement test.
     best: Entity | None = None
     best_score = -1
     for ent in catalog.entities.values():
-        if not ent.members <= controllable:
+        overlap = ent.members & controllable
+        if not overlap:
             continue
-        score = len(ent.members)
+        if any(_is_structural(tid, reg) for tid in ent.members):
+            continue
+        score = 1000 * len(overlap)
         if ent.composition == "compound":
             score += 100
+        score -= len(ent.members - controllable)  # prefer tight compounds
         if score > best_score:
             best_score = score
             best = ent
@@ -223,6 +291,7 @@ class HeuristicRoleAssignerV1:
                 agree=self.agree,
             )
         )
+        patches.extend(detect_counter(catalog, reg, action_ids))
         return apply_patches(catalog, patches)
 
 

@@ -23,16 +23,36 @@ _NEIGHBORS_4 = ((-1, 0), (1, 0), (0, -1), (0, 1))
 _NEIGHBORS_8 = _NEIGHBORS_4 + ((-1, -1), (-1, 1), (1, -1), (1, 1))
 
 
-def to_grid(frame: object, layer: int = 0) -> Grid:
+def frame_stack(frame: object) -> np.ndarray:
+    """Return raw frame data as 2D ``(H, W)`` or 3D ``(L, H, W)`` sub-frame stack."""
+    data = getattr(frame, "frame", frame)
+    arr = np.asarray(data)
+    if arr.ndim not in (2, 3):
+        raise ValueError(f"Expected 2D or 3D frame data, got shape {arr.shape}")
+    return arr
+
+
+def n_subframes(frame: object) -> int:
+    """Number of temporal sub-frames in one API frame (1 if already 2D)."""
+    arr = frame_stack(frame)
+    return 1 if arr.ndim == 2 else int(arr.shape[0])
+
+
+def to_grid(frame: object, *, layer: int | None = None) -> Grid:
     """Coerce assorted frame representations into a 2D int grid.
 
     Accepts a FrameData-like object (with a ``frame`` attribute), a raw nested
-    list ``[layer][row][col]``, or an already-2D array.
+    list ``[subframe][row][col]``, or an already-2D array.
+
+    Multi-sub-frame inputs are temporal animation stacks from the API; the
+    **last** sub-frame is the settled post-action state unless ``layer`` is set.
     """
-    data = getattr(frame, "frame", frame)
-    arr = np.asarray(data)
-    if arr.ndim == 3:  # [layers][H][W]
-        arr = arr[layer]
+    arr = frame_stack(frame)
+    if arr.ndim == 3:
+        idx = -1 if layer is None else layer
+        arr = arr[idx]
+    elif layer is not None and layer != 0:
+        raise ValueError(f"layer={layer} invalid for 2D frame data")
     if arr.ndim != 2:
         raise ValueError(f"Expected a 2D grid, got shape {arr.shape}")
     return arr.astype(np.int16)

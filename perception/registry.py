@@ -349,8 +349,12 @@ def derive_roles(reg: ObjectRegistry, *, stable_eps: float = 1.0) -> dict[int, d
         structural = sum(o.structural for o in t.observations) > t.n_obs / 2
         lifespan = t.last_frame - t.first_frame + 1
 
-        if moved and n_move >= 2:
-            role = "mover"
+        if moved and n_move >= 2 and not structural:
+            n_disp = len(disps)
+            if n_move / max(1, n_disp) >= 0.15:
+                role = "mover"
+            else:
+                role = "static"
         elif structural and not moved:
             role = "structure"
         elif size_var > 0 and cen_span <= stable_eps and not moved:

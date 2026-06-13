@@ -20,17 +20,28 @@ measures action→effect *after the fact*.
 
 ## Prerequisites it needs from perception
 
-- **Symbolic scene snapshot** — a compact, hashable per-step state (entities:
-  id, colour, size, bbox/centroid, role, affordances; + global scalars like a
-  HUD counter). This is the prediction's input/output and the planner's dedup
-  key. Hash the *symbolic* state, not raw canvas bytes — a per-step counter
-  makes byte-hashing useless for dedup.
+- **Symbolic scene snapshot** — `SceneSnapshot.summary()` (phase-1 contract): JSON-
+  serializable entities (id, role, affordances, pos, size trajectory), per-step
+  events (animation, delta, registry), globals (counters), and a determinism beacon
+  (`non_markovian` when the same settled state + action yields different outcomes).
+  Hash the *symbolic* state for planner dedup, not raw canvas bytes.
 - **Controllable-object tag** (Rung 3) — which entity the actions move, and the
-  action→displacement map for it.
+  action→displacement map for it. May be absent on non-spatial games (e.g. g50t).
 - **`is_solid` affordance** (Rung 4) — for collision: a move into a solid is a
   no-op. Use the measured "player-static + `moving_objs=0`" blocked-move
   signature, not a "zero canvas delta" test (blocked moves still flip ~2 HUD
   cells).
+
+## g50t evidence: history-conditioned effects
+
+The g50t recording is a sequence-memory game with a translating player (a
+color-9 ring + color-5 dot compound moving ±6 with actions 1-4), a growing tally
+counter, and action-5 replays that ghost the move history and reset the player.
+The same (settled state, action) pair can produce different outcomes. Perception
+reports the controllable, the counter, and the determinism beacon, but does
+**not** infer the hidden sequence. The EffectModel (Rule Engine) must therefore
+support **history-conditioned** guards — e.g. rules over past actions or latent
+memory state — not just current symbolic positions.
 
 ## Open question: EffectModel vs. Rule Engine
 

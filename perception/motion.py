@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .objects import GameObject, Grid, Scene, infer_background, segment, to_grid
+from .objects import GameObject, Grid, Scene, infer_background, n_subframes, segment, to_grid
 
 
 @dataclass
@@ -282,15 +282,17 @@ def aggregate_by_action(transitions: list[Transition]) -> dict[int, ActionMotion
 
 def load_recording_frames(
     path: str,
-) -> tuple[list[Grid], list[int]]:
-    """Load (frames, action_ids) from a *.recording.jsonl produced by this repo.
+) -> tuple[list[Grid], list[int], list[int]]:
+    """Load settled grids from a *.recording.jsonl produced by this repo.
 
-    Returns 2D grids (layer 0) and the action id that produced each frame.
+    Returns (settled_grids, action_ids, n_subframes_per_step). Multi-sub-frame
+    API frames use the last sub-frame as the settled post-action state.
     """
     import json
 
     frames: list[Grid] = []
     action_ids: list[int] = []
+    subframe_counts: list[int] = []
     with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -299,7 +301,9 @@ def load_recording_frames(
             data = json.loads(line).get("data", {})
             if not isinstance(data, dict) or data.get("frame") is None:
                 continue
-            frames.append(to_grid(data["frame"]))
+            raw = data["frame"]
+            frames.append(to_grid(raw))
+            subframe_counts.append(n_subframes(raw))
             ai = data.get("action_input") or {}
             action_ids.append(int(ai.get("id", -1)))
-    return frames, action_ids
+    return frames, action_ids, subframe_counts

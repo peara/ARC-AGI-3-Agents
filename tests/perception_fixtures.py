@@ -27,6 +27,15 @@ class PlanCase:
     goal_frame: int
 
 
+@dataclass(frozen=True)
+class PerceptionExpect:
+    recording: RecordingRef
+    controllable_entity_id: int | None
+    min_counters: int = 0
+    min_animation_events: int = 0
+    expect_non_markovian: bool = False
+
+
 @dataclass
 class PerceptionStack:
     """Everything built from one recording file."""
@@ -44,6 +53,33 @@ def plan_case_id(case: PlanCase) -> str:
         f"{case.recording.name}-e{case.entity_id}"
         f"-f{case.start_frame}-g{case.goal_frame}"
     )
+
+
+def load_perception_expectations(
+    manifest_path: Path | None = None,
+) -> list[PerceptionExpect]:
+    path = manifest_path or MANIFEST_PATH
+    data = json.loads(path.read_text(encoding="utf-8"))
+    out: list[PerceptionExpect] = []
+    for entry in data.get("recordings", []):
+        perc = entry.get("perception")
+        if not perc:
+            continue
+        rec = RecordingRef(
+            name=entry["name"],
+            path=REPO_ROOT / entry["path"],
+        )
+        ctrl = perc.get("controllable_entity_id")
+        out.append(
+            PerceptionExpect(
+                recording=rec,
+                controllable_entity_id=int(ctrl) if ctrl is not None else None,
+                min_counters=int(perc.get("min_counters", 0)),
+                min_animation_events=int(perc.get("min_animation_events", 0)),
+                expect_non_markovian=bool(perc.get("expect_non_markovian", False)),
+            )
+        )
+    return out
 
 
 def load_manifest(manifest_path: Path | None = None) -> list[PlanCase]:
@@ -68,7 +104,7 @@ def load_manifest(manifest_path: Path | None = None) -> list[PlanCase]:
 
 
 def build_perception_stack(recording_path: Path) -> PerceptionStack:
-    frames, action_ids = load_recording_frames(str(recording_path))
+    frames, action_ids, _subframes = load_recording_frames(str(recording_path))
     session, _ = PerceptionSession.from_recording(recording_path)
     scene = session.snapshot()
     name = recording_path.stem.replace(".recording", "")

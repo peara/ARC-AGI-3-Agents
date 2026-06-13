@@ -39,7 +39,7 @@ def main() -> None:
     ap.add_argument("--scale", type=int, default=10)
     args = ap.parse_args()
 
-    frames, _action_ids = load_recording_frames(args.recording)
+    frames, _action_ids, _ = load_recording_frames(args.recording)
     print(f"loaded {len(frames)} frames from {args.recording}")
 
     reg = ObjectRegistry()

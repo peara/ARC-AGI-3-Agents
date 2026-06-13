@@ -4,7 +4,7 @@
 > the reasoning behind them, what we've built, and what we found, so we can
 > refer back and revise as evidence comes in.
 >
-> Last updated: 2026-06-13 (Rung 6: curiosity-driven live agent)
+> Last updated: 2026-06-13 (Phase-1 wrap-up: `summary()` contract + g50t)
 
 ---
 
@@ -409,6 +409,47 @@ Design:
    BFS for unreachable entities each replan (wasted budget, not wrong). Action
    budget (RHAE) not yet optimised — this is a research driver, `MAX_ACTIONS=200`.
 
+### Phase-1 wrap-up — `summary()` boundary contract (done)
+
+Code: `perception/objects.py` (`frame_stack`, `n_subframes`, settled `to_grid`),
+`perception/roles.py` (`detect_counter`), `perception/session/snapshot.py`
+(`SceneSnapshot.summary()`, `StepObservation`), `tests/unit/test_perception_contract.py`,
+`tests/reference_recordings.json` (ls20 + g50t).
+
+**Boundary rule:** perception emits observations and events; it never predicts
+and never assigns game semantics. Downstream EffectModel and LLM planners consume
+`SceneSnapshot.summary()` — a JSON-serializable dict with entities, events
+(animation, delta, registry), globals (counters), and a determinism beacon
+(same settled state + action → different outcome = non-Markovian handoff).
+
+**g50t validation** (`recordings/g50t-5849a774.curiosity.200.*.recording.jsonl`):
+
+1. **API frames are temporal animation stacks, not spatial layers.** Sub-frame
+   count varies per step (1–45); `last_subframe(t) == first_subframe(t+1)`. The
+   settled post-action state is the **last** sub-frame; `to_grid` now defaults
+   to it. In-frame sub-frames are replays (action 5 = memory playback).
+2. **Controllable player + sequence-memory overlay.** The player is a compound
+   `{color-9 ring + color-5 dot}` (entity #0) that translates ±6 cells:
+   action 1=up, 2=down, 3=left, 4=right. Action 5 (spacebar) replays the move
+   history as a ghost and resets the player to the top — so the *same* settled
+   state + action can yield *different* outcomes, which the determinism beacon
+   flags as non-Markovian (hidden memory is EffectModel/LLM scope). A bottom-row
+   tally bar (color 1) grows monotonically — `detect_counter` fires.
+3. **Two detector bugs fixed by g50t (would have hidden the player):**
+   - `detect_controllable` required *every* entity member to independently pass
+     the agreement test (`members <= controllable`); the player's co-moving
+     color-5 dot fails the threshold (action-5 reset noise), so the whole entity
+     was discarded. Fixed: an entity is controllable when it *contains*
+     controllable track(s) and no structural member (co-moving members belong to
+     the compound).
+   - `_controllable_tracks` mapped *every* action's dominant displacement,
+     letting RESET (0) and the noisy replay (5) pollute `motion_by_action`. Fixed:
+     skip RESET and keep only actions whose per-action agreement clears the
+     threshold, so the map is the clean `{1:up, 2:down, 3:left, 4:right}`.
+4. **Second game in reference manifest (C1).** ls20 controllable + movement tests
+   still pass; g50t contract tests assert controllable #0, counter detected,
+   animation events, and non-Markovian beacon.
+
 ## 6. Open questions / next steps
 
 - [x] Rung 2.5: persistent object registry + derived roles/entities.
@@ -423,8 +464,7 @@ Design:
 - [x] Split perception session from planner (`perception/session/`, `perception/planners/`).
 - [x] Degenerate-frame guard (in registry).
 - [x] Merge multi-colour movers into one entity (compound via common fate).
-- [ ] Refine `derive_roles` mover criterion (fraction-of-life / action-correlated,
-      exclude structural) so the floor stops reading as a mover.
+- [x] Refine `derive_roles` mover criterion (fraction-of-life, exclude structural).
 - [ ] Container entity grouping (cell-containment, skip oversized outers) for
       key/door compounds — deferred from v1 `build_entities`.
 - [ ] **Key↔door transform-invariant matcher**: canonicalize compound shapes
@@ -434,8 +474,11 @@ Design:
 - [ ] Additional role detectors + richer `predict` (Rung 4 / EffectModel).
 - [ ] Curiosity v2: confirm/refute entity roles by *consequence* of bumping into
       them (feed Rung 4 EffectModel); incremental (not per-frame) catalog rebuild.
-- [ ] Add non-ls20 entries to `tests/reference_recordings.json` (C1).
-- [ ] How to merge multi-layer frames when games have >1 layer.
+- [x] Add non-ls20 entries to `tests/reference_recordings.json` (C1: g50t).
+- [x] Multi-sub-frame API frames: temporal animation stacks; use last sub-frame
+      as settled state (`to_grid`, `n_subframes`, animation events in `summary()`).
+- [x] Phase-1 perception boundary: `SceneSnapshot.summary()` contract + counter
+      detector + determinism beacon.
 
 > The predictive layer that consumes this perception output (forward model that
 > predicts the next state given an action) is scoped in a separate design doc:
@@ -450,8 +493,10 @@ Design:
   `scripts/perceive_recording.py`, `scripts/analyze_motion.py`,
   `scripts/track_recording.py`, `scripts/plan_recording.py`,
   `tests/reference_recordings.json`, `tests/unit/test_planning.py`,
-  `tests/unit/test_exploration.py`, recording fix in `agents/agent.py`
-- Reference recording: `recordings/ls20-9607627b.random.80.4778fe67-*.recording.jsonl`
+  `tests/unit/test_exploration.py`, `tests/unit/test_perception_contract.py`,
+  recording fix in `agents/agent.py`
+- Reference recordings: `recordings/ls20-9607627b.random.80.4778fe67-*.recording.jsonl`,
+  `recordings/g50t-5849a774.curiosity.200.*.recording.jsonl`
 - Sample outputs: `perception_out/frame_*.png`, `motion_out/motion_*.png`,
   `track_out/track_*.png`
 - Related: `docs/diary/2026-06-09.md` (background research, leaderboard notes)
