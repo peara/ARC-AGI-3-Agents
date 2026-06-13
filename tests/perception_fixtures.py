@@ -6,13 +6,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from perception import (
-    EntityCatalog,
-    ObjectRegistry,
-    assign_roles,
-    build_entities,
-    load_recording_frames,
-)
+from perception import EntityCatalog, ObjectRegistry, load_recording_frames
+from perception.session import PerceptionSession
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = Path(__file__).resolve().parent / "reference_recordings.json"
@@ -41,6 +36,7 @@ class PerceptionStack:
     action_ids: list[int]
     registry: ObjectRegistry
     catalog: EntityCatalog
+    session: PerceptionSession
 
 
 def plan_case_id(case: PlanCase) -> str:
@@ -73,15 +69,14 @@ def load_manifest(manifest_path: Path | None = None) -> list[PlanCase]:
 
 def build_perception_stack(recording_path: Path) -> PerceptionStack:
     frames, action_ids = load_recording_frames(str(recording_path))
-    reg = ObjectRegistry()
-    for grid in frames:
-        reg.update(grid)
-    catalog = assign_roles(build_entities(reg), reg, action_ids)
+    session, _ = PerceptionSession.from_recording(recording_path)
+    scene = session.snapshot()
     name = recording_path.stem.replace(".recording", "")
     return PerceptionStack(
         recording=RecordingRef(name=name, path=recording_path),
         frames=frames,
         action_ids=action_ids,
-        registry=reg,
-        catalog=catalog,
+        registry=session.registry,
+        catalog=scene.catalog,
+        session=session,
     )

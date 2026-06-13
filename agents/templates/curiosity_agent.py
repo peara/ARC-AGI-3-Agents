@@ -1,13 +1,8 @@
-"""Curiosity agent: random cold start -> perception -> BFS verify/replan loop.
+"""Curiosity agent: perception session + exploration policy.
 
-A thin online driver around ``perception.exploration.ExplorationPlanner``. The
-agent owns the env handshake (RESET / done / complex-action args); the planner
-owns perception and decision-making, so the same logic is exercised offline by
-``tests/unit/test_exploration.py``.
-
-The agent does not hardcode which blob it controls. It probes randomly until the
-perception layer confirms a controllable entity, then lets BFS steer that entity
-toward the unknown, verifying each step against the next frame.
+The agent owns orchestration (env handshake, recording). Perception lives in
+``PerceptionSession``; action selection in ``ExplorationPolicy``. A future LLM
+planner swaps in at the policy slot without touching the session.
 """
 
 import random
@@ -16,13 +11,15 @@ from typing import Any
 
 from arcengine import FrameData, GameAction, GameState
 
-from perception.exploration import RESET_ACTION, ExplorationConfig, ExplorationPlanner
+from perception.planners import ExplorationPolicy, PlannerStatus
+from perception.policies import ExplorationConfig
+from perception.session import RESET_ACTION, PerceptionSession, SceneSnapshot
 
 from ..agent import Agent
 
 
 class Curiosity(Agent):
-    """Perception-driven explorer with an online BFS verify/replan loop."""
+    """Perception session + curiosity exploration policy."""
 
     MAX_ACTIONS = 200
 
@@ -30,12 +27,14 @@ class Curiosity(Agent):
         super().__init__(*args, **kwargs)
         seed = int(time.time() * 1_000_000) + hash(self.game_id) % 1_000_000
         random.seed(seed)
-        self.planner = ExplorationPlanner(
+        self.session = PerceptionSession()
+        self.policy = ExplorationPolicy(
             action_space=[a.value for a in GameAction if a is not GameAction.RESET],
             config=ExplorationConfig(seed=seed),
         )
         self._last_action_id = RESET_ACTION
         self._last_observed_frame_id: int | None = None
+        self._scene: SceneSnapshot | None = None
 
     @property
     def name(self) -> str:
@@ -51,26 +50,30 @@ class Curiosity(Agent):
             self._last_action_id = RESET_ACTION
             return GameAction.RESET
 
-        # Observe the frame our previous action produced, exactly once. A failed
-        # step returns no new frame object, so id() guards against double-ingest.
         if latest_frame.frame and id(latest_frame) != self._last_observed_frame_id:
-            self.planner.observe(latest_frame.frame, self._last_action_id)
+            self._scene = self.session.ingest(latest_frame.frame, self._last_action_id)
+            self.policy.on_observed(self._scene)
             self._last_observed_frame_id = id(latest_frame)
 
+        scene = self._scene or self.session.snapshot()
         available = latest_frame.available_actions or None
-        action_id = self.planner.decide(available)
+        action_id = self.policy.decide(scene, available)
         action = GameAction.from_id(action_id)
         self._last_action_id = action_id
 
-        status = self.planner.status()
-        reason = (
-            f"{status.phase} ctrl={status.controllable_id} "
-            f"target={status.target} plan={status.plan_len} "
-            f"visited={status.n_visited}"
-        )
+        status = self.policy.status()
+        reason = _format_status(status)
         if action.is_complex():
             action.set_data({"x": random.randint(0, 63), "y": random.randint(0, 63)})
             action.reasoning = {"phase": status.phase, "note": reason}
         else:
             action.reasoning = reason
         return action
+
+
+def _format_status(status: PlannerStatus) -> str:
+    return (
+        f"{status.phase} ctrl={status.controllable_id} "
+        f"target={status.target} plan={status.plan_len} "
+        f"visited={status.n_visited}"
+    )

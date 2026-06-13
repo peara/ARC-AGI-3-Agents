@@ -353,8 +353,10 @@ uv run python scripts/plan_recording.py --manifest-case ls20-random-legal-e0-f0-
 
 ### Rung 6 — curiosity-driven live agent (done, v1)
 
-Code: `perception/exploration.py` (`ExplorationPlanner`, `ExplorationConfig`,
-`PlannerStatus`), `agents/templates/curiosity_agent.py` (`Curiosity` agent),
+Code: `perception/session/` (`PerceptionSession`, `SceneSnapshot`),
+`perception/policies/exploration.py` (`ExplorationConfig`, curiosity heuristics),
+`perception/planners/exploration.py` (`ExplorationPolicy`, `Planner` protocol),
+`agents/templates/curiosity_agent.py` (`Curiosity` agent),
 `tests/unit/test_exploration.py`.
 
 The idea (from the design discussion): confidence drives behaviour. At the start
@@ -365,12 +367,11 @@ toward the **unknown**, closing the live loop Rung 5 could only check offline.
 
 Design:
 
-- **Two layers, mirroring the offline split.** `ExplorationPlanner` speaks in
-  *action ids and grids only* (never `GameAction`), so the exact same object runs
-  online (inside the agent) and offline (replayed against a recording or a
-  simulated grid world) — that is what makes the loop unit-testable. The
-  `Curiosity` agent is a thin driver that owns the env handshake (RESET / done /
-  complex-action `(x,y)` args) and feeds frames in.
+- **Three layers.** `PerceptionSession` owns registry + catalog and emits
+  `SceneSnapshot` after each ingest. `ExplorationPolicy` (a `Planner`) reads
+  snapshots only — no perception state. The `Curiosity` agent orchestrates:
+  `session.ingest()` → `policy.on_observed()` → `policy.decide()`. An LLM planner
+  swaps in at the policy slot without touching the session.
 - **Phase 1 — cold start (curiosity = ignorance).** Until a controllable entity
   is confirmed *and* `min_random_steps` probes have run, pick a random legal
   action. The registry/roles pipeline watches passively (it is action-agnostic by
@@ -401,7 +402,7 @@ Design:
    idling — the frontier goal keeps pulling the controllable into unexplored
    lattice. ✓
 4. **Real-data wiring confirmed.** Replaying the ls20 reference recording through
-   `ExplorationPlanner.observe()` recovers the controllable and a 5-cell-step
+   `PerceptionSession.from_recording()` recovers the controllable and a 5-cell-step
    motion model — same result as the dedicated Rung 3 detector. ✓
 5. **Open edges (v1).** Rebuilds entities+roles every frame (fine at ls20 scale,
    may need incremental update on busy games). Tier-1 entity targeting re-issues
@@ -418,7 +419,8 @@ Design:
 - [x] Rung 6 (v1): curiosity-driven live agent — random cold start → controllable
       detection → BFS toward unknown → per-step verify/replan.
 - [x] Live planner agent: execute plan → re-snapshot → detect divergence → replan
-      (`ExplorationPlanner`; absorbs new blocks into the movement model).
+      (`ExplorationPolicy`; absorbs new blocks into the movement model).
+- [x] Split perception session from planner (`perception/session/`, `perception/planners/`).
 - [x] Degenerate-frame guard (in registry).
 - [x] Merge multi-colour movers into one entity (compound via common fate).
 - [ ] Refine `derive_roles` mover criterion (fraction-of-life / action-correlated,
@@ -443,8 +445,8 @@ Design:
 
 - Code: `perception/objects.py`, `perception/motion.py`, `perception/registry.py`,
   `perception/entities.py`, `perception/roles.py`, `perception/planning.py`,
-  `perception/recording_eval.py`, `perception/exploration.py`, `perception/viz.py`,
-  `agents/templates/curiosity_agent.py`,
+  `perception/recording_eval.py`, `perception/session/`, `perception/policies/`,
+  `perception/planners/`, `perception/viz.py`, `agents/templates/curiosity_agent.py`,
   `scripts/perceive_recording.py`, `scripts/analyze_motion.py`,
   `scripts/track_recording.py`, `scripts/plan_recording.py`,
   `tests/reference_recordings.json`, `tests/unit/test_planning.py`,

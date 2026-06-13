@@ -1,7 +1,12 @@
 """Game-agnostic perception layer for ARC-AGI-3 frames.
 
-Stage 1 (this package, so far): classical object extraction + visualisation.
-Designed to be dependency-light (numpy + pillow) and Kaggle-portable.
+Package layout:
+  session/   — live episode state (``PerceptionSession``, ``SceneSnapshot``)
+  policies/  — pure heuristics and config (no env I/O)
+  planners/  — action planners implementing ``Planner`` (read snapshots, return actions)
+  planning.py — BFS / movement model primitives (offline pathfinding engine)
+  registry.py, entities.py, roles.py — perception ladder rungs 2.5–3
+  objects.py, motion.py — static segmentation and delta analysis
 """
 
 from .motion import (
@@ -51,12 +56,9 @@ from .recording_eval import (
     plan_and_evaluate,
     verify_plan_on_recording,
 )
-from .exploration import (
-    RESET_ACTION,
-    ExplorationConfig,
-    ExplorationPlanner,
-    PlannerStatus,
-)
+from .session import RESET_ACTION, PerceptionSession, SceneSnapshot
+from .policies import ExplorationConfig
+from .planners import ExplorationPolicy, Planner, PlannerStatus
 from .registry import (
     FrameEvent,
     Observation,
@@ -117,7 +119,10 @@ __all__ = [
     "plan_and_evaluate",
     "verify_plan_on_recording",
     "RESET_ACTION",
+    "PerceptionSession",
+    "SceneSnapshot",
     "ExplorationConfig",
-    "ExplorationPlanner",
+    "ExplorationPolicy",
+    "Planner",
     "PlannerStatus",
 ]
