@@ -4,7 +4,7 @@
 > the reasoning behind them, what we've built, and what we found, so we can
 > refer back and revise as evidence comes in.
 >
-> Last updated: 2026-06-13 (planning package; perception observational-only)
+> Last updated: 2026-06-13 (effects slice 2 step 1: SceneState v2)
 
 ---
 
@@ -63,7 +63,7 @@ reusable, and rungs 1–4 need **no training and no network**.
 3. **Controllable-object identification** — correlate actions with object motion;
    tag controllable entity + observed motion-by-action. ✅ done (v1 heuristic)
 4. **EffectModel + roles** — `effects.predict` + relational rules (terminal, overlap→effect);
-   classify wall / pickup / hazard / door by *consequence*. ⬜ slice 1: kinematics ✅
+   classify wall / pickup / hazard / door by *consequence*. ⬜ slice 2 step 1: `SceneState` v2 ✅
 5. **Partial-state planning** — snapshot → `effects.predict` → BFS on a
    caller-defined subset of state; verify against recordings. ✅ v1 (movement)
 6. **Curiosity-driven live agent** — random cold start until a controllable

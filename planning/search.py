@@ -55,7 +55,7 @@ def plan_bfs(
         return []
 
     queue: deque[tuple[SceneState, list[int]]] = deque([(start, [])])
-    visited: set[tuple[tuple[int, tuple[str, object]], ...]] = {start.fingerprint()}
+    visited: set[tuple[object, ...]] = {start.fingerprint()}
 
     while queue and len(visited) < max_nodes:
         state, path = queue.popleft()

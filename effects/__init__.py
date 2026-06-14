@@ -8,12 +8,13 @@ from .kinematics import (
     replay_predicted,
 )
 from .predict import predict
-from .state import Pos, SceneState
+from .state import Pos, SceneState, Terminal
 
 __all__ = [
     "MovementModel",
     "Pos",
     "SceneState",
+    "Terminal",
     "entity_pos_at",
     "learn_movement_model",
     "predict",
