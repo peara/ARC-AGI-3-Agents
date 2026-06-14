@@ -20,7 +20,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from effects import entity_pos_at, learn_movement_model, replay_predicted
+from effects import entity_pos_at, replay_predicted
 from perception import (
     ObjectRegistry,
     assign_roles,
@@ -28,7 +28,11 @@ from perception import (
     load_recording_frames,
 )
 from planning import PlanSpec, goal_pos, plan_bfs, snapshot
-from planning.recording_eval import plan_and_evaluate, verify_plan_on_recording
+from planning.recording_eval import (
+    build_effect_context,
+    plan_and_evaluate,
+    verify_plan_on_recording,
+)
 from tests.perception_fixtures import (
     build_perception_stack,
     load_manifest,
@@ -108,9 +112,10 @@ def main() -> None:
     else:
         raise SystemExit("provide --goal-frame or --goal-pos")
 
-    model = learn_movement_model(reg, catalog, action_ids, args.entity)
-    if model is None:
-        raise SystemExit("could not build movement model")
+    ctx = build_effect_context(reg, catalog, action_ids, args.entity)
+    if ctx is None:
+        raise SystemExit("could not build effect context")
+    model = ctx.movement
 
     start_pos = start.pos(args.entity)
     print(f"\nentity #{args.entity}")
@@ -130,7 +135,7 @@ def main() -> None:
         start,
         goal_pos(args.entity, target),
         actions_available,
-        model,
+        ctx,
         max_nodes=args.max_nodes,
     )
 
@@ -139,7 +144,7 @@ def main() -> None:
         return
 
     print(f"\nplan: {plan} ({len(plan)} steps)")
-    end = replay_predicted(start, plan, model)
+    end = replay_predicted(start, plan, ctx)
     if end is None:
         print("verify: FAILED (predict broke mid-plan)")
         return
@@ -155,7 +160,7 @@ def main() -> None:
                 args.entity,
                 args.start_frame,
                 plan,
-                model,
+                ctx,
                 target,
             )
         )
@@ -189,6 +194,8 @@ def run_manifest_case(case_id: str, max_nodes: int, verify_segments: bool) -> No
         case.start_frame,
         case.goal_frame,
         max_nodes=max_nodes,
+        step_observations=stack.session.step_observations,
+        non_markovian=len(stack.session.determinism_violations) > 0,
     )
     if result is None:
         print("plan: NOT FOUND")

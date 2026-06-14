@@ -14,6 +14,16 @@ TERMINAL_GAME_OVER: Terminal = "game_over"
 TERMINAL_WIN: Terminal = "win"
 
 
+def terminal_from_state_name(
+    state_name: str, *, prev_levels: int, levels: int
+) -> Terminal:
+    if state_name == "GAME_OVER":
+        return TERMINAL_GAME_OVER
+    if state_name == "WIN" or levels > prev_levels:
+        return TERMINAL_WIN
+    return TERMINAL_ALIVE
+
+
 @dataclass(frozen=True)
 class SceneState:
     """Partial game state for predict/plan steps.

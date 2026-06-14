@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from effects import Pos, entity_pos_at
+from effects import Pos, entity_exists_at, entity_pos_at, entity_size_at
 
 from ..entities import Entity, EntityCatalog
 from ..registry import ObjectRegistry, derive_roles
@@ -23,6 +23,8 @@ class StepObservation:
     action_id: int
     n_subframes: int
     delta: dict[str, int] | None = None
+    state_name: str = "NOT_FINISHED"
+    levels_completed: int = 0
 
 
 @dataclass(frozen=True)
@@ -55,6 +57,16 @@ class SceneSnapshot:
 
     def entity_pos(self, entity_id: int) -> Pos | None:
         return entity_pos_at(
+            self.registry, self.catalog, entity_id, self.frame_idx
+        )
+
+    def entity_exists(self, entity_id: int) -> bool | None:
+        return entity_exists_at(
+            self.registry, self.catalog, entity_id, self.frame_idx
+        )
+
+    def entity_size(self, entity_id: int) -> int | None:
+        return entity_size_at(
             self.registry, self.catalog, entity_id, self.frame_idx
         )
 

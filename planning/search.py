@@ -1,4 +1,4 @@
-"""Partial-state BFS over ``effects.predict`` / ``predict_move``."""
+"""Partial-state BFS over ``effects.predict``."""
 
 from __future__ import annotations
 
@@ -6,10 +6,18 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Callable
 
-from effects.kinematics import MovementModel, entity_pos_at, predict_move
-from effects.state import Pos, SceneState
+from effects import (
+    EffectContext,
+    Pos,
+    SceneState,
+    Terminal,
+    is_terminal_dead_end,
+    predict,
+)
 from perception.entities import EntityCatalog
 from perception.registry import ObjectRegistry
+
+from .adapters import snapshot_from_registry
 
 
 @dataclass
@@ -19,6 +27,7 @@ class PlanSpec:
     entities: list[int]
     goal: Callable[[SceneState], bool]
     dims: tuple[str, ...] = ("pos",)
+    include_terminal: bool = False
 
 
 def snapshot(
@@ -26,27 +35,21 @@ def snapshot(
     catalog: EntityCatalog,
     spec: PlanSpec,
     frame_idx: int,
+    *,
+    terminal: Terminal | None = None,
 ) -> SceneState | None:
     """Project registry/catalog into a SceneState for one frame."""
-    relevant: list[tuple[int, tuple[str, object]]] = []
-    for eid in spec.entities:
-        for dim in spec.dims:
-            if dim == "pos":
-                pos = entity_pos_at(reg, catalog, eid, frame_idx)
-                if pos is None:
-                    return None
-                relevant.append((eid, ("pos", pos)))
-            else:
-                raise ValueError(f"unsupported dim: {dim!r}")
-    relevant.sort(key=lambda t: (t[0], t[1][0]))
-    return SceneState(relevant=tuple(relevant))
+    from effects.state import TERMINAL_ALIVE
+
+    term = terminal if terminal is not None else TERMINAL_ALIVE
+    return snapshot_from_registry(reg, catalog, spec, frame_idx, terminal=term)
 
 
 def plan_bfs(
     start: SceneState,
     goal: Callable[[SceneState], bool],
     actions: list[int],
-    model: MovementModel,
+    ctx: EffectContext,
     *,
     max_nodes: int = 10_000,
 ) -> list[int] | None:
@@ -60,8 +63,8 @@ def plan_bfs(
     while queue and len(visited) < max_nodes:
         state, path = queue.popleft()
         for action in actions:
-            nxt = predict_move(state, action, model)
-            if nxt is None:
+            nxt = predict(state, action, ctx)
+            if nxt is None or is_terminal_dead_end(nxt):
                 continue
             fp = nxt.fingerprint()
             if fp in visited:

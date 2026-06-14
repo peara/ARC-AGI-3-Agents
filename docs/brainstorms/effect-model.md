@@ -37,7 +37,7 @@ only for observed positions on `SceneSnapshot`).
 | Slice | Scope | Status |
 |-------|--------|--------|
 | 1 | `effects/` package, kinematics, `planning/` search | ✅ |
-| 2 | Extendable `SceneState`, hand-written rules, terminal + counter | ⬜ step 1 ✅ |
+| 2 | Extendable `SceneState`, hand-written rules, terminal + counter | ✅ |
 | 3 | Rule engine: propose / confirm / prune; history guards (g50t) | stub |
 
 ---
@@ -211,8 +211,8 @@ Optional guard: `(pos, action)` if correlated.
 
 **Effect:** `size += learned_delta` on counter entity after kinematics.
 
-**Evidence:** g50t (`detect_counter` fires). ls20 random legal: likely no counter
-rule learned (empty rule list OK).
+**Evidence:** g50t (`detect_counter` fires). ls20 random legal: in-place growth
+counters detected; counter rules learned but pos-only BFS unchanged.
 
 ### 2c. Overlap → `exists=False` (defer if no fixture)
 
@@ -334,20 +334,20 @@ Estimated order — each step should keep tests green.
 
 1. **`SceneState` v2** ✅ — generic `get`/`set_dim`, `terminal` field, fingerprint
    includes terminal when requested (`tests/unit/test_effects_state.py`).
-2. **`planning/adapters.py`** — `DIM_READERS` for `pos`, `exists`, `size`;
+2. **`planning/adapters.py`** ✅ — `DIM_READERS` for `pos`, `exists`, `size`;
    extend `PlanSpec` + `snapshot()`.
-3. **`SceneSnapshot` observation helpers** — `entity_exists`, `entity_size` (if
+3. **`SceneSnapshot` observation helpers** ✅ — `entity_exists`, `entity_size` (if
    not already trivial via registry).
-4. **`FrameMeta`** — recording loader + extend `StepObservation` / session ingest
+4. **`FrameMeta`** ✅ — recording loader + extend `StepObservation` / session ingest
    for live metadata.
-5. **`EffectContext` + rule datatypes** — `effects/context.py`, `effects/rules.py`.
-6. **`learn_terminal_rules` + terminal `apply`** — `effects/learn.py`.
-7. **`predict()` pipeline** — kinematics → terminal → relational; `non_markovian`
+5. **`EffectContext` + rule datatypes** ✅ — `effects/context.py`, `effects/rules.py`.
+6. **`learn_terminal_rules` + terminal `apply`** ✅ — `effects/learn.py`.
+7. **`predict()` pipeline** ✅ — kinematics → terminal → relational; `non_markovian`
    short-circuit.
-8. **Wire `plan_bfs` → `predict`** + prune `game_over`.
-9. **`learn_counter_rules`** + counter apply.
-10. **`ExplorationPolicy`** builds `EffectContext`; recording_eval updated.
-11. **Tests + manifest** + update `perception-agent.md` rung 4 note.
+8. **Wire `plan_bfs` → `predict`** ✅ + prune `game_over`.
+9. **`learn_counter_rules`** ✅ + counter apply.
+10. **`ExplorationPolicy`** ✅ builds `EffectContext`; recording_eval updated.
+11. **Tests + manifest** ✅ + update `perception-agent.md` rung 4 note.
 
 **Defer:** overlap/`exists` (2c) unless a fixture appears; latent dim proposal (slice 3).
 

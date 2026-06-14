@@ -47,7 +47,14 @@ class PerceptionSession:
         self.determinism_violations: list[dict[str, object]] = []
         self.step_observations: list[StepObservation] = []
 
-    def ingest(self, frame: object, produced_by: int) -> SceneSnapshot:
+    def ingest(
+        self,
+        frame: object,
+        produced_by: int,
+        *,
+        state_name: str = "NOT_FINISHED",
+        levels_completed: int = 0,
+    ) -> SceneSnapshot:
         """Process one frame; return a read-only snapshot for planners."""
         grid = to_grid(frame)
         n_sf = n_subframes(frame)
@@ -75,6 +82,8 @@ class PerceptionSession:
             action_id=action,
             n_subframes=n_sf,
             delta=step_delta,
+            state_name=state_name,
+            levels_completed=levels_completed,
         )
         self.step_observations.append(step_obs)
         self._prev_settled = grid.copy()
@@ -143,6 +152,13 @@ class PerceptionSession:
                 action = int(ai.get("id", -1))
                 if action < 0:
                     action = RESET_ACTION
-                session.ingest(raw, action)
+                state_name = str(data.get("state", "NOT_FINISHED"))
+                levels = int(data.get("levels_completed", 0))
+                session.ingest(
+                    raw,
+                    action,
+                    state_name=state_name,
+                    levels_completed=levels,
+                )
                 settled.append(to_grid(raw))
         return session, settled

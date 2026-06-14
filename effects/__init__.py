@@ -1,23 +1,49 @@
 """Forward prediction over symbolic state learned from perception."""
 
+from .context import (
+    EffectContext,
+    FrameMeta,
+    frame_meta_from_steps,
+    load_recording_meta,
+)
 from .kinematics import (
     MovementModel,
+    entity_exists_at,
     entity_pos_at,
+    entity_size_at,
     learn_movement_model,
     predict_move,
-    replay_predicted,
 )
-from .predict import predict
-from .state import Pos, SceneState, Terminal
+from .kinematics import (
+    replay_predicted as replay_predicted_move,
+)
+from .learn import learn_counter_rules, learn_effect_context, learn_terminal_rules
+from .predict import is_terminal_dead_end, predict, replay_predicted
+from .rules import CounterRule, TerminalRule
+from .state import Pos, SceneState, Terminal, terminal_from_state_name
 
 __all__ = [
+    "CounterRule",
+    "EffectContext",
+    "FrameMeta",
     "MovementModel",
     "Pos",
     "SceneState",
     "Terminal",
+    "TerminalRule",
+    "entity_exists_at",
     "entity_pos_at",
+    "entity_size_at",
+    "frame_meta_from_steps",
+    "is_terminal_dead_end",
+    "learn_counter_rules",
+    "learn_effect_context",
     "learn_movement_model",
+    "learn_terminal_rules",
+    "load_recording_meta",
     "predict",
     "predict_move",
     "replay_predicted",
+    "replay_predicted_move",
+    "terminal_from_state_name",
 ]

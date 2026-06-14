@@ -5,15 +5,17 @@ from __future__ import annotations
 import random
 
 from effects import (
-    MovementModel,
+    EffectContext,
     Pos,
     SceneState,
-    learn_movement_model,
-    predict_move,
+    frame_meta_from_steps,
+    learn_effect_context,
+    predict,
     replay_predicted,
 )
 from perception.session import RESET_ACTION, SceneSnapshot
 
+from .adapters import snapshot_from_scene
 from .heuristics import (
     ExplorationConfig,
     curiosity_entity_target,
@@ -21,7 +23,7 @@ from .heuristics import (
     within,
 )
 from .protocol import PlannerStatus
-from .search import PlanSpec, plan_bfs, snapshot
+from .search import PlanSpec, plan_bfs
 
 
 class ExplorationPolicy:
@@ -47,7 +49,7 @@ class ExplorationPolicy:
         self.reached_targets: set[Pos] = set()
         self.plan: list[int] = []
         self.target: Pos | None = None
-        self._model: MovementModel | None = None
+        self._ctx: EffectContext | None = None
 
         self._expect: tuple[Pos, int, Pos] | None = None
         self._last_scene: SceneSnapshot | None = None
@@ -90,15 +92,18 @@ class ExplorationPolicy:
         if controllable_id is None or scene.n_observed < self.cfg.min_random_steps:
             return self._random_action(actions, phase="explore_random")
 
-        self._model = learn_movement_model(
+        non_markov = len(scene.determinism_violations) > 0
+        self._ctx = learn_effect_context(
             scene.registry,
             scene.catalog,
             list(scene.action_ids),
+            frame_meta_from_steps(scene.step_observations),
             controllable_id,
+            non_markovian=non_markov,
             grid_rows=scene.grid_rows,
             grid_cols=scene.grid_cols,
         )
-        if self._model is None or not self._model.motion_by_action:
+        if self._ctx is None or not self._ctx.movement.motion_by_action:
             return self._random_action(actions, phase="explore_random")
 
         if not self.plan:
@@ -120,11 +125,11 @@ class ExplorationPolicy:
         self, scene: SceneSnapshot, controllable_id: int, action: int
     ) -> None:
         state = self._snapshot_state(scene, controllable_id)
-        if state is None or self._model is None:
+        if state is None or self._ctx is None:
             self._expect = None
             return
         before = state.pos(controllable_id)
-        nxt = predict_move(state, action, self._model)
+        nxt = predict(state, action, self._ctx)
         after = nxt.pos(controllable_id) if nxt else None
         if before is not None and after is not None:
             self._expect = (before, action, after)
@@ -139,10 +144,11 @@ class ExplorationPolicy:
     ) -> None:
         self.target = None
         start = self._snapshot_state(scene, controllable_id)
-        model = self._model
-        if start is None or model is None:
+        ctx = self._ctx
+        if start is None or ctx is None:
             return
 
+        model = ctx.movement
         model_actions = sorted(set(actions) & set(model.motion_by_action))
         if not model_actions:
             model_actions = sorted(model.motion_by_action)
@@ -163,7 +169,7 @@ class ExplorationPolicy:
                     start,
                     lambda s: within(s.pos(controllable_id), entity_target, radius),
                     model_actions,
-                    model,
+                    ctx,
                     max_nodes=self.cfg.max_nodes,
                 )
                 if plan:
@@ -178,12 +184,12 @@ class ExplorationPolicy:
             start,
             lambda s: s.pos(controllable_id) not in visited,
             model_actions,
-            model,
+            ctx,
             max_nodes=self.cfg.max_nodes,
         )
         if plan:
             self.plan = plan
-            end = replay_predicted(start, plan, model)
+            end = replay_predicted(start, plan, ctx)
             self.target = end.pos(controllable_id) if end else None
             self._last_phase = "frontier"
             return
@@ -193,11 +199,9 @@ class ExplorationPolicy:
     def _snapshot_state(
         self, scene: SceneSnapshot, controllable_id: int
     ) -> SceneState | None:
-        return snapshot(
-            scene.registry,
-            scene.catalog,
+        return snapshot_from_scene(
+            scene,
             PlanSpec(entities=[controllable_id], goal=lambda s: False),
-            scene.frame_idx,
         )
 
     def _legal_actions(self, available: list[int] | None) -> list[int]:
@@ -208,8 +212,12 @@ class ExplorationPolicy:
         return list(self.action_space)
 
     @property
-    def model(self) -> MovementModel | None:
-        return self._model
+    def model(self):
+        return self._ctx.movement if self._ctx else None
+
+    @property
+    def context(self) -> EffectContext | None:
+        return self._ctx
 
     @property
     def controllable_id(self) -> int | None:

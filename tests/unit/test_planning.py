@@ -79,6 +79,8 @@ class TestPlanningOnRecordings:
             plan_case.entity_id,
             plan_case.start_frame,
             plan_case.goal_frame,
+            step_observations=stack.session.step_observations,
+            non_markovian=len(stack.session.determinism_violations) > 0,
         )
         assert result is not None, "BFS should find a plan"
         assert result.predict_reached_goal
@@ -92,6 +94,8 @@ class TestPlanningOnRecordings:
             plan_case.entity_id,
             plan_case.start_frame,
             plan_case.goal_frame,
+            step_observations=stack.session.step_observations,
+            non_markovian=len(stack.session.determinism_violations) > 0,
         )
         assert result is not None
         for step in result.steps:
@@ -106,6 +110,8 @@ class TestPlanningOnRecordings:
             plan_case.entity_id,
             plan_case.start_frame,
             plan_case.goal_frame,
+            step_observations=stack.session.step_observations,
+            non_markovian=len(stack.session.determinism_violations) > 0,
         )
         assert result is not None
         actual = entity_pos_at(

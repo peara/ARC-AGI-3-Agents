@@ -4,7 +4,7 @@
 > the reasoning behind them, what we've built, and what we found, so we can
 > refer back and revise as evidence comes in.
 >
-> Last updated: 2026-06-13 (effects slice 2 step 1: SceneState v2)
+> Last updated: 2026-06-14 (effects slice 2 complete)
 
 ---
 
@@ -62,8 +62,9 @@ reusable, and rungs 1–4 need **no training and no network**.
    entities derived from trajectories. ✅ done
 3. **Controllable-object identification** — correlate actions with object motion;
    tag controllable entity + observed motion-by-action. ✅ done (v1 heuristic)
-4. **EffectModel + roles** — `effects.predict` + relational rules (terminal, overlap→effect);
-   classify wall / pickup / hazard / door by *consequence*. ⬜ slice 2 step 1: `SceneState` v2 ✅
+4. **EffectModel + roles** — `effects.predict` + relational rules (terminal, counter);
+   classify wall / pickup / hazard / door by *consequence*. ✅ slice 2 (terminal +
+   counter; overlap/`exists` deferred)
 5. **Partial-state planning** — snapshot → `effects.predict` → BFS on a
    caller-defined subset of state; verify against recordings. ✅ v1 (movement)
 6. **Curiosity-driven live agent** — random cold start until a controllable
@@ -469,7 +470,7 @@ and never assigns game semantics. Downstream EffectModel and LLM planners consum
       (extract inner pattern, normalize scale/rotation) to detect the goal relation.
 - [ ] **Floor-aware background**: model per-region background so appeared/vanished
       become meaningful (needed for pickups/doors, not just movement).
-- [ ] Additional role detectors + richer `effects.predict` (relational/terminal rules).
+- [x] Additional role detectors + richer `effects.predict` (terminal + counter rules).
 - [ ] Curiosity v2: confirm/refute entity roles by *consequence* of bumping into
       them (feed `effects` rule store); incremental (not per-frame) catalog rebuild.
 - [x] Add non-ls20 entries to `tests/reference_recordings.json` (C1: g50t).

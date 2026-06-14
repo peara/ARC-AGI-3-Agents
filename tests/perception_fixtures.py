@@ -36,6 +36,14 @@ class PerceptionExpect:
     expect_non_markovian: bool = False
 
 
+@dataclass(frozen=True)
+class EffectsExpect:
+    recording: RecordingRef
+    expect_terminal_rule: bool = False
+    expect_counter_rule: bool = False
+    expect_non_markovian: bool = False
+
+
 @dataclass
 class PerceptionStack:
     """Everything built from one recording file."""
@@ -77,6 +85,31 @@ def load_perception_expectations(
                 min_counters=int(perc.get("min_counters", 0)),
                 min_animation_events=int(perc.get("min_animation_events", 0)),
                 expect_non_markovian=bool(perc.get("expect_non_markovian", False)),
+            )
+        )
+    return out
+
+
+def load_effects_expectations(
+    manifest_path: Path | None = None,
+) -> list[EffectsExpect]:
+    path = manifest_path or MANIFEST_PATH
+    data = json.loads(path.read_text(encoding="utf-8"))
+    out: list[EffectsExpect] = []
+    for entry in data.get("recordings", []):
+        effects = entry.get("effects")
+        if not effects:
+            continue
+        rec = RecordingRef(
+            name=entry["name"],
+            path=REPO_ROOT / entry["path"],
+        )
+        out.append(
+            EffectsExpect(
+                recording=rec,
+                expect_terminal_rule=bool(effects.get("expect_terminal_rule", False)),
+                expect_counter_rule=bool(effects.get("expect_counter_rule", False)),
+                expect_non_markovian=bool(effects.get("expect_non_markovian", False)),
             )
         )
     return out

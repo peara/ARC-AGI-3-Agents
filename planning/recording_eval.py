@@ -5,16 +5,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from effects import (
-    MovementModel,
+    EffectContext,
     Pos,
     SceneState,
     entity_pos_at,
-    learn_movement_model,
-    predict_move,
+    frame_meta_from_steps,
+    learn_effect_context,
+    predict,
     replay_predicted,
 )
 from perception.entities import EntityCatalog
 from perception.registry import ObjectRegistry
+from perception.session import PerceptionSession
 
 from .search import PlanSpec, goal_pos, plan_bfs, snapshot
 
@@ -67,6 +69,33 @@ def _observed_next(
     return hits[0]
 
 
+def build_effect_context(
+    reg: ObjectRegistry,
+    catalog: EntityCatalog,
+    action_ids: list[int],
+    entity_id: int,
+    *,
+    frame_meta=None,
+    step_observations=(),
+    non_markovian: bool = False,
+    grid_rows: int = 64,
+    grid_cols: int = 64,
+) -> EffectContext | None:
+    meta = frame_meta
+    if meta is None:
+        meta = frame_meta_from_steps(step_observations)
+    return learn_effect_context(
+        reg,
+        catalog,
+        action_ids,
+        meta,
+        entity_id,
+        non_markovian=non_markovian,
+        grid_rows=grid_rows,
+        grid_cols=grid_cols,
+    )
+
+
 def verify_plan_on_recording(
     reg: ObjectRegistry,
     catalog: EntityCatalog,
@@ -74,7 +103,7 @@ def verify_plan_on_recording(
     entity_id: int,
     start_frame: int,
     plan: list[int],
-    model: MovementModel,
+    ctx: EffectContext,
     goal: Pos,
 ) -> PlanEvalResult:
     start = snapshot(
@@ -98,7 +127,7 @@ def verify_plan_on_recording(
             )
             break
 
-        nxt = predict_move(state, action, model)
+        nxt = predict(state, action, ctx)
         if nxt is None:
             checks.append(
                 StepCheck(i, action, pos_before, None, None, "predict_failed")
@@ -119,7 +148,7 @@ def verify_plan_on_recording(
         )
         state = nxt
 
-    end = replay_predicted(start, plan, model)
+    end = replay_predicted(start, plan, ctx)
     end_pos = end.pos(entity_id) if end else None
 
     return PlanEvalResult(
@@ -142,6 +171,8 @@ def plan_and_evaluate(
     goal_frame: int,
     *,
     max_nodes: int = 10_000,
+    non_markovian: bool = False,
+    step_observations=(),
 ) -> PlanEvalResult | None:
     """Plan between two frames and evaluate against the recording."""
     start = snapshot(
@@ -163,15 +194,22 @@ def plan_and_evaluate(
     if target is None:
         return None
 
-    model = learn_movement_model(reg, catalog, action_ids, entity_id)
-    if model is None or not model.motion_by_action:
+    ctx = build_effect_context(
+        reg,
+        catalog,
+        action_ids,
+        entity_id,
+        step_observations=step_observations,
+        non_markovian=non_markovian,
+    )
+    if ctx is None or not ctx.movement.motion_by_action:
         return None
 
     plan = plan_bfs(
         start,
         goal_pos(entity_id, target),
-        sorted(model.motion_by_action),
-        model,
+        sorted(ctx.movement.motion_by_action),
+        ctx,
         max_nodes=max_nodes,
     )
     if plan is None:
@@ -184,6 +222,29 @@ def plan_and_evaluate(
         entity_id,
         start_frame,
         plan,
-        model,
+        ctx,
         target,
+    )
+
+
+def plan_and_evaluate_session(
+    session: PerceptionSession,
+    entity_id: int,
+    start_frame: int,
+    goal_frame: int,
+    *,
+    max_nodes: int = 10_000,
+) -> PlanEvalResult | None:
+    scene = session.snapshot()
+    non_markov = len(scene.determinism_violations) > 0
+    return plan_and_evaluate(
+        session.registry,
+        scene.catalog,
+        list(session.action_ids),
+        entity_id,
+        start_frame,
+        goal_frame,
+        max_nodes=max_nodes,
+        non_markovian=non_markov,
+        step_observations=scene.step_observations,
     )
