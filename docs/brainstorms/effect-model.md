@@ -1,9 +1,9 @@
 # Effects layer — forward prediction over symbolic state
 
 > Design doc for the predictive layer on top of perception
-> (`docs/reports/perception-agent.md`). Slice 1 (package boundaries + kinematics)
-> and slice 2 (hand-written rules) are done. Slice 3 (Markovian rule engine) is
-> planned; slice 4 (LLM frame-data interface) is a stub.
+> (`docs/reports/perception-agent.md`). Slices 1–3 are done (kinematics, hand-written
+> rules, Markovian rule engine). **Next:** slice 4 — LLM planner + rule proposer
+> (`docs/brainstorms/llm-agent-loop.md`).
 
 ## What it is
 
@@ -39,8 +39,8 @@ only for observed positions on `SceneSnapshot`).
 |-------|--------|--------|
 | 1 | `effects/` package, kinematics, `planning/` search | ✅ |
 | 2 | Extendable `SceneState`, hand-written rules, terminal + counter | ✅ |
-| 3 | Rule engine: propose / confirm / prune (Markovian); abstain on non-Markovian | ⬜ planned |
-| 4 | LLM frame-data interface + hypothesis → verify (g50t-class games) | stub |
+| 3 | Rule engine: propose / confirm / prune (Markovian); abstain on non-Markovian | ✅ |
+| 4 | LLM planner + rule proposer + query interface; classical verify loop | ⬜ planned |
 
 ---
 
@@ -363,7 +363,7 @@ Estimated order — each step should keep tests green.
 
 ---
 
-## Slice 3 — rule engine (Markovian hypothesis lifecycle)
+## Slice 3 — rule engine (Markovian hypothesis lifecycle) ✅
 
 Same `predict()` pipeline and rule interface as slice 2. Slice 3 adds an
 **online/offline lifecycle** for **Markovian** rules: propose from residuals,
@@ -496,16 +496,17 @@ EffectContext(
 `has_confirmed` unchanged for slice 3: non-Markovian → known kinematic transition
 or abstain; no latent rule promotion.
 
-### Planning integration (slice 3)
+### Planning integration (slice 3) ✅
 
 | Component | Change |
 |-----------|--------|
-| `effects/residual.py` | `compute_residual`, `ResidualEntry` |
-| `effects/engine.py` | `propose_rules`, `confirm_rules`, `prune_rules` |
-| `effects/context.py` | `proposed_rules`, confirm threshold |
-| `effects/learn.py` | optional: propose counters for all entities in spec |
-| `planning/exploration.py` | verify + engine increment on Markovian residuals |
-| `planning/recording_eval.py` | optional residual report |
+| `effects/residual.py` | `compute_residual`, `ResidualEntry` ✅ |
+| `effects/engine.py` | `propose_rules`, `confirm_rules`, `prune_rules`, `engine_step` ✅ |
+| `effects/engine_log.py` | `format_rule`, `diff_effect_context`, logging helpers ✅ |
+| `effects/context.py` | `proposed_rules`, `confirm_threshold`, `merge_effect_context` ✅ |
+| `planning/exploration.py` | verify loop + `engine_step`; optional `log_engine` ✅ |
+| `scripts/run_effect_engine.py` | offline replay + rule-change log ✅ |
+| `planning/recording_eval.py` | optional residual report ⬜ deferred |
 
 ---
 
@@ -537,35 +538,36 @@ ls20: `"expect_non_markovian": false`, `"expect_abstain_non_markovian": false`.
 
 ---
 
-## Implementation sequence (slice 3)
+## Implementation sequence (slice 3) ✅
 
-1. **`effects/residual.py`** — `ResidualEntry`, `compute_residual`.
-2. **`EffectContext` v2** — `proposed_rules`, `confirm_threshold`.
-3. **`effects/engine.py`** — `confirm_rules`, `prune_rules` (synthetic first).
-4. **`propose_rules`** — `CounterRule`, `TerminalRule` (+ `ExistsRule` if 2c fixture).
-5. **Counter propose for any entity in spec** — not only `role=counter`.
-6. **Wire `ExplorationPolicy`** — verify + engine on Markovian steps only.
-7. **`recording_eval`** — optional residual report.
-8. **Tests + manifest** + g50t abstain contract.
+1. **`effects/residual.py`** ✅ — `ResidualEntry`, `compute_residual`.
+2. **`EffectContext` extensions** ✅ — `proposed_rules`, `confirm_threshold`.
+3. **`effects/engine.py`** ✅ — `confirm_rules`, `prune_rules`, `propose_rules`, `engine_step`.
+4. **`propose_rules`** ✅ — `CounterRule`, `TerminalRule` (`ExistsRule` ⬜ until 2c fixture).
+5. **Counter propose for any entity in spec** ✅ — not only `role=counter` (ls20 `#17`).
+6. **Wire `ExplorationPolicy`** ✅ — verify + engine; `ExplorationConfig.log_engine`.
+7. **`recording_eval` residual report** ⬜ optional, deferred.
+8. **Tests + manifest** ✅ — `test_effects_engine.py`, `expect_abstain_non_markovian`.
 
-**Defer:** overlap/`exists` until fixture; g50t latent modeling → slice 4.
+**Defer:** overlap/`exists` (2c) until fixture; g50t hidden memory → slice 4.
 
 ---
 
-## Slice 4 preview — LLM frame-data interface (not slice 3)
+## Slice 4 — LLM agent loop (next)
 
-Hidden-memory games (g50t action 5) need **hypothesis formation**, not classical
-templates. Dev-only path:
+Full design: **`docs/brainstorms/llm-agent-loop.md`**.
 
-1. **Query interface** over session + recording (not raw 4096×N tensors):
-   `recent_actions`, `nonmarkov_episodes`, `animation_steps`, optional compact
-   `ghost_trace` / settled diffs.
-2. **LLM proposes** mechanics in natural language + suggested `PlanSpec` / probes.
-3. **Classical verify** — curiosity loop or rule engine confirms/refutes; eval
-   path stays LLM-free (compiled rules or abstain).
+Closes the live loop:
 
-`SceneState.set_dim` remains the hook if a verified hypothesis needs simulated
-state — populated by LLM-guided experiments, not slice 3 propose_rules.
+1. **Random → kinematics** (classical, done).
+2. **LLM planner** — token-bounded query over session + engine state → `ProbePlan`
+   (where to look, what to try).
+3. **Classical execute** — BFS / steps; optional planner scratch (`visited`, `probed`).
+4. **Engine verify** (slice 3) — residual → confirm / prune simple templates.
+5. **LLM rule proposer** — unexplained residuals / non-Markovian episodes →
+   `RuleHypothesis` → compile → confirm probes → promoted rules in `EffectContext`.
+
+Dev-only LLM; Kaggle eval uses compiled rules + classical `predict`, or abstain.
 
 ---
 
@@ -590,11 +592,17 @@ state — populated by LLM-guided experiments, not slice 3 propose_rules.
 - `tests/unit/test_effects.py`
 - `tests/reference_recordings.json` — `effects` expectations
 
-## Artifacts (target after slice 3)
+## Artifacts (slice 3) ✅
 
 - `effects/residual.py` — observed vs predicted diff
 - `effects/engine.py` — propose / confirm / prune (Markovian templates only)
-- `effects/context.py` — proposed vs confirmed rule sets
-- `planning/exploration.py` — engine-in-the-loop verify
+- `effects/engine_log.py` — rule diff formatting + logging
+- `effects/context.py` — proposed vs confirmed rule sets, `merge_effect_context`
+- `planning/exploration.py` — engine-in-the-loop verify (+ optional live log)
+- `scripts/run_effect_engine.py` — offline recording replay with rule-change log
 - `tests/unit/test_effects_engine.py`
 - `tests/reference_recordings.json` — `expect_abstain_non_markovian`
+
+## Artifacts (target for slice 4)
+
+See `docs/brainstorms/llm-agent-loop.md` § Artifacts.

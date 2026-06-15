@@ -4,7 +4,7 @@
 > the reasoning behind them, what we've built, and what we found, so we can
 > refer back and revise as evidence comes in.
 >
-> Last updated: 2026-06-15 (effects slice 3 replanned: Markovian engine; g50t → slice 4)
+> Last updated: 2026-06-15 (slice 4 planned: LLM planner + rule proposer; see llm-agent-loop.md)
 
 ---
 
@@ -64,7 +64,8 @@ reusable, and rungs 1–4 need **no training and no network**.
    tag controllable entity + observed motion-by-action. ✅ done (v1 heuristic)
 4. **EffectModel + roles** — `effects.predict` + relational rules (terminal, counter);
    classify wall / pickup / hazard / door by *consequence*. ✅ slice 2 (terminal +
-   counter; overlap/`exists` deferred)
+   counter; overlap/`exists` deferred). ✅ slice 3 (residual → propose / confirm /
+   prune engine; g50t abstains, no latent templates).
 5. **Partial-state planning** — snapshot → `effects.predict` → BFS on a
    caller-defined subset of state; verify against recordings. ✅ v1 (movement)
 6. **Curiosity-driven live agent** — random cold start until a controllable
@@ -471,11 +472,13 @@ and never assigns game semantics. Downstream EffectModel and LLM planners consum
 - [ ] **Floor-aware background**: model per-region background so appeared/vanished
       become meaningful (needed for pickups/doors, not just movement).
 - [x] Additional role detectors + richer `effects.predict` (terminal + counter rules).
-- [ ] Curiosity v2: confirm/refute rules by *consequence* (Markovian residuals only).
-      Planned as effects slice 3 (`docs/brainstorms/effect-model.md` § Slice 3).
-- [ ] Effects slice 3: rule engine (propose / confirm / prune on visible dims;
-      abstain + flag on non-Markovian).
-- [ ] Effects slice 4: LLM frame-data query interface for hidden-memory games (g50t).
+- [x] Curiosity v2: confirm/refute rules by *consequence* (Markovian residuals via
+      `effects/engine.py`; wired in `ExplorationPolicy`, optional `log_engine`).
+- [x] Effects slice 3: rule engine (propose / confirm / prune on visible dims;
+      abstain + flag on non-Markovian). See `scripts/run_effect_engine.py`.
+- [ ] Effects slice 4: LLM planner + rule proposer + query interface; classical
+      verify loop (`docs/brainstorms/llm-agent-loop.md`). Closes: random → kinematics
+      → directed probes → hypothesis rules → engine confirm.
 - [x] Add non-ls20 entries to `tests/reference_recordings.json` (C1: g50t).
 - [x] Multi-sub-frame API frames: temporal animation stacks; use last sub-frame
       as settled state (`to_grid`, `n_subframes`, animation events in `summary()`).
@@ -487,13 +490,16 @@ and never assigns game semantics. Downstream EffectModel and LLM planners consum
 
 ## 7. Artifacts
 
-- Code: `effects/`, `planning/`, `perception/objects.py`, `perception/motion.py`, `perception/registry.py`,
+- Code: `effects/` (incl. `residual.py`, `engine.py`, `engine_log.py`), `planning/`,
+  `perception/objects.py`, `perception/motion.py`, `perception/registry.py`,
   `perception/entities.py`, `perception/roles.py`, `perception/session/`,
   `perception/viz.py`, `agents/templates/curiosity_agent.py`,
   `scripts/perceive_recording.py`, `scripts/analyze_motion.py`,
   `scripts/track_recording.py`, `scripts/plan_recording.py`,
+  `scripts/run_effect_engine.py`,
   `tests/reference_recordings.json`, `tests/unit/test_planning.py`,
-  `tests/unit/test_exploration.py`, `tests/unit/test_perception_contract.py`,
+  `tests/unit/test_exploration.py`, `tests/unit/test_effects.py`,
+  `tests/unit/test_effects_engine.py`, `tests/unit/test_perception_contract.py`,
   recording fix in `agents/agent.py`
 - Reference recordings: `recordings/ls20-9607627b.random.80.4778fe67-*.recording.jsonl`,
   `recordings/g50t-5849a774.curiosity.200.*.recording.jsonl`
