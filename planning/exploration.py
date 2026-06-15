@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import logging
 import random
 
 from effects import (
     EffectContext,
     Pos,
     SceneState,
+    diff_effect_context,
+    engine_step,
+    entity_size_at,
     frame_meta_from_steps,
     learn_effect_context,
+    merge_effect_context,
     predict,
     replay_predicted,
 )
@@ -24,6 +29,8 @@ from .heuristics import (
 )
 from .protocol import PlannerStatus
 from .search import PlanSpec, plan_bfs
+
+_engine_logger = logging.getLogger("effects.engine")
 
 
 class ExplorationPolicy:
@@ -50,8 +57,11 @@ class ExplorationPolicy:
         self.plan: list[int] = []
         self.target: Pos | None = None
         self._ctx: EffectContext | None = None
+        self._engine_ctx: EffectContext | None = None
 
         self._expect: tuple[Pos, int, Pos] | None = None
+        self._engine_state_before: SceneState | None = None
+        self._pending_action: int | None = None
         self._last_scene: SceneSnapshot | None = None
         self._last_phase = "init"
         self._last_diverged = False
@@ -67,14 +77,75 @@ class ExplorationPolicy:
 
     def _verify_expectation(self, scene: SceneSnapshot) -> None:
         self._last_diverged = False
-        if self._expect is None:
+        if self._expect is not None:
+            _pos_before, _action, predicted = self._expect
+            actual = scene.controllable_pos()
+            if actual is None or actual != predicted:
+                self._last_diverged = True
+                self.plan = []
+            self._expect = None
+
+        if self._pending_action is not None:
+            self._run_engine_step(scene, self._pending_action)
+
+        self._engine_state_before = None
+        self._pending_action = None
+
+    def _engine_plan_spec(self, scene: SceneSnapshot) -> PlanSpec:
+        """Projection for residual-driven rule learning (pos + tracked sizes)."""
+        ctrl = scene.controllable_id()
+        entities: list[int] = []
+        dims: list[str] = []
+        if ctrl is not None:
+            entities.append(ctrl)
+            dims.append("pos")
+        for eid in sorted(scene.catalog.entities):
+            if ctrl is not None and eid == ctrl:
+                continue
+            if entity_size_at(scene.registry, scene.catalog, eid, scene.frame_idx) is None:
+                continue
+            if eid not in entities:
+                entities.append(eid)
+            if "size" not in dims:
+                dims.append("size")
+        return PlanSpec(
+            entities=entities,
+            dims=tuple(dims) if dims else ("pos",),
+            goal=lambda s: False,
+        )
+
+    def _run_engine_step(self, scene: SceneSnapshot, action: int) -> None:
+        if (
+            self._engine_ctx is None
+            or self._engine_state_before is None
+            or scene.controllable_id() is None
+        ):
             return
-        _pos_before, _action, predicted = self._expect
-        self._expect = None
-        actual = scene.controllable_pos()
-        if actual is None or actual != predicted:
-            self._last_diverged = True
-            self.plan = []
+        spec = self._engine_plan_spec(scene)
+        observed = snapshot_from_scene(scene, spec)
+        if observed is None:
+            return
+        step_label = f"f{scene.frame_idx} a{action}"
+        before_ctx = self._engine_ctx
+        self._engine_ctx = engine_step(
+            before_ctx,
+            self._engine_state_before,
+            action,
+            observed,
+            entity_ids=tuple(spec.entities),
+            dims=spec.dims,
+            include_terminal=spec.include_terminal,
+            controllable_id=scene.controllable_id(),
+        )
+        if not self.cfg.log_engine:
+            return
+        lines = diff_effect_context(before_ctx, self._engine_ctx)
+        prefix = f"{step_label} | "
+        if lines:
+            for line in lines:
+                _engine_logger.info("%s%s", prefix, line)
+        else:
+            _engine_logger.info("%sengine step (no rule change)", prefix)
 
     def decide(
         self,
@@ -90,10 +161,11 @@ class ExplorationPolicy:
 
         controllable_id = scene.controllable_id()
         if controllable_id is None or scene.n_observed < self.cfg.min_random_steps:
-            return self._random_action(actions, phase="explore_random")
+            action = self._random_action(actions, phase="explore_random")
+            return self._record_step(scene, controllable_id, action)
 
         non_markov = len(scene.determinism_violations) > 0
-        self._ctx = learn_effect_context(
+        base = learn_effect_context(
             scene.registry,
             scene.catalog,
             list(scene.action_ids),
@@ -103,38 +175,52 @@ class ExplorationPolicy:
             grid_rows=scene.grid_rows,
             grid_cols=scene.grid_cols,
         )
-        if self._ctx is None or not self._ctx.movement.motion_by_action:
-            return self._random_action(actions, phase="explore_random")
+        if base is None or not base.movement.motion_by_action:
+            action = self._random_action(actions, phase="explore_random")
+            return self._record_step(scene, controllable_id, action)
+
+        if self._engine_ctx is None:
+            self._engine_ctx = base
+        else:
+            self._engine_ctx = merge_effect_context(base, self._engine_ctx)
+        self._ctx = self._engine_ctx
 
         if not self.plan:
             self._plan_toward_unknown(scene, actions, controllable_id)
 
         if not self.plan:
-            return self._random_action(actions, phase="frontier_exhausted")
+            action = self._random_action(actions, phase="frontier_exhausted")
+            return self._record_step(scene, controllable_id, action)
 
         action = self.plan.pop(0)
-        self._set_expectation(scene, controllable_id, action)
-        return action
+        return self._record_step(scene, controllable_id, action)
 
-    def _random_action(self, actions: list[int], *, phase: str) -> int:
-        self._last_phase = phase
+    def _record_step(
+        self,
+        scene: SceneSnapshot,
+        controllable_id: int | None,
+        action: int,
+    ) -> int:
+        """Remember pre-action state for verify + rule engine on next observe."""
         self._expect = None
-        return self.rng.choice(actions)
+        self._engine_state_before = None
+        self._pending_action = None
+        if controllable_id is None or self._ctx is None:
+            return action
 
-    def _set_expectation(
-        self, scene: SceneSnapshot, controllable_id: int, action: int
-    ) -> None:
-        state = self._snapshot_state(scene, controllable_id)
-        if state is None or self._ctx is None:
-            self._expect = None
-            return
-        before = state.pos(controllable_id)
-        nxt = predict(state, action, self._ctx)
+        spec = self._engine_plan_spec(scene)
+        self._engine_state_before = snapshot_from_scene(scene, spec)
+        self._pending_action = action
+
+        verify_state = self._snapshot_state(scene, controllable_id)
+        if verify_state is None:
+            return action
+        nxt = predict(verify_state, action, self._ctx)
+        before = verify_state.pos(controllable_id)
         after = nxt.pos(controllable_id) if nxt else None
         if before is not None and after is not None:
             self._expect = (before, action, after)
-        else:
-            self._expect = None
+        return action
 
     def _plan_toward_unknown(
         self,
@@ -195,6 +281,10 @@ class ExplorationPolicy:
             return
 
         self.plan = []
+
+    def _random_action(self, actions: list[int], *, phase: str) -> int:
+        self._last_phase = phase
+        return self.rng.choice(actions)
 
     def _snapshot_state(
         self, scene: SceneSnapshot, controllable_id: int

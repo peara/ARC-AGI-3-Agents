@@ -4,7 +4,7 @@
 > the reasoning behind them, what we've built, and what we found, so we can
 > refer back and revise as evidence comes in.
 >
-> Last updated: 2026-06-14 (effects slice 2 complete)
+> Last updated: 2026-06-15 (effects slice 3 replanned: Markovian engine; g50t → slice 4)
 
 ---
 
@@ -471,8 +471,11 @@ and never assigns game semantics. Downstream EffectModel and LLM planners consum
 - [ ] **Floor-aware background**: model per-region background so appeared/vanished
       become meaningful (needed for pickups/doors, not just movement).
 - [x] Additional role detectors + richer `effects.predict` (terminal + counter rules).
-- [ ] Curiosity v2: confirm/refute entity roles by *consequence* of bumping into
-      them (feed `effects` rule store); incremental (not per-frame) catalog rebuild.
+- [ ] Curiosity v2: confirm/refute rules by *consequence* (Markovian residuals only).
+      Planned as effects slice 3 (`docs/brainstorms/effect-model.md` § Slice 3).
+- [ ] Effects slice 3: rule engine (propose / confirm / prune on visible dims;
+      abstain + flag on non-Markovian).
+- [ ] Effects slice 4: LLM frame-data query interface for hidden-memory games (g50t).
 - [x] Add non-ls20 entries to `tests/reference_recordings.json` (C1: g50t).
 - [x] Multi-sub-frame API frames: temporal animation stacks; use last sub-frame
       as settled state (`to_grid`, `n_subframes`, animation events in `summary()`).

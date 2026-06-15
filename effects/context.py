@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .kinematics import MovementModel, TransitionKey
-from .rules import RelationalRule, TerminalRule
+from .rules import CounterRule, RelationalRule, TerminalRule
 from .state import SceneState
 
 
@@ -66,7 +66,9 @@ class EffectContext:
     movement: MovementModel
     terminal_rules: tuple[TerminalRule, ...] = ()
     relational_rules: tuple[RelationalRule, ...] = ()
+    proposed_rules: tuple[RelationalRule | TerminalRule, ...] = ()
     non_markovian: bool = False
+    confirm_threshold: int = 2
     latent_defaults: dict[tuple[int, str], object] = field(default_factory=dict)
 
     def has_confirmed(self, state: SceneState, action: int) -> bool:
@@ -81,7 +83,25 @@ class EffectContext:
                 or key in self.movement.known_blocks
             ):
                 return True
-        for rule in (*self.terminal_rules, *self.relational_rules):
+        for rule in self.terminal_rules:
             if rule.support >= 1 and rule.guard(state, action):
                 return True
+        for rule in self.relational_rules:
+            if rule.support >= 1 and rule.guard(state, action):
+                if isinstance(rule, CounterRule) and rule.guard_pos is None:
+                    continue
+                return True
         return False
+
+
+def merge_effect_context(base: EffectContext, engine: EffectContext) -> EffectContext:
+    """Refresh movement from ``base``; keep engine-learned rules from ``engine``."""
+    return EffectContext(
+        movement=base.movement,
+        terminal_rules=engine.terminal_rules,
+        relational_rules=engine.relational_rules,
+        proposed_rules=engine.proposed_rules,
+        non_markovian=base.non_markovian,
+        confirm_threshold=engine.confirm_threshold,
+        latent_defaults=base.latent_defaults,
+    )

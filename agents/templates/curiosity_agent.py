@@ -24,7 +24,7 @@ from ..agent import Agent
 class Curiosity(Agent):
     """Perception session + curiosity exploration policy."""
 
-    MAX_ACTIONS = 200
+    MAX_ACTIONS = 100
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -33,7 +33,7 @@ class Curiosity(Agent):
         self.session = PerceptionSession()
         self.policy = ExplorationPolicy(
             action_space=[a.value for a in GameAction if a is not GameAction.RESET],
-            config=ExplorationConfig(seed=seed),
+            config=ExplorationConfig(seed=seed, log_engine=True),
         )
         self._last_action_id = RESET_ACTION
         self._last_observed_frame_id: int | None = None

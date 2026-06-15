@@ -199,3 +199,4 @@ class TestEffectsManifest:
             assert ctx.relational_rules
         else:
             assert not ctx.relational_rules
+        assert ctx.non_markovian == expect.expect_non_markovian

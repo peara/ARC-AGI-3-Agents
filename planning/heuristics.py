@@ -18,6 +18,7 @@ class ExplorationConfig:
     max_nodes: int = 10_000
     reach_radius: int | None = None
     seed: int | None = None
+    log_engine: bool = False
 
 
 def within(pos: Pos | None, target: Pos | None, radius: int) -> bool:

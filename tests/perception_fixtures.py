@@ -42,6 +42,7 @@ class EffectsExpect:
     expect_terminal_rule: bool = False
     expect_counter_rule: bool = False
     expect_non_markovian: bool = False
+    expect_abstain_non_markovian: bool = False
 
 
 @dataclass
@@ -110,6 +111,9 @@ def load_effects_expectations(
                 expect_terminal_rule=bool(effects.get("expect_terminal_rule", False)),
                 expect_counter_rule=bool(effects.get("expect_counter_rule", False)),
                 expect_non_markovian=bool(effects.get("expect_non_markovian", False)),
+                expect_abstain_non_markovian=bool(
+                    effects.get("expect_abstain_non_markovian", False)
+                ),
             )
         )
     return out

@@ -84,6 +84,7 @@ def main() -> None:
 
     logger.addHandler(file_handler)
     logger.addHandler(stdout_handler)
+    logging.getLogger("effects.engine").setLevel(log_level)
 
     # logging.getLogger("requests").setLevel(logging.CRITICAL)
     # logging.getLogger("werkzeug").setLevel(logging.CRITICAL)

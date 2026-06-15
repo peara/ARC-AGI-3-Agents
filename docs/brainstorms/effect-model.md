@@ -2,7 +2,8 @@
 
 > Design doc for the predictive layer on top of perception
 > (`docs/reports/perception-agent.md`). Slice 1 (package boundaries + kinematics)
-> is done. This doc is the **detailed plan for slice 2** and the hook for slice 3.
+> and slice 2 (hand-written rules) are done. Slice 3 (Markovian rule engine) is
+> planned; slice 4 (LLM frame-data interface) is a stub.
 
 ## What it is
 
@@ -38,7 +39,8 @@ only for observed positions on `SceneSnapshot`).
 |-------|--------|--------|
 | 1 | `effects/` package, kinematics, `planning/` search | ✅ |
 | 2 | Extendable `SceneState`, hand-written rules, terminal + counter | ✅ |
-| 3 | Rule engine: propose / confirm / prune; history guards (g50t) | stub |
+| 3 | Rule engine: propose / confirm / prune (Markovian); abstain on non-Markovian | ⬜ planned |
+| 4 | LLM frame-data interface + hypothesis → verify (g50t-class games) | stub |
 
 ---
 
@@ -66,18 +68,18 @@ open string** — we predefine the *mechanism*, not the vocabulary.
 | `size` | per-entity | observed | ✅ track size | ✅ counter rules |
 | `terminal` | global field | metadata | ✅ frame `state` / `levels_completed` | ✅ terminal rules |
 
-Later dims (slice 3+), e.g. `pass_wall`, `mode`, `sequence_idx`, are **latent**:
-introduced by the rule engine when a hypothesis needs hidden state — no
-perception reader, initial value from rule defaults or effects.
+Later dims (e.g. `pass_wall`, `mode`) may use **`SceneState.set_dim`** when a
+hypothesis needs simulated state — reserved for future LLM-driven rules (slice 4),
+not classical feature-engineering in slice 3.
 
 ### Observed vs latent
 
 - **Observed** — perception can read at `frame_idx` (`SceneSnapshot` / registry).
   Registered in `planning` **dim readers**. Seeded when building `SceneState`
   from a real frame.
-- **Latent** — only in simulated state; **writers** in `effects` rules. Slice 3
-  rule engine may **propose new dim names** when residual deltas are unexplained
-  (e.g. pass-through wall ⇒ `pass_wall: bool` on controllable).
+- **Latent / simulated** — only in `SceneState` after `predict` or explicit
+  `set_dim`; no perception reader. **Slice 3 does not propose latent dims** —
+  hidden-memory games are slice 4 (LLM + verify), not classical templates.
 
 `SceneSnapshot` owns **observation** (`entity_pos`, `entity_size`, `entity_exists`,
 `summary()` for LLM). It does not define the full dim vocabulary — only what
@@ -119,10 +121,9 @@ DIM_READERS["size"]   -> track size at frame_idx
 
 Unknown `dim` in `PlanSpec` → raise at snapshot time (fail loud).
 
-**Latent dims** are not read from perception. They appear in `SceneState` only
-after `predict` or explicit `set_dim` when seeding from a prior simulation step.
-`PlanSpec` may list latent dims in `dims` so BFS hashes them once rules use them
-(slice 3: `EffectContext` can suggest extra dims to include).
+**Simulated dims** are not read from perception. They may appear in `SceneState`
+after `predict` or explicit `set_dim` (slice 4 / dev LLM path). Slice 3 uses
+**observed** dims only in residuals and rule proposals.
 
 ---
 
@@ -222,11 +223,10 @@ target entity. Learn when overlap co-occurs with track death next frame.
 **Defer** until a recording with pickups/consumes exists; ls20 random walk may
 have zero examples. Not required for slice 2 exit criteria if 2a+2b pass.
 
-### 2d. Latent dims (slice 3 — not slice 2)
+### 2d. Simulated dims (deferred — not slice 2 or 3)
 
-Example: `pass_wall` toggles when kinematics block but observation moves. Rule
-engine proposes dim + guard; `apply` updates latent field. Slice 2 only needs
-**generic `set_dim`** so slice 3 does not redesign `SceneState`.
+`SceneState.set_dim` supports open dim names so slice 4 does not redesign state.
+Slice 3 **does not** learn latent toggles, registers, or history templates.
 
 ---
 
@@ -285,20 +285,30 @@ Recording loader: extend `load_recording_frames` or add `load_recording_meta(pat
 
 ## LLM (dev only)
 
-LLM reads `SceneSnapshot.summary()` — not `SceneState` dims directly. It may
-propose `PlanSpec(entities=..., dims=[...], goal=...)` using names that match
-**observed** readers. Latent dims surface in planning only after the rule engine
-adds them to `EffectContext` / active rules (slice 3).
+LLM reads `SceneSnapshot.summary()` — not raw canvas. It may propose
+`PlanSpec(entities=..., dims=[...], goal=...)` using **observed** reader names.
+Hidden-memory games (g50t) need a **frame-data query interface** (slice 4), not
+classical latent rule templates in slice 3.
 
 ---
 
 ## g50t and non-Markovian
 
-Until slice 3 history guards: if `non_markovian` and no confirmed rule for
-`(state.fingerprint(), action)`, `predict` returns `None`. Planners should not
-deep-search those branches (curiosity already random-probes action 5).
+When the determinism beacon fires, `EffectContext.non_markovian` is true.
+Classical `predict` **abstains** (`None`) except for transitions already in
+`movement.known_transitions` / `known_blocks` (slice 2 `has_confirmed`).
 
-Slice 3 adds history-conditioned guards behind the same beacon.
+**Slice 3 does not** learn latent or history rules to “fix” g50t. The classical
+layer’s job is:
+
+1. **Detect** — beacon + `non_markovian` flag in context.
+2. **Abstain** — no fake determinism on ambiguous `(settled_fp, action)` pairs.
+3. **Flag** — surface violations / animation events for escalation (slice 4 LLM).
+
+Curiosity may still random-probe action 5 to gather evidence; it does not deep-BFS
+on abstaining branches.
+
+See § Recording vs hidden state (g50t) and § Slice 4 preview.
 
 ---
 
@@ -349,30 +359,226 @@ Estimated order — each step should keep tests green.
 10. **`ExplorationPolicy`** ✅ builds `EffectContext`; recording_eval updated.
 11. **Tests + manifest** ✅ + update `perception-agent.md` rung 4 note.
 
-**Defer:** overlap/`exists` (2c) unless a fixture appears; latent dim proposal (slice 3).
+**Defer:** overlap/`exists` (2c) unless a fixture appears.
 
 ---
 
-## Slice 3 preview (rule engine — not slice 2)
+## Slice 3 — rule engine (Markovian hypothesis lifecycle)
 
-Same `predict()` and rule interface. Add:
+Same `predict()` pipeline and rule interface as slice 2. Slice 3 adds an
+**online/offline lifecycle** for **Markovian** rules: propose from residuals,
+confirm by repeated agreement, prune on live contradiction. Hand-written slice-2
+rules remain the bootstrap; the engine extends the rule set when prediction still
+disagrees with observation on **visible** dims.
 
-- **Propose** — unexplained symbolic residual after `predict` vs observed snapshot
-- **Confirm** — support count on repeated agreement
-- **Prune** — live contradiction (reuse curiosity verify→replan)
-- **New latent dims** — engine registers dim name + default when hypothesis needs it
-- **History guards** — action window or latent memory when `non_markovian`
+**Out of scope for slice 3:** latent dims, history/memory templates, g50t action-5
+modeling — see § Slice 4 preview.
+
+### What slice 3 is
+
+- **Residual** — symbolic diff between `predict(...)` and observed `SceneState`.
+- **Propose** — only templates whose cause is in **visible** state (counter delta,
+  terminal refinement; overlap→`exists` when slice 2c fixture exists).
+- **Confirm / prune** — support counting + verify contradiction (Curiosity v2 core).
+
+### What slice 3 is not
+
+- **Not** automatic entity discovery — rules apply to dims already in `PlanSpec`
+  (e.g. ls20 `#17` size decrease once `(17, "size")` is in the projection).
+- **Not** non-Markovian modeling — g50t stays abstain + flag (slice 2 behavior).
+- **Not** LLM on the eval path — dev-only escalation is slice 4.
+- **Not** raw canvas / subframe prediction.
+
+### Residual (3a)
+
+After each step (recording scan or live `on_observed`):
+
+```text
+observed = snapshot_from_scene(scene, spec)
+predicted = predict(state_before, action, ctx)
+residual  = per-(entity_id, dim) mismatch (observed dims only)
+          + terminal mismatch if spec.include_terminal
+```
+
+Example: `(entity_id=17, dim="size", predicted=10, observed=8)`.
+
+**API sketch:**
+
+```python
+compute_residual(
+    predicted: SceneState,
+    observed: SceneState,
+    *,
+    dims: tuple[str, ...],
+    include_terminal: bool = False,
+) -> tuple[ResidualEntry, ...]
+```
+
+Skip residual-driven propose when `ctx.non_markovian` and transition is not
+already covered by kinematics `known_transitions` / `known_blocks` — abstain
+instead of guessing.
+
+### Propose (3b)
+
+When residual entries remain after slice-2 rules + kinematics:
+
+| Template | When | Example |
+|----------|------|---------|
+| `CounterRule` | `(eid, size)` residual | ls20 `#17`: `delta_size=-2`; any entity in spec |
+| `TerminalRule` | `terminal` residual | refinement when slice 2 missed a guard |
+| `ExistsRule` | overlap + track death (2c) | pickup/consume when fixture exists |
+
+**No** `Latent*` / `History*` templates — causes in hidden state are not recoverable
+from Markovian residuals without game-specific feature engineering.
+
+Proposed rules start unconfirmed (`support=0`, `EffectContext.proposed_rules`).
+
+**Slice 3 improvement over slice 2:** propose counter rules for **any** entity
+with size in the projection, not only `role=counter` (fixes ls20 `#17`).
+
+### Confirm (3c)
+
+Same guard fires and `apply` matches observed residual → increment `support`.
+When `support >= confirm_threshold` (e.g. 2–3), promote to confirmed rule lists
+used by `predict()`.
+
+### Prune (3d)
+
+Verify mismatch → demote or remove matching rules (live + `recording_eval`).
+Movement `known_blocks` stays separate.
+
+### Non-Markovian handling (3e) — g50t
+
+**Exit criterion (g50t):** beacon detected, `predict` abstains on uncovered
+transitions, violations surfaced — **not** “learned latent rules for action 5.”
+
+Recording still validates terminal + counter (slice 2); plan_cases stay empty for
+g50t. Manifest: `expect_non_markovian: true`; no `expect_latent_rule`.
+
+### Recording vs hidden state (g50t)
+
+Reference for slice 4; classical layer uses **settled grids only**.
+
+Each `*.recording.jsonl` event:
+
+```text
+data.frame  →  single 64×64 grid  OR  list of grids (animation stack)
+data.state, data.levels_completed, data.action_input, ...
+```
+
+No `memory` / `sequence` field. Action 5 often returns 9–45 **subframes**: ghost
+replay is ~70–95 cell animation on a mostly static board; perception keeps the
+**last** subframe as settled state. Subframe count correlates (~0.83) with move
+count since last action 5 — replay **length**, not “board is T−9.”
+
+| Data | In session | In `summary()` today |
+|------|------------|----------------------|
+| Full `action_ids` | ✅ | ❌ (only `last_action_id`) |
+| Settled grids | ✅ registry | entities + positions |
+| `n_subframes` / animation events | ✅ | ✅ |
+| Determinism violations | ✅ | ✅ last 5 |
+| Hidden memory register | ❌ | ❌ |
+
+### `EffectContext` extensions (slice 3)
+
+```python
+EffectContext(
+    movement: MovementModel,
+    terminal_rules: tuple[TerminalRule, ...],
+    relational_rules: tuple[RelationalRule, ...],
+    proposed_rules: tuple[EffectRule, ...] = (),
+    non_markovian: bool = False,
+    confirm_threshold: int = 2,
+    # latent_defaults: reserved for slice 4; unused in slice 3
+)
+```
+
+`has_confirmed` unchanged for slice 3: non-Markovian → known kinematic transition
+or abstain; no latent rule promotion.
+
+### Planning integration (slice 3)
+
+| Component | Change |
+|-----------|--------|
+| `effects/residual.py` | `compute_residual`, `ResidualEntry` |
+| `effects/engine.py` | `propose_rules`, `confirm_rules`, `prune_rules` |
+| `effects/context.py` | `proposed_rules`, confirm threshold |
+| `effects/learn.py` | optional: propose counters for all entities in spec |
+| `planning/exploration.py` | verify + engine increment on Markovian residuals |
+| `planning/recording_eval.py` | optional residual report |
 
 ---
 
-## Out of scope
+## Tests and manifest (slice 3)
+
+### New tests (`tests/unit/test_effects_engine.py`)
+
+| Case | Fixture |
+|------|---------|
+| `compute_residual` finds size mismatch | synthetic |
+| Confirm promotes rule after N agreeing steps | synthetic |
+| Prune removes rule after verify contradiction | synthetic |
+| ls20 `#17` decrease rule proposed when `size` in spec | ls20 + manual `PlanSpec` |
+| g50t: beacon + abstain on ambiguous action 5 | g50t recording |
+| ls20 plan cases unchanged | existing manifest |
+
+### `tests/reference_recordings.json`
+
+```json
+"effects": {
+  "expect_terminal_rule": true,
+  "expect_counter_rule": true,
+  "expect_non_markovian": true,
+  "expect_abstain_non_markovian": true
+}
+```
+
+ls20: `"expect_non_markovian": false`, `"expect_abstain_non_markovian": false`.
+
+---
+
+## Implementation sequence (slice 3)
+
+1. **`effects/residual.py`** — `ResidualEntry`, `compute_residual`.
+2. **`EffectContext` v2** — `proposed_rules`, `confirm_threshold`.
+3. **`effects/engine.py`** — `confirm_rules`, `prune_rules` (synthetic first).
+4. **`propose_rules`** — `CounterRule`, `TerminalRule` (+ `ExistsRule` if 2c fixture).
+5. **Counter propose for any entity in spec** — not only `role=counter`.
+6. **Wire `ExplorationPolicy`** — verify + engine on Markovian steps only.
+7. **`recording_eval`** — optional residual report.
+8. **Tests + manifest** + g50t abstain contract.
+
+**Defer:** overlap/`exists` until fixture; g50t latent modeling → slice 4.
+
+---
+
+## Slice 4 preview — LLM frame-data interface (not slice 3)
+
+Hidden-memory games (g50t action 5) need **hypothesis formation**, not classical
+templates. Dev-only path:
+
+1. **Query interface** over session + recording (not raw 4096×N tensors):
+   `recent_actions`, `nonmarkov_episodes`, `animation_steps`, optional compact
+   `ghost_trace` / settled diffs.
+2. **LLM proposes** mechanics in natural language + suggested `PlanSpec` / probes.
+3. **Classical verify** — curiosity loop or rule engine confirms/refutes; eval
+   path stays LLM-free (compiled rules or abstain).
+
+`SceneState.set_dim` remains the hook if a verified hypothesis needs simulated
+state — populated by LLM-guided experiments, not slice 3 propose_rules.
+
+---
+
+## Out of scope (all slices)
 
 - Goal/heuristic scoring beyond `PlanSpec.goal`
 - LLM on Kaggle eval path
 - Full overlap geometry (until fixture exists)
-- Canvas / pixel prediction
+- Canvas / pixel / subframe prediction in classical effects
+- Per-game rule tables
+- Latent feature-engineering in classical slice 3
 
-## Artifacts (target after slice 2)
+## Artifacts (target after slice 2) ✅
 
 - `effects/state.py` — extendable `SceneState`
 - `effects/context.py` — `EffectContext`, `FrameMeta`
@@ -383,3 +589,12 @@ Same `predict()` and rule interface. Add:
 - `planning/search.py` — BFS over `predict`
 - `tests/unit/test_effects.py`
 - `tests/reference_recordings.json` — `effects` expectations
+
+## Artifacts (target after slice 3)
+
+- `effects/residual.py` — observed vs predicted diff
+- `effects/engine.py` — propose / confirm / prune (Markovian templates only)
+- `effects/context.py` — proposed vs confirmed rule sets
+- `planning/exploration.py` — engine-in-the-loop verify
+- `tests/unit/test_effects_engine.py`
+- `tests/reference_recordings.json` — `expect_abstain_non_markovian`
