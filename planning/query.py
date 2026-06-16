@@ -1,0 +1,96 @@
+"""LLM-facing query bundle: SceneSnapshot + effect rules → structured dict."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from effects.context import EffectContext
+from effects.dsl import rule_to_dsl
+from perception.session import SceneSnapshot
+
+if TYPE_CHECKING:
+    pass
+
+
+class QueryInterface:
+    """Assemble an LLM-consumable bundle from a ``SceneSnapshot`` and optional ``EffectContext``."""
+
+    def __init__(
+        self,
+        scene: SceneSnapshot,
+        ctx: EffectContext | None = None,
+        *,
+        action_legend: dict[int, str] | None = None,
+        available_actions: list[int] | None = None,
+    ) -> None:
+        self._scene = scene
+        self._ctx = ctx
+        self._action_legend = action_legend
+        self._available_actions = available_actions
+
+    def bundle(
+        self,
+        *,
+        fields: tuple[str, ...] = (
+            "scene",
+            "action_legend",
+            "engine_rules",
+            "recent_actions",
+        ),
+        max_recent: int = 5,
+    ) -> dict[str, object]:
+        """Return a dict with the requested *fields* plus ``context_note``."""
+        result: dict[str, object] = {}
+        for field in fields:
+            if field == "scene":
+                result["scene"] = self._scene.summary()
+            elif field == "action_legend":
+                result["action_legend"] = self._build_action_legend()
+            elif field == "engine_rules":
+                result["engine_rules"] = self._build_engine_rules()
+            elif field == "recent_actions":
+                result["recent_actions"] = self._build_recent_actions(max_recent)
+        # Always include context_note regardless of fields filter
+        result["context_note"] = "observation-only; effects rules are learned, not ground truth"
+        if self._available_actions is not None:
+            result["available_actions"] = list(self._available_actions)
+        return result
+
+    # -- field builders -------------------------------------------------------
+
+    def _build_action_legend(self) -> dict[int, str] | dict[str, str]:
+        if self._action_legend is None:
+            return {}
+        return self._action_legend
+
+    def _build_engine_rules(self) -> dict[str, object]:
+        if self._ctx is None:
+            return {
+                "confirm_threshold": 2,
+                "confirmed": [],
+                "proposed": [],
+            }
+        confirmed = [rule_to_dsl(r) for r in self._ctx.terminal_rules] + [
+            rule_to_dsl(r) for r in self._ctx.relational_rules
+        ]
+        proposed = [rule_to_dsl(r) for r in self._ctx.proposed_rules]
+        return {
+            "confirm_threshold": self._ctx.confirm_threshold,
+            "confirmed": confirmed,
+            "proposed": proposed,
+        }
+
+    def _build_recent_actions(self, max_recent: int) -> list[dict[str, object]]:
+        steps = self._scene.step_observations[-max_recent:]
+        out: list[dict[str, object]] = []
+        for step in steps:
+            entry: dict[str, object] = {
+                "frame_idx": step.frame_idx,
+                "action_id": step.action_id,
+                "state_name": step.state_name,
+                "levels_completed": step.levels_completed,
+            }
+            if step.delta is not None:
+                entry["delta"] = step.delta
+            out.append(entry)
+        return out

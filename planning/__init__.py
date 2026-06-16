@@ -10,6 +10,7 @@ from .heuristics import (
     within,
 )
 from .protocol import Planner, PlannerStatus
+from .query import QueryInterface
 from .recording_eval import (
     build_effect_context,
     collect_observed_steps,
@@ -26,6 +27,7 @@ __all__ = [
     "Planner",
     "PlannerStatus",
     "PlanSpec",
+    "QueryInterface",
     "build_effect_context",
     "collect_observed_steps",
     "curiosity_entity_target",
