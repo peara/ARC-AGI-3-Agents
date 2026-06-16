@@ -7,6 +7,7 @@ from .context import (
     load_recording_meta,
     merge_effect_context,
 )
+from .dsl import dsl_to_rule, rule_to_dsl
 from .engine import (
     confirm_rules,
     engine_step,
@@ -34,6 +35,8 @@ from .state import Pos, SceneState, Terminal, terminal_from_state_name
 
 __all__ = [
     "CounterRule",
+    "dsl_to_rule",
+    "rule_to_dsl",
     "EffectContext",
     "FrameMeta",
     "MovementModel",
