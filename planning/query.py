@@ -2,14 +2,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from effects.context import EffectContext
 from effects.dsl import rule_to_dsl
 from perception.session import SceneSnapshot
-
-if TYPE_CHECKING:
-    pass
 
 
 class QueryInterface:
