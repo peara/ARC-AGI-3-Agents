@@ -56,8 +56,12 @@ QueryInterface(scene, ctx=None, *, action_legend=None, available_actions=None)
 
 **`fields` extension hook:** `bundle(fields=...)` selects which builders run.
 Deferred fields (`movement_model`, `recent_residuals`, `nonmarkov_episodes`,
-`settled_diff`, `animation_steps`, `visited_entities`) will be added as builder
-methods behind this hook — no API change needed.
+`settled_diff`, `animation_steps`) will be added as builder methods behind
+this hook — no API change needed.
+
+**No `visited_entities()` query.** The scene summary already contains entity
+positions, sizes, and roles — the LLM can infer what it has and hasn't explored.
+No separate ProbeState or scratch needed.
 
 ### Tests
 
@@ -110,6 +114,15 @@ them into `Callable[[SceneState], bool]` for `plan_bfs`.
 - `within()` imported from `planning/heuristics.py` (not reimplemented).
 - `max_steps` maps to `plan_bfs(max_nodes=...)` — BFS node limit, not plan length.
 
+**Validated end-to-end on real recording data** using `scripts/probe_recording.py`:
+
+| Predicate | Result |
+|-----------|--------|
+| `{"dim": "pos", "of": 0, "eq": [32, 16]}` | 0-step plan (already at goal) |
+| `{"dim": "pos", "of": 0, "near": [20, 16], "radius": 2}` | 4-step plan: `[3, 1, 1, 4]` |
+| `{"all": [{"dim": "pos", "of": 0, "near": [25, 20], "radius": 3}]}` | 2-step plan: `[4, 1]` |
+| `{"dim": "pos", "of": 0, "near": {"of": 22, "radius": 2}}` | Resolves entity 22 → `(32, 21)`, 1-step plan: `[4]` |
+
 ### Tests
 
 - `tests/unit/test_guard_parse.py` — 5 tests: action guard, pos guard conjunction, empty conjunction, single-clause all, pos with entity_id
@@ -129,15 +142,19 @@ them into `Callable[[SceneState], bool]` for `plan_bfs`.
 | `nonmarkov_episodes()` | — | ⬜ deferred |
 | `animation_steps(frame)` | — | ⬜ deferred |
 | `settled_diff(f1, f2)` | — | ⬜ deferred |
-| `visited_entities()` | — | ⬜ deferred (needs Step 3 `ProbeState`) |
 
 Two additional fields not in the doc spec but useful for LLM: `action_legend` and
 `available_actions`.
 
+`visited_entities()` was in the original spec but **removed** — the scene
+summary already provides this information, and a hardcoded ProbeState would be
+premature. If the LLM repeats probes, we'll add structured memory based on the
+observed failure.
+
 ### Kind mapping for future compiler
 
-The doc's `RuleHypothesis` (line 244) uses `kind="counter"`. Our DSL uses
-`kind="delta"`. The Step-5 compiler must map: `"counter" → "delta"`,
+The doc's `RuleHypothesis` uses `kind="counter"`. Our DSL uses
+`kind="delta"`. A future compiler must map: `"counter" → "delta"`,
 `"terminal" → "terminal"`. Trivial but should be documented there.
 
 ---
@@ -147,9 +164,8 @@ The doc's `RuleHypothesis` (line 244) uses `kind="counter"`. Our DSL uses
 - No `"set"` or `"exists"` DSL kinds — no rule types map to them yet
 - No `{"any": [...]}` or `{"not": {...}}` guard or goal operators
 - No `MovementModel` serialization — deferred to next builder
-- No `ProbePlan` wrapper (Step 2 shipped `ProbeGoal` only — ordered sub-goals are Step 3)
-- No `ProbeState` / `visited` / `probed` scratch — Step 3
-- No `RuleHypothesis`, LLM adapter, or agent orchestration — Steps 4-7
+- No `ProbeState` / `visited` / `probed` scratch — scene summary IS memory
+- No `RuleHypothesis`, LLM adapter, or agent orchestration — Step 3
 - No prompt formatting — returns structured data only
 - No writes to `perception/` or `agents/`
 - No imports from `agents/` in `planning/` or `effects/`
@@ -163,13 +179,15 @@ The doc's `RuleHypothesis` (line 244) uses `kind="counter"`. Our DSL uses
 |------|-------------|--------|
 | 1 | `planning/query.py` — query interface + `effects/dsl.py` | ✅ done |
 | 2 | `planning/probe.py` — ProbeGoal DSL + `compile_goal` + `effects/guard_parse.py` | ✅ done |
-| 3 | Planner scratch — `reached_entity_ids`, `probed`; `ProbePlan` wrapper | ⬜ next |
-| 4 | LLM planner adapter — prompt + parse `ProbePlan` | ⬜ |
-| 5 | `RuleHypothesis` + compiler — map to rules / `set_dim` | ⬜ |
-| 6 | LLM rule proposer adapter — prompt + parse + queue verify | ⬜ |
-| 7 | `agents/templates/llm_curiosity_agent.py` — orchestration | ⬜ |
-| 8 | Tests — mock LLM fixtures; g50t non-Markovian path | ⬜ |
-| 9 | Scripts — offline replay with logged LLM I/O | ⬜ |
+| 3 | LLM planner adapter — prompt template + response parser + agent loop wiring | ⬜ next |
+| 4 | `agents/templates/llm_curiosity_agent.py` — orchestration, dev-only API | ⬜ |
+| 5 | Tests — mock LLM fixtures; ls20 + g50t recordings for probe paths | ⬜ |
+| 6 | Scripts — offline replay with logged LLM I/O | ⬜ |
+
+**Removed steps** (merged or deferred):
+- ~~Planner scratch / ProbeState~~ — removed; scene summary IS memory.
+- ~~RuleHypothesis + compiler~~ — deferred to after the planner loop works.
+- ~~LLM rule proposer adapter~~ — merged into future hypothesis step.
 
 ---
 
@@ -192,4 +210,6 @@ fe7503f test(planning): add QueryInterface bundle serialization tests
 95532a7 test(effects): add guard clause parser round-trip tests
 2ab3924 feat(planning): add ProbeGoal DSL and goal predicate compiler
 d0a2ff5 test(planning): add ProbeGoal DSL and goal predicate compiler tests
+e12d2fc docs: update slice 4 status — steps 1-2 done, Step 2 ProbeGoal DSL documented
+8d61f5f feat(scripts): add probe_recording.py for offline DSL testing on recordings
 ```

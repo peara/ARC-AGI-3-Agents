@@ -23,12 +23,13 @@ What it does **not** do:
 |-----|----------------|
 | **Passive learning** | Rules appear only on incidental transitions; no directed experiments. |
 | **Template ceiling** | Classical propose only emits fixed templates; g50t hidden memory and richer mechanics need hypotheses, not `delta_size=-2` alone. |
-| **Navigation ≠ experiment design** | Tier-1 `seek_entity` uses spatial “not reached yet,” not “probe this rule.” |
+| **Navigation ≠ experiment design** | Tier-1 `seek_entity` uses spatial "not reached yet," not "probe this rule." |
 | **No closed loop** | Unknown → hypothesis → test → confirmed rule → better predict → smarter probes. |
 
-Slice 4 adds **two LLM roles** on top of the existing classical stack — not
-new perception ontology (no per-game `Entity` flags beyond optional planner
-scratch like `visited`).
+Slice 4 closes this loop with **one LLM role**: the planner. No separate rule
+proposer phase — the planner produces `ProbeGoal` dicts, classical code executes
+them, and the engine confirms/prunes rules as before. The scene summary IS the
+planner's memory — no separate scratch needed.
 
 ---
 
@@ -42,37 +43,32 @@ scratch like `visited`).
                                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │  Phase B — LLM planner (slice 4)                                │
-│  read compact scene + engine state → aim / probe plan             │
-│  “go near entity 17”, “try action 4 twice”, “sample action 5”   │
+│  read compact scene + engine state → ProbeGoal predicate         │
+│  "go near entity 17", "try action 4 twice", "sample action 5"   │
 └───────────────────────────────┬─────────────────────────────────┘
                                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │  Phase C — classical execute                                    │
 │  BFS / single-step toward planner goal; record state_before      │
-│  optional: visited / probed scratch (entity_id, dim)            │
 └───────────────────────────────┬─────────────────────────────────┘
                                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │  Phase D — observe + engine (slice 3)                           │
 │  predict vs observed → residual; confirm / prune templates      │
-└───────────────────────────────┬─────────────────────────────────┘
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  Phase E — LLM rule proposer (slice 4)                          │
-│  unexplained residuals / non-Markovian episodes → rule hypothesis│
-│  compile to structured rules or simulated dims + guards         │
-└───────────────────────────────┬─────────────────────────────────┘
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  Phase F — classical verify hypothesis                          │
-│  planner runs confirm probes; engine promotes or prunes           │
-│  loop to B with updated ctx + summary                             │
+│  if rule violated or prediction failed → back to Phase B         │
 └─────────────────────────────────────────────────────────────────┘
+                                │
+                                └──→ loop back to B with updated scene
 ```
 
-**Principle:** LLM **proposes** (where to look, what rule might hold). Classical
+**Principle:** LLM **proposes** where to go (ProbeGoal predicate). Classical
 layer **disposes** (execute, predict, confirm, abstain). Never the reverse on
 the eval path.
+
+**Memory:** The scene summary IS the planner's memory. No separate scratch
+or ProbeState. The LLM sees entity positions, sizes, roles, recent actions,
+confirmed rules, and prediction failures — everything it needs to decide
+what to probe next.
 
 ---
 
@@ -81,7 +77,7 @@ the eval path.
 | Slice | Scope | Status |
 |-------|--------|--------|
 | 1–3 | Kinematics, hand rules, Markovian engine | ✅ |
-| **4** | **LLM planner + LLM rule proposer + query interface + verify loop** | 🔨 steps 1–2 done |
+| **4** | **LLM planner + query interface + ProbeGoal DSL** | 🔨 steps 1–2 done |
 | 5 (TBD) | Eval bundle: compile confirmed rules, no network | stub |
 
 ---
@@ -103,23 +99,21 @@ flowchart TB
 
   subgraph llm [dev-only LLM]
     LP[LLM planner]
-    LR[LLM rule proposer]
     QI --> LP
-    QI --> LR
   end
 
   subgraph classical [eval-safe classical]
     EP[ExplorationPolicy / Executor]
     BFS[plan_bfs + predict]
     RE[engine_step propose confirm prune]
-    LP -->|ProbePlan| EP
+    LP -->|ProbeGoal predicate| EP
     EP --> BFS
     EP --> RE
-    LR -->|RuleHypothesis| RE
   end
 
   PS --> EP
   RE --> ENG
+  RE -.->|prediction failure / rule violation| LP
 ```
 
 ### Package boundaries (unchanged)
@@ -127,8 +121,7 @@ flowchart TB
 - **`perception/`** — observe only; `summary()` remains the LLM-facing contract.
 - **`effects/`** — `predict`, rule store, engine lifecycle; accepts **compiled**
   rules from LLM proposer after verify (not raw natural language at predict time).
-- **`planning/`** — executes `ProbePlan`; keeps **`visited` / `probed` scratch**
-  (sets on policy, not on `Entity`).
+- **`planning/`** — executes `ProbeGoal`; falls back to `ExplorationPolicy` when LLM fails.
 - **`agents/templates/`** — new **`LlmCuriosity`** (or extend `Curiosity`) orchestrates
   LLM calls + classical policy slot.
 
@@ -151,166 +144,110 @@ No LLM required for Phase A.
 
 ### Job
 
-Turn “what is still unknown?” into a **short, executable probe plan** — not a
+Turn "what is still unknown?" into a **single ProbeGoal predicate** — not a
 full game solution.
 
 Examples:
 
-- Target entity 17 (size bar) — BFS goal near centroid.
-- Repeat action 1 four times while watching entity 5 size.
-- After non-Markovian violation on action 5, try action 5 again from same settled state fingerprint class.
-- Deprioritize entity 3 (structural HUD) — planner scratch `visited`.
+- Target entity 17 (size bar) — `{"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}}`
+- Repeat action 1 four times while watching entity 5 size — `{"dim": "size", "of": 5, "eq": <observed>}`
+- After non-Markovian violation on action 5, try action 5 again — `{"action": 5}` (ignores state)
 
 ### Input (token-bounded query interface)
 
 Not raw 64×64 grids. Pull-only API over session + effects:
 
-| Query | Purpose |
-|-------|---------|
-| `scene_summary()` | `SceneSnapshot.summary()` — entities, roles, events, determinism |
-| `recent_actions(k)` | Last k action ids (+ coords for complex actions) |
-| `movement_model()` | Learned motion_by_action, known_blocks summary |
-| `engine_rules()` | Confirmed + proposed rules (formatted like `engine_log`) |
-| `recent_residuals(k)` | Last k `(entity, dim, predicted, observed)` if logged |
-| `nonmarkov_episodes()` | Determinism violations + surrounding action context |
-| `animation_steps(frame)` | `n_subframes`, compact ghost hint (g50t) |
-| `settled_diff(f1, f2)` | Symbolic entity pos/size delta between settled frames |
-| `visited_entities()` | Planner scratch — ids already probed |
+| Query | Purpose | Status |
+|-------|---------|--------|
+| `scene_summary()` | `SceneSnapshot.summary()` — entities, roles, events, determinism | ✅ shipped |
+| `recent_actions(k)` | Last k action ids (+ coords for complex actions) | ✅ shipped |
+| `engine_rules()` | Confirmed + proposed rules (formatted like `engine_log`) | ✅ shipped |
+| `movement_model()` | Learned motion_by_action, known_blocks summary | ⬜ deferred |
+| `recent_residuals(k)` | Last k `(entity, dim, predicted, observed)` if logged | ⬜ deferred |
+| `nonmarkov_episodes()` | Determinism violations + surrounding action context | ⬜ deferred |
 
-Implement as `perception/query.py` or `planning/llm_context.py` — one module,
-read-only, no side effects.
+Implement as `planning/query.py` — one module, read-only, no side effects.
 
-### Output — `ProbePlan` / `ProbeGoal`
+**No `visited_entities()` query needed.** The scene summary already shows
+entity positions, sizes, and roles — the LLM can infer what it has and hasn't
+explored. Adding a hardcoded `ProbeState` would be premature; if the LLM
+repeats probes, we can add structured memory later based on observed failures.
+
+### Output — ProbeGoal predicate
 
 **Shipped (Step 2):** `ProbeGoal` uses predicate dicts, not closed `kind` tags.
 See `planning/probe.py` and `docs/reports/slice4-query-interface.md`.
 
-**Original sketch (superseded by predicate-based design):**
+The LLM outputs a JSON dict matching the ProbeGoal predicate schema:
 
-```python
-# ORIGINAL SKETCH — replaced by predicate-based ProbeGoal in Step 2
-@dataclass
-class ProbeGoal:  # NOW: predicate: dict[str, object], entities, dims, max_steps, reason
-    kind: str  # "near_entity" | "frontier" | "repeat_action" | "complex_action"
-    entity_id: int | None = None
-    action: int | None = None
-    repeat: int = 1
-    coords: tuple[int, int] | None = None  # complex actions only
-    reason: str = ""  # for logs / replay
+```json
+{
+  "predicate": {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
+  "max_steps": 50,
+  "reason": "probe entity 17 size bar"
+}
 ```
 
-**Still needed (Step 3):** `ProbePlan` wrapper for ordered sub-goals.
+Classical executor resolves relative references, compiles the predicate into a
+BFS goal, and runs `plan_bfs`. When the probe finishes (goal reached, prediction
+failure, or plan exhausted), the LLM is called again with the updated scene.
+
+### LLM adapter contract
 
 ```python
-@dataclass
-class ProbePlan:
-    goals: tuple[ProbeGoal, ...]           # ordered sub-goals
-    plan_spec_entities: tuple[int, ...]    # dims to project for engine
-    plan_spec_dims: tuple[str, ...]        # e.g. ("pos", "size")
-    include_terminal: bool = False
-    max_steps: int = 20
-```
+def call_planner(bundle: dict, available_actions: list[int]) -> ProbeGoal | None:
+    """Call LLM with query bundle, parse response into ProbeGoal.
 
-Classical executor maps `ProbeGoal` → existing BFS / single-action path via
-`compile_goal` (Step 2). When plan exhausted, call LLM planner again.
+    Returns None on parse failure or LLM refusal — caller falls back to
+    classical exploration.
+    """
+```
 
 ### Cadence
 
 - **Cold:** every N frames or after divergence / new proposed rule / non-Markovian event.
 - **Not** every frame — RHAE budget; cache plan until finished or failed.
+- **On prediction failure:** immediately re-call planner with failure context.
 
 ---
 
-## Phase E — LLM rule proposer
-
-### Job
-
-Turn **unexplained observations** into **testable rule hypotheses** richer than
-slice-3 templates alone.
-
-Triggers:
-
-- Residual after `engine_step` with no matching proposed template.
-- Repeated confirm failure on a proposed template.
-- `non_markovian` episode (g50t action 5 class).
-- Planner reports “entity X size changes every move but no rule.”
-
-### Input
-
-Same query interface as planner, plus:
-
-- Last probe plan and outcomes (matched / diverged / abstained).
-- Current `EffectContext` rule diff.
-
-### Output — `RuleHypothesis` (sketch)
-
-Structured, compilable — not free-form only.
-
-```python
-@dataclass
-class RuleHypothesis:
-    name: str
-    kind: str
-    # "counter" | "terminal" | "exists" | "latent_dim" | "guard_expr"
-    entity_id: int | None
-    action: int | None
-    guard: dict[str, object]      # pos, action, latent key, history window, ...
-    effect: dict[str, object]     # delta_size, terminal, set_dim, ...
-    probe_to_confirm: ProbePlan   # minimal experiment to verify
-    confidence: str               # low | medium — for logging only
-```
-
-**Compilation step (classical, no LLM):**
-
-1. Map known kinds → existing `CounterRule` / `TerminalRule` / future `ExistsRule`.
-2. Map `latent_dim` / `guard_expr` → `SceneState.set_dim` + custom guard predicate
-   **only after** confirm probe succeeds (eval bundle may ship compiled guards).
-3. Reject hypotheses that violate game-agnostic constraints (hard-coded game ids,
-   raw pixel conditions).
-
-### Verify loop (Phase F)
-
-1. Run `probe_to_confirm` via classical executor.
-2. On each step: `engine_step` + compare hypothesis prediction to observed.
-3. **Promote** if K agreeing probes; **prune** on contradiction.
-4. Feed promoted rules into `EffectContext` used by `predict` / BFS.
-
-Slice-3 engine remains the **confirmation authority**; LLM is the **generator**.
-
----
-
-## Planner scratch — `visited` / `probed`
-
-Ephemeral sets on `ExplorationPolicy` or a small `ProbeState` dataclass:
-
-```python
-visited_cells: set[Pos]           # already have
-reached_entity_ids: set[int]      # replace pos-only reached_targets
-probed: set[tuple[int, str]]      # (entity_id, dim) e.g. (17, "size")
-```
-
-- Passed into query interface for LLM context.
-- **Not** stored on `Entity` in perception — avoids ontology creep.
-- Classical frontier / seek_entity can still run when LLM plan is empty.
-
----
-
-## Agent orchestration
+## Agent loop
 
 ```text
-Curiosity / LlmCuriosity.choose_action:
+LlmCuriosity.choose_action:
   ingest → on_observed (verify + engine_step)
   if phase == random: random action
-  elif probe_plan active: pop classical goal
-  elif llm_plan_stale: call LLM planner → new ProbePlan
-  if residuals / nonmarkov / planner ask: call LLM rule proposer → queue verify
+  elif active_probe_plan: pop next action from BFS plan
+  elif prediction_failure or rule_violation: call LLM planner → new ProbeGoal
+  elif llm_plan_stale: call LLM planner → new ProbeGoal
+  else: fall back to classical ExplorationPolicy
   return action
 ```
 
 Swap **`ExplorationPolicy`** implementation behind `Planner` protocol:
 
 - **v1 (today):** heuristic seek_entity + frontier.
-- **v4:** `LlmDirectedPolicy` consumes `ProbePlan`, falls back to v1 on LLM failure.
+- **v4:** `LlmDirectedPolicy` consumes `ProbeGoal`, falls back to v1 on LLM failure.
+
+---
+
+## Planner memory — why no ProbeState
+
+Previous design had a `ProbeState` dataclass with `reached_entity_ids`,
+`probed: set[tuple[int, str]]`, etc. We deliberately omit this because:
+
+1. **The scene IS memory.** Entity positions, sizes, and roles change after each
+   step. The LLM sees the current state via `scene_summary()` — it can infer
+   what it's explored without a separate tracking set.
+2. **Game-specific memory differs.** ls20 needs "which bars I've visited"; g50t
+   needs "which action-5 state classes I've probed". Hardcoding `probed:
+   set[tuple[int, str]]` assumes dim-level probing is universal — it's not.
+3. **YAGNI.** Until the LLM actually repeats probes, we're building infrastructure
+   for a problem we haven't observed. If it does repeat, we add structured
+   memory then, based on the actual failure mode.
+
+`visited_cells` on `ExplorationPolicy` stays — the BFS frontier needs this for
+spatial avoidance. That's classical, not LLM memory.
 
 ---
 
@@ -320,9 +257,9 @@ Training / dev session produces:
 
 - Compiled `EffectContext` snapshot (rules + movement).
 - Optional compiled guard bytecode or frozen rule list.
-- `ProbePlan` is **not** on eval path.
+- `ProbeGoal` is **not** on eval path.
 
-Runtime agent: classical only — same as today’s curiosity with a richer rule bag.
+Runtime agent: classical only — same as today's curiosity with a richer rule bag.
 If rules insufficient → `predict` abstains (honest non-Markovian).
 
 ---
@@ -333,15 +270,20 @@ If rules insufficient → `predict` abstains (honest non-Markovian).
 |------|-------------|--------|
 | 1 | **`planning/query.py`** — read-only query interface over session + ctx | ✅ done |
 | 2 | **`planning/probe.py`** — ProbeGoal DSL + `compile_goal` + executor; `effects/guard_parse.py` | ✅ done |
-| 3 | **Planner scratch** — `reached_entity_ids`, `probed`; `ProbePlan` wrapper | ⬜ next |
-| 4 | **LLM planner adapter** — prompt + parse `ProbePlan` from query bundle | ⬜ |
-| 5 | **`RuleHypothesis` + compiler** — map to rules / `set_dim` | ⬜ |
-| 6 | **LLM rule proposer adapter** — prompt + parse + queue verify probes | ⬜ |
-| 7 | **`agents/templates/llm_curiosity_agent.py`** — orchestration, dev-only API | ⬜ |
-| 8 | **Tests** — mock LLM fixtures; g50t recording for non-Markovian hypothesis path | ⬜ |
-| 9 | **Scripts** — offline replay with logged LLM I/O for regression | ⬜ |
+| 3 | **LLM planner adapter** — prompt template + response parser + agent loop wiring | ⬜ next |
+| 4 | **`agents/templates/llm_curiosity_agent.py`** — orchestration, dev-only API | ⬜ |
+| 5 | **Tests** — mock LLM fixtures; ls20 + g50t recordings for probe paths | ⬜ |
+| 6 | **Scripts** — offline replay with logged LLM I/O for regression | ⬜ |
 
-**Defer:** eval bundle export (slice 5); overlap/`exists` classical template until fixture.
+**Removed steps** (merged or deferred):
+- ~~Step 3: Planner scratch / ProbeState~~ — removed; scene summary IS memory.
+- ~~Step 5: RuleHypothesis + compiler~~ — deferred to after the planner loop works.
+- ~~Step 6: LLM rule proposer adapter~~ — merged into future hypothesis step.
+- ~~Step 7: LlmCuriosity agent~~ — renumbered to Step 4.
+- ~~Step 8: Tests~~ — renumbered to Step 5.
+- ~~Step 9: Scripts~~ — renumbered to Step 6.
+
+**Defer:** eval bundle export (slice 5); overlap/`exists` classical template until fixture; RuleHypothesis/compiler until the planner loop is proven.
 
 ---
 
@@ -350,11 +292,10 @@ If rules insufficient → `predict` abstains (honest non-Markovian).
 | Case | Fixture |
 |------|---------|
 | Query interface returns bounded JSON | synthetic session |
-| Classical executor runs `near_entity` goal | ls20 recording |
-| Compiler maps counter hypothesis → `CounterRule` | synthetic |
+| LLM planner → ProbeGoal → BFS plan found | ls20 recording |
+| LLM planner parse failure → classical fallback | synthetic |
+| Prediction failure triggers re-planning | ls20 recording |
 | Mock LLM planner → probe entity 17 → engine proposes −2 | ls20 |
-| Mock rule proposer on g50t violation → latent hypothesis → abstain or confirm | g50t |
-| Planner scratch `probed` prevents repeat targets | synthetic |
 
 ---
 
@@ -366,6 +307,8 @@ If rules insufficient → `predict` abstains (honest non-Markovian).
 - New perception role detectors (use summary + query)
 - RHAE-optimal global planning (probes only, not full solve)
 - Replacing classical `engine_step` confirm/prune with LLM judgment
+- ProbeState / hardcoded planner scratch (scene is memory)
+- Separate LLM rule proposer phase (deferred)
 
 ---
 
@@ -375,11 +318,10 @@ If rules insufficient → `predict` abstains (honest non-Markovian).
 - `effects/dsl.py` — rule DSL for LLM serialization ✅
 - `effects/guard_parse.py` — shared guard clause parser ✅
 - `planning/probe.py` — ProbeGoal, compile_goal, executor ✅
-- `planning/llm_planner.py` — dev LLM → ProbePlan
-- `effects/hypothesis.py` — RuleHypothesis, compile, verify hooks
-- `planning/llm_rule_proposer.py` — dev LLM → RuleHypothesis
+- `planning/llm_planner.py` — dev LLM → ProbeGoal
 - `agents/templates/llm_curiosity_agent.py`
 - `tests/unit/test_llm_agent_loop.py` (mocked LLM)
+- `scripts/probe_recording.py` — offline DSL testing ✅
 - Update `docs/brainstorms/effect-model.md` slice 4 row → points here
 
 ---
@@ -388,4 +330,5 @@ If rules insufficient → `predict` abstains (honest non-Markovian).
 
 - `docs/brainstorms/effect-model.md` — slices 1–3, classical effects
 - `docs/reports/perception-agent.md` — perception contract, Rung 6 curiosity
+- `docs/reports/slice4-query-interface.md` — Steps 1–2 implementation report
 - `AGENTS.md` — offline eval constraint, package layout
