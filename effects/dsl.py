@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .guard_parse import parse_guard_clauses
 from .rules import CounterRule, TerminalRule
 
 # TypedDict-style aliases for clarity (plain dicts at runtime).
@@ -83,21 +84,17 @@ def dsl_to_rule(dsl: DslRule) -> CounterRule | TerminalRule:
         if delta_size == 0:
             raise ValueError("delta_size must not be 0")
 
-        guard: dict[str, Any] = dsl["guard"]
         guard_pos: tuple[int, int] | None = None
         controllable_id: int | None = None
 
-        if "all" in guard:
-            clauses = guard["all"]
-            for clause in clauses:
-                if "dim" in clause and clause["dim"] == "pos":
-                    eq = clause["eq"]
-                    guard_pos = (eq[0], eq[1])
-                    controllable_id = clause.get("of")
-            if guard_pos is not None and controllable_id is None:
-                raise ValueError(
-                    "guard_pos requires controllable_id to be set"
-                )
+        for gc in parse_guard_clauses(dsl["guard"]):
+            if gc["has_pos"]:
+                guard_pos = gc["pos"]
+                controllable_id = gc["entity_id"]
+        if guard_pos is not None and controllable_id is None:
+            raise ValueError(
+                "guard_pos requires controllable_id to be set"
+            )
 
         return CounterRule(
             entity_id=entity_id,
@@ -113,18 +110,14 @@ def dsl_to_rule(dsl: DslRule) -> CounterRule | TerminalRule:
     terminal = dsl["effect"]["terminal"]
     support = dsl["support"]
 
-    guard = dsl["guard"]
     t_guard_pos: tuple[int, int] | None = None
     action_id: int | None = None
 
-    if "all" in guard:
-        clauses = guard["all"]
-        for clause in clauses:
-            if "action" in clause:
-                action_id = clause["action"]
-            if "dim" in clause and clause["dim"] == "pos":
-                eq = clause["eq"]
-                t_guard_pos = (eq[0], eq[1])
+    for gc in parse_guard_clauses(dsl["guard"]):
+        if gc["has_action"]:
+            action_id = gc["action"]
+        if gc["has_pos"]:
+            t_guard_pos = gc["pos"]
 
     if t_guard_pos is None or action_id is None:
         raise ValueError("terminal rule guard missing pos or action clause")

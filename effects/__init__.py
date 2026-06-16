@@ -16,6 +16,7 @@ from .engine import (
     should_engine_step,
 )
 from .engine_log import diff_effect_context, format_rule, log_effect_context_diff
+from .guard_parse import GuardClause, parse_guard_clauses
 from .kinematics import (
     MovementModel,
     entity_exists_at,
@@ -35,6 +36,7 @@ from .state import Pos, SceneState, Terminal, terminal_from_state_name
 
 __all__ = [
     "CounterRule",
+    "GuardClause",
     "dsl_to_rule",
     "rule_to_dsl",
     "EffectContext",
@@ -65,6 +67,7 @@ __all__ = [
     "predict",
     "predict_move",
     "propose_rules",
+    "parse_guard_clauses",
     "prune_rules",
     "replay_predicted",
     "replay_predicted_move",
