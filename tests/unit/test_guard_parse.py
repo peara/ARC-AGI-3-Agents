@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from effects.guard_parse import GuardClause, parse_guard_clauses
+from effects.guard_parse import parse_guard_clauses
 
 
 @pytest.mark.unit
