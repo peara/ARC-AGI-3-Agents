@@ -4,7 +4,7 @@
 > the reasoning behind them, what we've built, and what we found, so we can
 > refer back and revise as evidence comes in.
 >
-> Last updated: 2026-06-15 (slice 4 planned: LLM planner + rule proposer; see llm-agent-loop.md)
+> Last updated: 2026-06-16 (slice 4 steps 1–2 done: query interface + ProbeGoal DSL; see llm-agent-loop.md)
 
 ---
 

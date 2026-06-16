@@ -81,7 +81,7 @@ the eval path.
 | Slice | Scope | Status |
 |-------|--------|--------|
 | 1–3 | Kinematics, hand rules, Markovian engine | ✅ |
-| **4** | **LLM planner + LLM rule proposer + query interface + verify loop** | ⬜ planned |
+| **4** | **LLM planner + LLM rule proposer + query interface + verify loop** | 🔨 steps 1–2 done |
 | 5 (TBD) | Eval bundle: compile confirmed rules, no network | stub |
 
 ---
@@ -180,18 +180,28 @@ Not raw 64×64 grids. Pull-only API over session + effects:
 Implement as `perception/query.py` or `planning/llm_context.py` — one module,
 read-only, no side effects.
 
-### Output — `ProbePlan` (sketch)
+### Output — `ProbePlan` / `ProbeGoal`
+
+**Shipped (Step 2):** `ProbeGoal` uses predicate dicts, not closed `kind` tags.
+See `planning/probe.py` and `docs/reports/slice4-query-interface.md`.
+
+**Original sketch (superseded by predicate-based design):**
 
 ```python
+# ORIGINAL SKETCH — replaced by predicate-based ProbeGoal in Step 2
 @dataclass
-class ProbeGoal:
+class ProbeGoal:  # NOW: predicate: dict[str, object], entities, dims, max_steps, reason
     kind: str  # "near_entity" | "frontier" | "repeat_action" | "complex_action"
     entity_id: int | None = None
     action: int | None = None
     repeat: int = 1
     coords: tuple[int, int] | None = None  # complex actions only
     reason: str = ""  # for logs / replay
+```
 
+**Still needed (Step 3):** `ProbePlan` wrapper for ordered sub-goals.
+
+```python
 @dataclass
 class ProbePlan:
     goals: tuple[ProbeGoal, ...]           # ordered sub-goals
@@ -201,8 +211,8 @@ class ProbePlan:
     max_steps: int = 20
 ```
 
-Classical executor maps `ProbeGoal` → existing BFS / single-action path. When
-plan exhausted, call LLM planner again.
+Classical executor maps `ProbeGoal` → existing BFS / single-action path via
+`compile_goal` (Step 2). When plan exhausted, call LLM planner again.
 
 ### Cadence
 
@@ -319,17 +329,17 @@ If rules insufficient → `predict` abstains (honest non-Markovian).
 
 ## Implementation sequence (slice 4)
 
-| Step | Deliverable |
-|------|-------------|
-| 1 | **`planning/query.py`** — read-only query interface over session + ctx |
-| 2 | **`ProbePlan` / `ProbeGoal`** — datatypes + classical executor |
-| 3 | **Planner scratch** — `reached_entity_ids`, `probed` |
-| 4 | **LLM planner adapter** — prompt + parse `ProbePlan` from query bundle |
-| 5 | **`RuleHypothesis` + compiler** — map to rules / `set_dim` |
-| 6 | **LLM rule proposer adapter** — prompt + parse + queue verify probes |
-| 7 | **`agents/templates/llm_curiosity_agent.py`** — orchestration, dev-only API |
-| 8 | **Tests** — mock LLM fixtures; g50t recording for non-Markovian hypothesis path |
-| 9 | **Scripts** — offline replay with logged LLM I/O for regression |
+| Step | Deliverable | Status |
+|------|-------------|--------|
+| 1 | **`planning/query.py`** — read-only query interface over session + ctx | ✅ done |
+| 2 | **`planning/probe.py`** — ProbeGoal DSL + `compile_goal` + executor; `effects/guard_parse.py` | ✅ done |
+| 3 | **Planner scratch** — `reached_entity_ids`, `probed`; `ProbePlan` wrapper | ⬜ next |
+| 4 | **LLM planner adapter** — prompt + parse `ProbePlan` from query bundle | ⬜ |
+| 5 | **`RuleHypothesis` + compiler** — map to rules / `set_dim` | ⬜ |
+| 6 | **LLM rule proposer adapter** — prompt + parse + queue verify probes | ⬜ |
+| 7 | **`agents/templates/llm_curiosity_agent.py`** — orchestration, dev-only API | ⬜ |
+| 8 | **Tests** — mock LLM fixtures; g50t recording for non-Markovian hypothesis path | ⬜ |
+| 9 | **Scripts** — offline replay with logged LLM I/O for regression | ⬜ |
 
 **Defer:** eval bundle export (slice 5); overlap/`exists` classical template until fixture.
 
@@ -361,11 +371,13 @@ If rules insufficient → `predict` abstains (honest non-Markovian).
 
 ## Artifacts (target after slice 4)
 
-- `planning/query.py` — frame-data query interface
-- `planning/probe.py` — `ProbePlan`, executor
-- `planning/llm_planner.py` — dev LLM → `ProbePlan`
-- `effects/hypothesis.py` — `RuleHypothesis`, compile, verify hooks
-- `planning/llm_rule_proposer.py` — dev LLM → `RuleHypothesis`
+- `planning/query.py` — frame-data query interface ✅
+- `effects/dsl.py` — rule DSL for LLM serialization ✅
+- `effects/guard_parse.py` — shared guard clause parser ✅
+- `planning/probe.py` — ProbeGoal, compile_goal, executor ✅
+- `planning/llm_planner.py` — dev LLM → ProbePlan
+- `effects/hypothesis.py` — RuleHypothesis, compile, verify hooks
+- `planning/llm_rule_proposer.py` — dev LLM → RuleHypothesis
 - `agents/templates/llm_curiosity_agent.py`
 - `tests/unit/test_llm_agent_loop.py` (mocked LLM)
 - Update `docs/brainstorms/effect-model.md` slice 4 row → points here
