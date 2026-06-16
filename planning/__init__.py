@@ -9,6 +9,13 @@ from .heuristics import (
     reach_radius,
     within,
 )
+from .probe import (
+    ProbeGoal,
+    compile_goal,
+    derive_spec_from_predicate,
+    execute_probe,
+    resolve_predicate,
+)
 from .protocol import Planner, PlannerStatus
 from .query import QueryInterface
 from .recording_eval import (
@@ -27,16 +34,21 @@ __all__ = [
     "Planner",
     "PlannerStatus",
     "PlanSpec",
+    "ProbeGoal",
     "QueryInterface",
     "build_effect_context",
     "collect_observed_steps",
+    "compile_goal",
     "curiosity_entity_target",
+    "derive_spec_from_predicate",
+    "execute_probe",
     "goal_pos",
     "is_structural_entity",
     "plan_and_evaluate",
     "plan_and_evaluate_session",
     "plan_bfs",
     "reach_radius",
+    "resolve_predicate",
     "snapshot",
     "snapshot_from_registry",
     "snapshot_from_scene",
