@@ -9,7 +9,7 @@ from perception.registry import ObjectRegistry
 
 from .context import EffectContext, FrameMeta
 from .kinematics import entity_pos_at, entity_size_at, learn_movement_model
-from .rules import CounterRule, TerminalRule
+from .rules import Effect, Rule
 from .state import Terminal, terminal_from_state_name
 
 
@@ -33,7 +33,7 @@ def learn_terminal_rules(
     action_ids: list[int],
     frame_meta: list[FrameMeta],
     controllable_id: int,
-) -> tuple[TerminalRule, ...]:
+) -> tuple[Rule, ...]:
     """Learn terminal transitions keyed by ``(pos_before, action)``."""
     counts: dict[tuple[tuple[int, int], int], dict[Terminal, int]] = defaultdict(
         lambda: defaultdict(int)
@@ -51,18 +51,22 @@ def learn_terminal_rules(
         action = int(action_ids[i])
         counts[(pos, action)][terminal] += 1
 
-    rules: list[TerminalRule] = []
+    rules: list[Rule] = []
     for (pos, action), outcomes in counts.items():
         best = max(outcomes, key=lambda t: outcomes[t])
         rules.append(
-            TerminalRule(
-                entity_id=controllable_id,
-                guard_key=(pos, action),
-                terminal=best,
+            Rule(
+                guard_spec={
+                    "all": [
+                        {"action": action},
+                        {"dim": "pos", "of": controllable_id, "eq": list(pos)},
+                    ]
+                },
+                effects=(Effect("terminal", controllable_id, "set", best),),
                 support=outcomes[best],
             )
         )
-    rules.sort(key=lambda r: (-r.support, r.guard_key))
+    rules.sort(key=lambda r: (-r.support, r.guard_spec.get("all", ())))
     return tuple(rules)
 
 
@@ -71,7 +75,7 @@ def learn_counter_rules(
     catalog: EntityCatalog,
     action_ids: list[int],
     controllable_id: int,
-) -> tuple[CounterRule, ...]:
+) -> tuple[Rule, ...]:
     """Learn counter size deltas per action from counter-role entities."""
     counter_ids = sorted(
         eid for eid, ent in catalog.entities.items() if ent.role == "counter"
@@ -94,7 +98,7 @@ def learn_counter_rules(
             if pos is not None:
                 pos_counts[(eid, action, delta, pos)] += 1
 
-    rules: list[CounterRule] = []
+    rules: list[Rule] = []
     for (eid, action, delta), support in sorted(
         counts.items(), key=lambda kv: (-kv[1], kv[0])
     ):
@@ -106,14 +110,22 @@ def learn_counter_rules(
         ]
         if pos_hits and len(pos_hits) == 1:
             guard_pos = pos_hits[0][0]
+
+        if guard_pos is not None:
+            guard_spec: dict[str, object] = {
+                "all": [
+                    {"action": action},
+                    {"dim": "pos", "of": controllable_id, "eq": list(guard_pos)},
+                ]
+            }
+        else:
+            guard_spec = {"action": action}
+
         rules.append(
-            CounterRule(
-                entity_id=eid,
-                action=action,
-                delta_size=delta,
+            Rule(
+                guard_spec=guard_spec,
+                effects=(Effect("size", eid, "delta", delta),),
                 support=support,
-                controllable_id=controllable_id if guard_pos is not None else None,
-                guard_pos=guard_pos,
             )
         )
     return tuple(rules)

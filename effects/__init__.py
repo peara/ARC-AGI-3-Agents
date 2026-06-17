@@ -15,8 +15,12 @@ from .engine import (
     prune_rules,
     should_engine_step,
 )
-from .engine_log import diff_effect_context, format_rule, log_effect_context_diff
-from .guard_parse import GuardClause, parse_guard_clauses
+from .engine_log import (  # noqa: F401
+    diff_effect_context,
+    format_rule,
+    log_effect_context_diff,
+)
+from .guard_parse import GuardClause, evaluate_guard, parse_guard_clauses
 from .kinematics import (
     MovementModel,
     entity_exists_at,
@@ -31,11 +35,11 @@ from .kinematics import (
 from .learn import learn_counter_rules, learn_effect_context, learn_terminal_rules
 from .predict import is_terminal_dead_end, predict, replay_predicted
 from .residual import ResidualEntry, compute_residual
-from .rules import CounterRule, TerminalRule
+from .rules import Effect, Rule
 from .state import Pos, SceneState, Terminal, terminal_from_state_name
 
 __all__ = [
-    "CounterRule",
+    "Effect",
     "GuardClause",
     "dsl_to_rule",
     "rule_to_dsl",
@@ -46,7 +50,7 @@ __all__ = [
     "ResidualEntry",
     "SceneState",
     "Terminal",
-    "TerminalRule",
+    "Rule",
     "compute_residual",
     "confirm_rules",
     "engine_step",
@@ -60,7 +64,7 @@ __all__ = [
     "learn_movement_model",
     "learn_terminal_rules",
     "load_recording_meta",
-    "diff_effect_context",
+    "evaluate_guard",
     "format_rule",
     "log_effect_context_diff",
     "merge_effect_context",

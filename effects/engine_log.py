@@ -6,39 +6,23 @@ import logging
 from dataclasses import dataclass
 
 from .context import EffectContext
-from .rules import CounterRule, TerminalRule
+from .rules import Rule
 
 logger = logging.getLogger(__name__)
 
 
-def format_rule(rule: CounterRule | TerminalRule) -> str:
-    if isinstance(rule, CounterRule):
-        guard = (
-            f" guard={rule.guard_pos}"
-            if rule.guard_pos is not None
-            else ""
-        )
-        return (
-            f"counter e{rule.entity_id} action={rule.action} "
-            f"delta={rule.delta_size:+d} support={rule.support}{guard}"
-        )
-    pos, act = rule.guard_key
-    return (
-        f"terminal e{rule.entity_id} at={pos} action={act} "
-        f"→ {rule.terminal} support={rule.support}"
-    )
-
-
-def rule_id(rule: CounterRule | TerminalRule) -> tuple[object, ...]:
-    if isinstance(rule, CounterRule):
-        return (
-            "counter",
-            rule.entity_id,
-            rule.action,
-            rule.delta_size,
-            rule.guard_pos,
-        )
-    return ("terminal", rule.entity_id, rule.guard_key, rule.terminal)
+def format_rule(rule: Rule) -> str:
+    if rule.kind == "delta":
+        parts = []
+        for e in rule.effects:
+            parts.append(f"e{e.of} {e.dim} {e.op}={e.value:+d}" if isinstance(e.value, int) else f"e{e.of} {e.dim} {e.op}={e.value}")
+        guard = f" guard={rule.guard_spec}" if rule.is_positional_guard else ""
+        return f"delta {' '.join(parts)} support={rule.support}{guard}"
+    pos_guard = ""
+    for e in rule.effects:
+        if e.dim == "terminal":
+            pos_guard = f" → {e.value}"
+    return f"terminal e{rule.effects[0].of} guard={rule.guard_spec}{pos_guard} support={rule.support}"
 
 
 @dataclass(frozen=True)
@@ -56,12 +40,11 @@ def _index_rules(ctx: EffectContext) -> dict[tuple[object, ...], RuleIndexEntry]
         ("terminal", ctx.terminal_rules),
     ):
         for rule in rules:
-            if isinstance(rule, (CounterRule, TerminalRule)):
-                out[rule_id(rule)] = RuleIndexEntry(
-                    bucket=bucket,
-                    support=rule.support,
-                    label=format_rule(rule),
-                )
+            out[rule.key()] = RuleIndexEntry(
+                bucket=bucket,
+                support=rule.support,
+                label=format_rule(rule),
+            )
     return out
 
 

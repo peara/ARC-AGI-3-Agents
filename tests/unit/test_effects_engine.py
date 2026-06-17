@@ -5,9 +5,10 @@ from __future__ import annotations
 import pytest
 
 from effects import (
-    CounterRule,
+    Effect,
     EffectContext,
     ResidualEntry,
+    Rule,
     SceneState,
     compute_residual,
     confirm_rules,
@@ -90,7 +91,7 @@ class TestRuleEngineSynthetic:
         )
         ctx = propose_rules(ctx, before, 1, residual)
         assert len(ctx.proposed_rules) == 1
-        assert ctx.proposed_rules[0].delta_size == -2
+        assert ctx.proposed_rules[0].effects[0].value == -2
 
         ctx = confirm_rules(ctx, before, 1, observed)
         assert ctx.proposed_rules[0].support == 1
@@ -99,7 +100,7 @@ class TestRuleEngineSynthetic:
         ctx = confirm_rules(ctx, before, 1, observed)
         assert not ctx.proposed_rules
         assert len(ctx.relational_rules) == 1
-        assert ctx.relational_rules[0].delta_size == -2
+        assert ctx.relational_rules[0].effects[0].value == -2
 
         nxt = predict(before, 1, ctx)
         assert nxt is not None
@@ -112,7 +113,11 @@ class TestRuleEngineSynthetic:
             known_transitions={((1, 1), 1): (1, 1)},
             known_blocks=frozenset(),
         )
-        bad = CounterRule(entity_id=17, action=1, delta_size=+2, support=3)
+        bad = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("size", 17, "delta", +2),),
+            support=3,
+        )
         ctx = EffectContext(movement=model, relational_rules=(bad,))
         before = SceneState(
             relevant=(
@@ -175,8 +180,8 @@ class TestLs20CounterPropose:
                 dims=("size",),
             )
             for rule in (*updated.proposed_rules, *updated.relational_rules):
-                if isinstance(rule, CounterRule) and rule.entity_id == 17:
-                    if rule.delta_size == -2:
+                if rule.kind == "delta" and rule.effects[0].of == 17:
+                    if rule.effects[0].value == -2:
                         found = True
                         break
             if found:

@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from effects import CounterRule, EffectContext, TerminalRule
+from effects import Effect, EffectContext, Rule
 from effects.kinematics import MovementModel
 from planning.query import QueryInterface
 
@@ -44,9 +44,9 @@ def _step(
 
 
 def _make_ctx(
-    terminal_rules: tuple[TerminalRule, ...] = (),
-    relational_rules: tuple[CounterRule | TerminalRule, ...] = (),
-    proposed_rules: tuple[CounterRule | TerminalRule, ...] = (),
+    terminal_rules: tuple[Rule, ...] = (),
+    relational_rules: tuple[Rule, ...] = (),
+    proposed_rules: tuple[Rule, ...] = (),
     confirm_threshold: int = 2,
 ) -> EffectContext:
     """Build a minimal EffectContext with a stub MovementModel."""
@@ -90,13 +90,21 @@ class TestQueryInterface:
         assert set(bundle.keys()) == expected_keys
 
     def test_bundle_with_effect_context(self):
-        tr = TerminalRule(
-            entity_id=7,
-            guard_key=((1, 2), 3),
-            terminal="game_over",
+        tr = Rule(
+            guard_spec={
+                "all": [
+                    {"action": 3},
+                    {"dim": "pos", "of": 7, "eq": [1, 2]},
+                ]
+            },
+            effects=(Effect("terminal", 7, "set", "game_over"),),
             support=4,
         )
-        cr = CounterRule(entity_id=17, action=1, delta_size=-2, support=3)
+        cr = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("size", 17, "delta", -2),),
+            support=3,
+        )
         ctx = _make_ctx(
             terminal_rules=(tr,),
             relational_rules=(cr,),

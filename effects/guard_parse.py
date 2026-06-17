@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict
+
+if TYPE_CHECKING:
+    from .state import SceneState
 
 
 class GuardClause(TypedDict):
@@ -61,3 +64,25 @@ def parse_guard_clauses(guard: dict[str, Any]) -> list[GuardClause]:
                 )
             )
     return result
+
+
+def evaluate_guard(
+    guard: dict[str, object], state: SceneState, action: int
+) -> bool:
+    """Evaluate a guard dict against the current state and action.
+
+    Placeholder implementation — full DSL evaluation coming in a later slice.
+    """
+    clauses = parse_guard_clauses(guard)
+    if not clauses:
+        return True
+    for clause in clauses:
+        if clause["has_action"] and clause["action"] != action:
+            return False
+        if clause["has_pos"]:
+            eid = clause.get("entity_id")
+            pos = clause.get("pos")
+            if eid is not None and pos is not None:
+                if state.pos(eid) != pos:
+                    return False
+    return True

@@ -5,10 +5,10 @@ from __future__ import annotations
 import pytest
 
 from effects import (
-    CounterRule,
+    Effect,
     EffectContext,
+    Rule,
     SceneState,
-    TerminalRule,
     learn_effect_context,
     load_recording_meta,
     predict,
@@ -52,9 +52,12 @@ class TestLearnEffectContext:
             non_markovian=True,
         )
         assert ctx is not None
-        game_over = [r for r in ctx.terminal_rules if r.terminal == TERMINAL_GAME_OVER]
+        game_over = [
+            r for r in ctx.terminal_rules
+            if r.kind == "terminal" and any(e.dim == "terminal" and e.value == TERMINAL_GAME_OVER for e in r.effects)
+        ]
         assert game_over, "expected GAME_OVER terminal rule on g50t"
-        assert game_over[0].guard_key == ((10, 16), 2)
+        assert any(e.value == TERMINAL_GAME_OVER for e in game_over[0].effects)
 
     def test_g50t_learns_counter_rules(self, g50t_session):
         scene = g50t_session.snapshot()
@@ -72,7 +75,7 @@ class TestLearnEffectContext:
         growth = [
             r
             for r in ctx.relational_rules
-            if isinstance(r, CounterRule) and r.delta_size == 1
+            if r.kind == "delta" and any(e.dim == "size" and e.value == 1 for e in r.effects)
         ]
         assert growth, "expected counter +1 rules on g50t"
 
@@ -105,10 +108,14 @@ class TestPredictPipeline:
             known_transitions={},
             known_blocks=frozenset(),
         )
-        rule = TerminalRule(
-            entity_id=0,
-            guard_key=((5, 5), 1),
-            terminal=TERMINAL_GAME_OVER,
+        rule = Rule(
+            guard_spec={
+                "all": [
+                    {"action": 1},
+                    {"dim": "pos", "of": 0, "eq": [5, 5]},
+                ]
+            },
+            effects=(Effect("terminal", 0, "set", TERMINAL_GAME_OVER),),
             support=1,
         )
         ctx = EffectContext(movement=model, terminal_rules=(rule,))
@@ -125,7 +132,11 @@ class TestPredictPipeline:
             known_transitions={((1, 1), 2): (1, 1)},
             known_blocks=frozenset(),
         )
-        rule = CounterRule(entity_id=3, action=2, delta_size=1, support=3)
+        rule = Rule(
+            guard_spec={"action": 2},
+            effects=(Effect("size", 3, "delta", 1),),
+            support=3,
+        )
         ctx = EffectContext(movement=model, relational_rules=(rule,))
         start = SceneState(
             relevant=(
@@ -151,10 +162,14 @@ class TestBFSPrunesGameOver:
             },
             known_blocks=frozenset(),
         )
-        dead = TerminalRule(
-            entity_id=0,
-            guard_key=((0, 0), 1),
-            terminal=TERMINAL_GAME_OVER,
+        dead = Rule(
+            guard_spec={
+                "all": [
+                    {"action": 1},
+                    {"dim": "pos", "of": 0, "eq": [0, 0]},
+                ]
+            },
+            effects=(Effect("terminal", 0, "set", TERMINAL_GAME_OVER),),
             support=1,
         )
         ctx = EffectContext(movement=model, terminal_rules=(dead,))

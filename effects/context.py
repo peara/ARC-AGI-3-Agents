@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .kinematics import MovementModel, TransitionKey
-from .rules import CounterRule, RelationalRule, TerminalRule
+from .rules import Rule
 from .state import SceneState
 
 
@@ -64,9 +64,9 @@ def frame_meta_from_steps(
 @dataclass(frozen=True)
 class EffectContext:
     movement: MovementModel
-    terminal_rules: tuple[TerminalRule, ...] = ()
-    relational_rules: tuple[RelationalRule, ...] = ()
-    proposed_rules: tuple[RelationalRule | TerminalRule, ...] = ()
+    terminal_rules: tuple[Rule, ...] = ()
+    relational_rules: tuple[Rule, ...] = ()
+    proposed_rules: tuple[Rule, ...] = ()
     non_markovian: bool = False
     confirm_threshold: int = 2
     latent_defaults: dict[tuple[int, str], object] = field(default_factory=dict)
@@ -88,7 +88,7 @@ class EffectContext:
                 return True
         for rule in self.relational_rules:
             if rule.support >= 1 and rule.guard(state, action):
-                if isinstance(rule, CounterRule) and rule.guard_pos is None:
+                if rule.kind == "delta" and not rule.is_positional_guard:
                     continue
                 return True
         return False

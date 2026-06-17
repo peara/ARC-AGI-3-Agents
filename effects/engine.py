@@ -8,32 +8,35 @@ from .context import EffectContext
 from .engine_log import log_effect_context_diff
 from .predict import predict
 from .residual import ResidualEntry, compute_residual
-from .rules import CounterRule, TerminalRule
+from .rules import Effect, Rule
 from .state import SceneState
 
 
-def _counter_key(rule: CounterRule) -> tuple[object, ...]:
-    return (rule.entity_id, rule.action, rule.delta_size, rule.guard_pos)
-
-
-def _terminal_key(rule: TerminalRule) -> tuple[object, ...]:
-    return (rule.entity_id, rule.guard_key, rule.terminal)
+def _replace_rule_in_bucket(
+    rules: tuple[Rule, ...], old_key: tuple[object, ...], new: Rule
+) -> tuple[Rule, ...]:
+    out = list(rules)
+    for i, r in enumerate(out):
+        if r.key() == old_key:
+            out[i] = new
+            break
+    return tuple(out)
 
 
 def _iter_managed_rules(
     ctx: EffectContext,
-) -> tuple[tuple[TerminalRule, str], tuple[CounterRule, str]]:
+) -> tuple[tuple[tuple[Rule, str], ...], tuple[tuple[Rule, str], ...]]:
     """Yield (rule, bucket) for terminal/relational/proposed lists."""
-    terminals: list[tuple[TerminalRule, str]] = [
-        (r, "terminal") for r in ctx.terminal_rules
+    terminals: list[tuple[Rule, str]] = [
+        (r, "terminal") for r in ctx.terminal_rules if r.kind == "terminal"
     ]
-    counters: list[tuple[CounterRule, str]] = [
-        (r, "relational") for r in ctx.relational_rules
+    counters: list[tuple[Rule, str]] = [
+        (r, "relational") for r in ctx.relational_rules if r.kind == "delta"
     ]
     for rule in ctx.proposed_rules:
-        if isinstance(rule, TerminalRule):
+        if rule.kind == "terminal":
             terminals.append((rule, "proposed"))
-        elif isinstance(rule, CounterRule):
+        else:
             counters.append((rule, "proposed"))
     return tuple(terminals), tuple(counters)
 
@@ -41,16 +44,16 @@ def _iter_managed_rules(
 def _promote_rules(ctx: EffectContext) -> EffectContext:
     terminal = list(ctx.terminal_rules)
     relational = list(ctx.relational_rules)
-    still_proposed: list[TerminalRule | CounterRule] = []
+    still_proposed: list[Rule] = []
     for rule in ctx.proposed_rules:
         if rule.support < ctx.confirm_threshold:
             still_proposed.append(rule)
             continue
-        if isinstance(rule, TerminalRule):
-            if _terminal_key(rule) not in {_terminal_key(r) for r in terminal}:
+        if rule.kind == "terminal":
+            if rule.key() not in {r.key() for r in terminal}:
                 terminal.append(rule)
-        elif isinstance(rule, CounterRule):
-            if _counter_key(rule) not in {_counter_key(r) for r in relational}:
+        else:
+            if rule.key() not in {r.key() for r in relational}:
                 relational.append(rule)
     return replace(
         ctx,
@@ -60,73 +63,40 @@ def _promote_rules(ctx: EffectContext) -> EffectContext:
     )
 
 
-def _replace_counter(
-    rules: tuple[CounterRule, ...], old: CounterRule, new: CounterRule
-) -> tuple[CounterRule, ...]:
-    out: list[CounterRule] = []
-    replaced = False
-    for rule in rules:
-        if _counter_key(rule) == _counter_key(old):
-            out.append(new)
-            replaced = True
-        else:
-            out.append(rule)
-    if not replaced:
-        out.append(new)
-    return tuple(out)
-
-
-def _replace_terminal(
-    rules: tuple[TerminalRule, ...], old: TerminalRule, new: TerminalRule
-) -> tuple[TerminalRule, ...]:
-    out: list[TerminalRule] = []
-    replaced = False
-    for rule in rules:
-        if _terminal_key(rule) == _terminal_key(old):
-            out.append(new)
-            replaced = True
-        else:
-            out.append(rule)
-    if not replaced:
-        out.append(new)
-    return tuple(out)
-
-
-def _bump_support(ctx: EffectContext, rule: CounterRule | TerminalRule) -> EffectContext:
+def _bump_support(ctx: EffectContext, rule: Rule) -> EffectContext:
     bumped = replace(rule, support=rule.support + 1)
-    if isinstance(rule, CounterRule):
-        if rule in ctx.relational_rules:
+    key = rule.key()
+    if rule.kind == "terminal":
+        if any(r.key() == key for r in ctx.terminal_rules):
             return replace(
                 ctx,
-                relational_rules=_replace_counter(ctx.relational_rules, rule, bumped),
+                terminal_rules=_replace_rule_in_bucket(
+                    ctx.terminal_rules, key, bumped
+                ),
             )
         return replace(
             ctx,
             proposed_rules=tuple(
-                bumped
-                if isinstance(r, CounterRule) and _counter_key(r) == _counter_key(rule)
-                else r
-                for r in ctx.proposed_rules
+                bumped if r.key() == key else r for r in ctx.proposed_rules
             ),
         )
-    if rule in ctx.terminal_rules:
+    if any(r.key() == key for r in ctx.relational_rules):
         return replace(
             ctx,
-            terminal_rules=_replace_terminal(ctx.terminal_rules, rule, bumped),
+            relational_rules=_replace_rule_in_bucket(
+                ctx.relational_rules, key, bumped
+            ),
         )
     return replace(
         ctx,
         proposed_rules=tuple(
-            bumped
-            if isinstance(r, TerminalRule) and _terminal_key(r) == _terminal_key(rule)
-            else r
-            for r in ctx.proposed_rules
+            bumped if r.key() == key else r for r in ctx.proposed_rules
         ),
     )
 
 
 def _rule_matches_observation(
-    rule: CounterRule | TerminalRule,
+    rule: Rule,
     state_before: SceneState,
     action: int,
     observed: SceneState,
@@ -134,15 +104,20 @@ def _rule_matches_observation(
     if not rule.guard(state_before, action):
         return False
     after = rule.apply(state_before, action)
-    if isinstance(rule, CounterRule):
-        return after.get(rule.entity_id, "size") == observed.get(
-            rule.entity_id, "size"
-        )
-    return after.terminal == observed.terminal
+    for effect in rule.effects:
+        if effect.dim == "terminal":
+            if after.terminal != observed.terminal:
+                return False
+        else:
+            if after.get(effect.of, effect.dim) != observed.get(
+                effect.of, effect.dim
+            ):
+                return False
+    return True
 
 
 def _rule_mispredicted(
-    rule: CounterRule | TerminalRule,
+    rule: Rule,
     state_before: SceneState,
     action: int,
     observed: SceneState,
@@ -150,16 +125,15 @@ def _rule_mispredicted(
 ) -> bool:
     if not rule.guard(state_before, action):
         return False
-    if isinstance(rule, CounterRule):
-        for entry in residual:
-            if entry.entity_id == rule.entity_id and entry.dim == "size":
-                return not _rule_matches_observation(
-                    rule, state_before, action, observed
-                )
-        return False
+    relevant_dims = {e.dim for e in rule.effects}
     for entry in residual:
-        if entry.dim == "terminal":
-            return not _rule_matches_observation(rule, state_before, action, observed)
+        if entry.dim not in relevant_dims:
+            continue
+        if rule.kind == "delta":
+            if not any(e.of == entry.entity_id for e in rule.effects):
+                continue
+        if not _rule_matches_observation(rule, state_before, action, observed):
+            return True
     return False
 
 
@@ -173,14 +147,9 @@ def propose_rules(
 ) -> EffectContext:
     """Add candidate rules for unexplained Markovian residuals."""
     proposed = list(ctx.proposed_rules)
-    relational_keys = {_counter_key(r) for r in ctx.relational_rules}
-    proposed_counter_keys = {
-        _counter_key(r) for r in proposed if isinstance(r, CounterRule)
-    }
-    terminal_keys = {_terminal_key(r) for r in ctx.terminal_rules}
-    proposed_terminal_keys = {
-        _terminal_key(r) for r in proposed if isinstance(r, TerminalRule)
-    }
+    relational_keys = {r.key() for r in ctx.relational_rules}
+    proposed_keys = {r.key() for r in proposed}
+    terminal_keys = {r.key() for r in ctx.terminal_rules}
 
     for entry in residual:
         if entry.dim == "size" and entry.entity_id is not None:
@@ -189,18 +158,15 @@ def propose_rules(
             delta = int(entry.observed) - int(entry.predicted)
             if delta == 0:
                 continue
-            key = (entry.entity_id, action, delta, None)
-            if key in relational_keys or key in proposed_counter_keys:
-                continue
-            proposed.append(
-                CounterRule(
-                    entity_id=entry.entity_id,
-                    action=action,
-                    delta_size=delta,
-                    support=0,
-                )
+            candidate = Rule(
+                guard_spec={"action": action},
+                effects=(Effect("size", entry.entity_id, "delta", delta),),
+                support=0,
             )
-            proposed_counter_keys.add(key)
+            if candidate.key() in relational_keys | proposed_keys:
+                continue
+            proposed.append(candidate)
+            proposed_keys.add(candidate.key())
         elif entry.dim == "terminal" and controllable_id is not None:
             pos = state_before.pos(controllable_id)
             if pos is None:
@@ -208,18 +174,20 @@ def propose_rules(
             terminal = entry.observed
             if not isinstance(terminal, str):
                 continue
-            key = (controllable_id, (pos, action), terminal)
-            if key in terminal_keys or key in proposed_terminal_keys:
-                continue
-            proposed.append(
-                TerminalRule(
-                    entity_id=controllable_id,
-                    guard_key=(pos, action),
-                    terminal=terminal,  # type: ignore[arg-type]
-                    support=0,
-                )
+            candidate = Rule(
+                guard_spec={
+                    "all": [
+                        {"action": action},
+                        {"dim": "pos", "of": controllable_id, "eq": list(pos)},
+                    ]
+                },
+                effects=(Effect("terminal", controllable_id, "set", terminal),),
+                support=0,
             )
-            proposed_terminal_keys.add(key)
+            if candidate.key() in terminal_keys | proposed_keys:
+                continue
+            proposed.append(candidate)
+            proposed_keys.add(candidate.key())
     return replace(ctx, proposed_rules=tuple(proposed))
 
 
@@ -232,7 +200,8 @@ def confirm_rules(
     """Increment support on rules whose guard fired and outcome matched."""
     updated = ctx
     terminals, counters = _iter_managed_rules(ctx)
-    for rule, _bucket in (*terminals, *counters):
+    all_rules: list[tuple[Rule, str]] = list(terminals) + list(counters)
+    for rule, _bucket in all_rules:
         if _rule_matches_observation(rule, state_before, action, observed):
             updated = _bump_support(updated, rule)
     return _promote_rules(updated)
@@ -251,7 +220,7 @@ def prune_rules(
 
     terminal = list(ctx.terminal_rules)
     relational = list(ctx.relational_rules)
-    proposed: list[TerminalRule | CounterRule] = []
+    proposed: list[Rule] = []
 
     for rule in ctx.proposed_rules:
         if _rule_mispredicted(rule, state_before, action, observed, residual):
