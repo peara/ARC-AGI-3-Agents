@@ -40,7 +40,7 @@ only for observed positions on `SceneSnapshot`).
 | 1 | `effects/` package, kinematics, `planning/` search | ✅ |
 | 2 | Extendable `SceneState`, hand-written rules, terminal + counter | ✅ |
 | 3 | Rule engine: propose / confirm / prune (Markovian); abstain on non-Markovian | ✅ |
-| 4 | LLM planner + query interface + ProbeGoal DSL; no ProbeState (scene IS memory) | 🔨 steps 1–2 done |
+| 4 | LLM planner + query interface + ProbeGoal DSL; no ProbeState (scene IS memory) | 🔨 steps 1–3 done |
 
 ---
 

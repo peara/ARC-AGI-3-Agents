@@ -3,6 +3,8 @@
 > Implements Steps 1–2 of the slice-4 sequence from `docs/brainstorms/llm-agent-loop.md`.
 > Step 1: the token-bounded query interface that feeds the LLM planner and rule proposer.
 > Step 2: goal predicate DSL + compiler for structured BFS goals (ProbeGoal).
+>
+> **Step 3 update (✅ done):** `planning/llm_planner.py` — LLM planner adapter with prompt template, response parser, and agent loop wiring. See `agents/llm_client.py` for the OpenAI-compatible client and `tests/unit/test_llm_planner.py` for 25 unit tests.
 
 ---
 

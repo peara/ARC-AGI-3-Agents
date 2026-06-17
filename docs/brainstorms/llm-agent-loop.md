@@ -77,7 +77,7 @@ what to probe next.
 | Slice | Scope | Status |
 |-------|--------|--------|
 | 1–3 | Kinematics, hand rules, Markovian engine | ✅ |
-| **4** | **LLM planner + query interface + ProbeGoal DSL** | 🔨 steps 1–2 done |
+| **4** | **LLM planner + query interface + ProbeGoal DSL** | 🔨 steps 1–3 done; step 4 next |
 | 5 (TBD) | Eval bundle: compile confirmed rules, no network | stub |
 
 ---
@@ -270,7 +270,7 @@ If rules insufficient → `predict` abstains (honest non-Markovian).
 |------|-------------|--------|
 | 1 | **`planning/query.py`** — read-only query interface over session + ctx | ✅ done |
 | 2 | **`planning/probe.py`** — ProbeGoal DSL + `compile_goal` + executor; `effects/guard_parse.py` | ✅ done |
-| 3 | **LLM planner adapter** — prompt template + response parser + agent loop wiring | ⬜ next |
+| 3 | **LLM planner adapter** — prompt template + response parser + agent loop wiring | ✅ done |
 | 4 | **`agents/templates/llm_curiosity_agent.py`** — orchestration, dev-only API | ⬜ |
 | 5 | **Tests** — mock LLM fixtures; ls20 + g50t recordings for probe paths | ⬜ |
 | 6 | **Scripts** — offline replay with logged LLM I/O for regression | ⬜ |
@@ -318,7 +318,7 @@ If rules insufficient → `predict` abstains (honest non-Markovian).
 - `effects/dsl.py` — rule DSL for LLM serialization ✅
 - `effects/guard_parse.py` — shared guard clause parser ✅
 - `planning/probe.py` — ProbeGoal, compile_goal, executor ✅
-- `planning/llm_planner.py` — dev LLM → ProbeGoal
+- `planning/llm_planner.py` — dev LLM → ProbeGoal ✅
 - `agents/templates/llm_curiosity_agent.py`
 - `tests/unit/test_llm_agent_loop.py` (mocked LLM)
 - `scripts/probe_recording.py` — offline DSL testing ✅
