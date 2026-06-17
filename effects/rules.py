@@ -13,6 +13,22 @@ from .state import Pos, SceneState, Terminal
 # ---------------------------------------------------------------------------
 
 
+def _canonical_value(value: object) -> object:
+    """Recursively convert unhashable values to hashable ones.
+
+    Lists become tuples (recursively applied to elements).
+    Dicts become sorted-key tuples of (key, canonical_value) pairs.
+    Everything else passes through unchanged.
+    """
+    if isinstance(value, list):
+        return tuple(_canonical_value(v) for v in value)
+    if isinstance(value, dict):
+        return tuple(
+            sorted((k, _canonical_value(v)) for k, v in value.items())
+        )
+    return value
+
+
 def _canonical_guard(guard: dict[str, object]) -> tuple[object, ...]:
     """Recursively convert a guard dict to a hashable canonical tuple.
 
@@ -23,7 +39,7 @@ def _canonical_guard(guard: dict[str, object]) -> tuple[object, ...]:
     """
     if "all" not in guard:
         # Simple single-key guard like {"action": N}
-        return tuple(sorted(guard.items()))
+        return tuple(sorted((k, _canonical_value(v)) for k, v in guard.items()))
     clauses = cast(list[dict[str, object]], guard["all"])
     canonical_clauses = sorted(_canonical_guard(c) for c in clauses)
     return (("all", tuple(canonical_clauses)),)
