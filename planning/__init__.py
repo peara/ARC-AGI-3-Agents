@@ -9,6 +9,7 @@ from .heuristics import (
     reach_radius,
     within,
 )
+from .llm_planner import call_planner
 from .probe import (
     ProbeGoal,
     compile_goal,
@@ -37,6 +38,7 @@ __all__ = [
     "ProbeGoal",
     "QueryInterface",
     "build_effect_context",
+    "call_planner",
     "collect_observed_steps",
     "compile_goal",
     "curiosity_entity_target",
