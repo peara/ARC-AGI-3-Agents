@@ -39,7 +39,7 @@ def _format_status(status: Any) -> str:
 class LlmCuriosity(Agent):
     """Perception session + classical curiosity + LLM-directed probing."""
 
-    MAX_ACTIONS = 100
+    MAX_ACTIONS = 50
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -115,6 +115,7 @@ class LlmCuriosity(Agent):
         if self._probe_plan is not None and len(self._probe_plan) > 0:
             action_id = self._probe_plan.pop(0)
             if len(self._probe_plan) == 0:
+                log.info("Probe plan exhausted (goal=%s)", self._current_goal.reason if self._current_goal else "?")
                 self._failure_context = {
                     "type": "probe_exhausted",
                     "last_action": self._last_action_id,
@@ -125,6 +126,7 @@ class LlmCuriosity(Agent):
                 self._probe_plan = None
                 self._current_goal = None
             elif action_id not in actions:
+                log.info("Probe action %d not in available actions, discarding plan", action_id)
                 self._probe_plan = None
             else:
                 return self._record_and_return(action_id, scene)
@@ -159,6 +161,10 @@ class LlmCuriosity(Agent):
                 failure_context=self._failure_context,
             )
             self._failure_context = None
+            if goal is not None:
+                log.info("LLM goal: predicate=%s max_steps=%s reason=%s", goal.predicate, goal.max_steps, goal.reason)
+            else:
+                log.info("LLM returned no valid goal")
         except Exception:
             log.exception("LLM call failed")
             goal = None
@@ -168,20 +174,24 @@ class LlmCuriosity(Agent):
             ctx = self.policy.context
             if ctx is None:
                 # Lost context mid-flight — fall back to classical
+                log.info("Goal set but context lost, falling back to classical")
                 action_id = self.policy.decide(scene, available)
                 return self._record_and_return(action_id, scene)
             plan = execute_probe(goal, scene, ctx, actions)
             if plan is not None and len(plan) > 0:
+                log.info("Probe plan: %d actions for goal=%s", len(plan), goal.reason)
                 self._probe_plan = plan
                 self._current_goal = goal
                 action_id = self._probe_plan.pop(0)
                 return self._record_and_return(action_id, scene)
             elif plan is not None and len(plan) == 0:
                 # Goal already met — call LLM again next frame
+                log.info("Goal already met: %s", goal.reason)
                 self._current_goal = goal
                 action_id = self.policy.decide(scene, available)
                 return self._record_and_return(action_id, scene)
             else:
+                log.info("No path found for goal: %s", goal.reason)
                 self._failure_context = {
                     "type": "probe_no_path",
                     "last_action": self._last_action_id,

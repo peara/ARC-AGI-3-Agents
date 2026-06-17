@@ -29,14 +29,27 @@ def _mock_llm_call(response: str) -> MagicMock:
 
 
 def _bundle(
-    entities: dict[str, dict[str, object]] | None = None,
+    entities: dict[str, dict[str, object]] | list[dict[str, object]] | None = None,
+    *,
+    entities_format: str = "dict",
 ) -> dict[str, object]:
-    """Build a realistic scene bundle with string entity IDs (as from JSON)."""
+    """Build a realistic scene bundle.
+
+    entities_format="dict" uses string-keyed dict (old test format).
+    entities_format="list" uses list-of-dicts (actual scene.summary() format).
+    """
     if entities is None:
-        entities = {
-            "0": {"role": "controllable", "pos": [32, 16]},
-            "17": {"role": "counter", "pos": [12, 36]},
-        }
+        entities = (
+            [
+                {"id": 0, "role": "controllable", "pos": [32, 16]},
+                {"id": 17, "role": "counter", "pos": [12, 36]},
+            ]
+            if entities_format == "list"
+            else {
+                "0": {"role": "controllable", "pos": [32, 16]},
+                "17": {"role": "counter", "pos": [12, 36]},
+            }
+        )
     return {"scene": {"entities": entities}}
 
 
@@ -266,6 +279,31 @@ class TestLLMPlanner:
         assert result.predicate["near"]["of"] == 17
         assert result.max_steps == 50
         assert "unexplored" in result.reason
+
+    def test_call_planner_list_entities_format(self) -> None:
+        """Entity list format (actual scene.summary() output) validates correctly."""
+        response_json = json.dumps({
+            "predicate": {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
+            "max_steps": 50,
+            "reason": "Entity 17 is unexplored — navigate close to observe",
+        })
+        bundle = _bundle(entities_format="list")
+        result = call_planner(bundle, [0, 1, 2, 3], _mock_llm_call(response_json))
+        assert result is not None
+        assert isinstance(result, ProbeGoal)
+        assert result.predicate["of"] == 0
+        assert result.predicate["near"]["of"] == 17
+
+    def test_call_planner_list_entities_rejects_invalid(self) -> None:
+        """List entity format rejects goals referencing nonexistent entities."""
+        response_json = json.dumps({
+            "predicate": {"dim": "pos", "of": 99, "near": {"of": 17, "radius": 3}},
+            "max_steps": 50,
+            "reason": "navigate to nonexistent entity 99",
+        })
+        bundle = _bundle(entities_format="list")
+        result = call_planner(bundle, [0, 1, 2, 3], _mock_llm_call(response_json))
+        assert result is None
 
     def test_call_planner_garbage_response(self) -> None:
         """Mock returns garbage → None."""

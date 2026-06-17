@@ -265,14 +265,20 @@ def call_planner(
     if parsed is None:
         return None
 
-    # Entity IDs in bundle JSON are strings; convert to int for validation
+    # Entity IDs in bundle JSON: scene.summary() returns entities as a list
+    # of dicts (each with an "id" key), not a dict keyed by ID.
     scene_entities_raw = bundle.get("scene", {})
-    entities_dict: object = (
-        scene_entities_raw.get("entities", {}) if isinstance(scene_entities_raw, dict) else {}
+    entities_val: object = (
+        scene_entities_raw.get("entities", []) if isinstance(scene_entities_raw, dict) else []
     )
-    scene_entities: set[int] = (
-        {int(eid) for eid in entities_dict.keys()} if isinstance(entities_dict, dict) else set()
-    )
+    if isinstance(entities_val, list):
+        scene_entities: set[int] = {
+            int(e["id"]) for e in entities_val if isinstance(e, dict) and "id" in e
+        }
+    elif isinstance(entities_val, dict):
+        scene_entities = {int(eid) for eid in entities_val.keys()}
+    else:
+        scene_entities = set()
 
     goal = _validate_goal(parsed, scene_entities)
     return goal
