@@ -16,8 +16,19 @@ Usage:
         --predicate '{"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}}' \\
         --frame 10
 
-No LLM needed — you write the predicate. This validates the mechanical
-pipeline: perception → snapshot_from_scene → compile_goal → plan_bfs.
+    # LLM logging (mock by default):
+    uv run python scripts/probe_recording.py RECORDING.jsonl \\
+        --predicate '{"dim": "pos", "of": 0, "eq": [5, 10]}' \\
+        --log-llm
+
+    # LLM logging with real calls:
+    uv run python scripts/probe_recording.py RECORDING.jsonl \\
+        --predicate '{"dim": "pos", "of": 0, "eq": [5, 10]}' \\
+        --log-llm --live-llm --agent llmcuriosity
+
+No LLM needed by default — you write the predicate. This validates the
+mechanical pipeline: perception → snapshot_from_scene → compile_goal → plan_bfs.
+With --log-llm the LLM planner I/O is captured to a .llm.jsonl sidecar.
 """
 
 from __future__ import annotations
@@ -26,14 +37,75 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Callable
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from planning import ProbeGoal, execute_probe  # noqa: E402
+from planning.llm_planner import _parse_response, call_planner  # noqa: E402
+from planning.query import QueryInterface  # noqa: E402
 from planning.recording_eval import build_effect_context  # noqa: E402
 from tests.perception_fixtures import build_perception_stack  # noqa: E402
+
+# ---------------------------------------------------------------------------
+# LLM logging helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_logging_llm_call(
+    base_llm_call: Callable[[list[dict[str, str]]], str],
+    sidecar_path: Path,
+    frame_idx: int,
+    bundle: dict[str, object],
+    failure_context: dict[str, object] | None,
+) -> Callable[[list[dict[str, str]]], str]:
+    """Wrap *base_llm_call* so each invocation is logged to *sidecar_path*.
+
+    Returns a callable with the same signature as ``llm_call`` that writes
+    one JSON line per call:
+        {"frame": N, "bundle": {...}, "response": "...", "parsed_goal": {...}|null, "failure_context": {...}|null}
+    """
+
+    def _logging_call(messages: list[dict[str, str]]) -> str:
+        raw = base_llm_call(messages)
+        parsed = _parse_response(raw)
+        entry: dict[str, object] = {
+            "frame": frame_idx,
+            "bundle": bundle,
+            "response": raw,
+            "parsed_goal": parsed,
+            "failure_context": failure_context,
+        }
+        with open(sidecar_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, default=str) + "\n")
+        return raw
+
+    return _logging_call
+
+
+def _make_mock_llm_call(
+    sidecar_path: Path,
+    frame_idx: int,
+    bundle: dict[str, object],
+    failure_context: dict[str, object] | None,
+) -> Callable[[list[dict[str, str]]], str]:
+    """Return a mock ``llm_call`` that logs but returns an empty string."""
+
+    def _mock_call(messages: list[dict[str, str]]) -> str:
+        entry: dict[str, object] = {
+            "frame": frame_idx,
+            "bundle": bundle,
+            "response": "",
+            "parsed_goal": None,
+            "failure_context": failure_context,
+        }
+        with open(sidecar_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, default=str) + "\n")
+        return ""
+
+    return _mock_call
 
 
 def main() -> None:
@@ -75,6 +147,22 @@ def main() -> None:
         "--reason",
         default="",
         help="reason string for logging",
+    )
+    ap.add_argument(
+        "--log-llm",
+        action="store_true",
+        help="Log LLM planner I/O to a .llm.jsonl sidecar file",
+    )
+    ap.add_argument(
+        "--agent",
+        type=str,
+        default=None,
+        help="Agent to use: 'llmcuriosity' or path to recording.jsonl",
+    )
+    ap.add_argument(
+        "--live-llm",
+        action="store_true",
+        help="Make real LLM calls (default: mock)",
     )
     args = ap.parse_args()
 
@@ -138,6 +226,38 @@ def main() -> None:
     print(f"actions: {actions_available}")
     print(f"rules: {len(ctx.relational_rules)} relational, {len(ctx.terminal_rules)} terminal")
 
+    # ── LLM logging path ──────────────────────────────────────────────────
+    if args.log_llm:
+        sidecar_path = Path(str(recording_path) + ".llm.jsonl")
+        sidecar_path.write_text("", encoding="utf-8")
+        print(f"llm sidecar: {sidecar_path}")
+
+        bundle = QueryInterface(
+            scene,
+            ctx if hasattr(ctx, "__class__") else None,
+            available_actions=actions_available,
+        ).bundle()
+
+        if args.live_llm:
+            from agents.llm_client import LLMClient
+
+            base_llm_call = LLMClient().chat
+            llm_call = _make_logging_llm_call(
+                base_llm_call, sidecar_path, frame_idx, bundle, None,
+            )
+        else:
+            llm_call = _make_mock_llm_call(
+                sidecar_path, frame_idx, bundle, None,
+            )
+
+        llm_goal = call_planner(bundle, actions_available, llm_call)
+        if llm_goal is not None:
+            print(f"llm goal: {json.dumps(llm_goal.predicate)} "
+                  f"max_steps={llm_goal.max_steps} reason={llm_goal.reason!r}")
+        else:
+            print("llm goal: None (parse failed or no response)")
+
+    # ── Original probe execution (always runs) ────────────────────────────
     plan = execute_probe(goal, scene, ctx, actions_available)
 
     if plan is None:

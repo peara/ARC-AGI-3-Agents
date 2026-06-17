@@ -11,6 +11,7 @@ from .templates.langgraph_functional_agent import LangGraphFunc, LangGraphTextOn
 from .templates.langgraph_random_agent import LangGraphRandom
 from .templates.langgraph_thinking import LangGraphThinking
 from .templates.llm_agents import LLM, FastLLM, GuidedLLM, ReasoningLLM
+from .templates.llm_curiosity_agent import LlmCuriosity
 from .templates.multimodal import MultiModalLLM
 from .templates.openclaw_agent import OpenClaw
 from .templates.random_agent import Random
@@ -36,6 +37,7 @@ __all__ = [
     "Swarm",
     "Random",
     "Curiosity",
+    "LlmCuriosity",
     "LangGraphFunc",
     "LangGraphTextOnly",
     "LangGraphThinking",
