@@ -21,7 +21,7 @@ from perception.session import RESET_ACTION, PerceptionSession, SceneSnapshot
 from planning.exploration import ExplorationPolicy
 from planning.heuristics import ExplorationConfig
 from planning.llm_planner import call_planner, call_rule_proposer
-from planning.llm_rule_proposer import NULL_RULE_PROPOSER, RuleProposerFn
+from planning.llm_rule_proposer import NULL_RULE_PROPOSER, RuleProposerFn, make_rule_proposer
 from planning.probe import ProbeGoal, execute_probe
 from planning.query import QueryInterface
 
@@ -58,8 +58,8 @@ class LlmCuriosity(Agent):
         self._llm_client = LLMClient()
         self.llm_call = self._llm_client.chat
 
-        # Rule proposer (NULL_RULE_PROPOSER on eval path — no network)
-        self._rule_proposer: RuleProposerFn = NULL_RULE_PROPOSER
+        # Rule proposer (wraps llm_call with cooldown; NULL_RULE_PROPOSER on eval path — no network)
+        self._rule_proposer: RuleProposerFn = make_rule_proposer(self.llm_call)
 
         # LLM-proposed rules pending injection into next engine step
         self._llm_proposals: list[Rule] = []
