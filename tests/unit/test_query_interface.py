@@ -9,6 +9,7 @@ import pytest
 
 from effects import Effect, EffectContext, Rule
 from effects.kinematics import MovementModel
+from effects.residual import ResidualEntry
 from planning.query import QueryInterface
 
 
@@ -86,7 +87,7 @@ class TestQueryInterface:
         scene = _make_scene()
         qi = QueryInterface(scene)
         bundle = qi.bundle()
-        expected_keys = {"scene", "action_legend", "engine_rules", "recent_actions", "context_note"}
+        expected_keys = {"scene", "action_legend", "engine_rules", "recent_actions", "context_note", "residual", "pruned_rules"}
         assert set(bundle.keys()) == expected_keys
 
     def test_bundle_with_effect_context(self):
@@ -189,3 +190,54 @@ class TestQueryInterface:
         assert recent[0]["delta"] == {"17": -2}
         # Entry with delta=None should omit the key
         assert "delta" not in recent[1]
+
+    def test_bundle_residual_default(self):
+        scene = _make_scene()
+        qi = QueryInterface(scene)
+        bundle = qi.bundle()
+        assert "residual" in bundle
+        assert bundle["residual"] == []
+
+    def test_bundle_pruned_rules_default(self):
+        scene = _make_scene()
+        qi = QueryInterface(scene)
+        bundle = qi.bundle()
+        assert "pruned_rules" in bundle
+        assert bundle["pruned_rules"] == []
+
+    def test_bundle_with_residual(self):
+        scene = _make_scene()
+        residual = (
+            ResidualEntry(entity_id=5, dim="size", predicted=3, observed=1),
+            ResidualEntry(entity_id=None, dim="terminal", predicted="NOT_FINISHED", observed="GAME_OVER"),
+        )
+        qi = QueryInterface(scene, residual=residual)
+        bundle = qi.bundle()
+        assert len(bundle["residual"]) == 2
+        assert bundle["residual"][0] == {
+            "dim": "size",
+            "entity_id": 5,
+            "predicted": 3,
+            "observed": 1,
+        }
+        assert bundle["residual"][1] == {
+            "dim": "terminal",
+            "entity_id": None,
+            "predicted": "NOT_FINISHED",
+            "observed": "GAME_OVER",
+        }
+
+    def test_bundle_with_pruned_rules(self):
+        pruned = Rule(
+            guard_spec={"action": 2},
+            effects=(Effect("size", 10, "delta", -1),),
+            support=1,
+        )
+        scene = _make_scene()
+        qi = QueryInterface(scene, pruned_rules=(pruned,))
+        bundle = qi.bundle()
+        assert len(bundle["pruned_rules"]) == 1
+        dsl = bundle["pruned_rules"][0]
+        assert dsl["kind"] == "delta"
+        assert dsl["guard"] == {"action": 2}
+        assert dsl["effect"]["of"] == 10

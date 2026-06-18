@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from effects.context import EffectContext
 from effects.dsl import rule_to_dsl
+from effects.residual import ResidualEntry
+from effects.rules import Rule
 from perception.session import SceneSnapshot
 
 
@@ -17,11 +19,15 @@ class QueryInterface:
         *,
         action_legend: dict[int, str] | None = None,
         available_actions: list[int] | None = None,
+        residual: tuple[ResidualEntry, ...] | list[ResidualEntry] | None = None,
+        pruned_rules: tuple[Rule, ...] | list[Rule] | None = None,
     ) -> None:
         self._scene = scene
         self._ctx = ctx
         self._action_legend = action_legend
         self._available_actions = available_actions
+        self._residual = residual
+        self._pruned_rules = pruned_rules
 
     def bundle(
         self,
@@ -49,6 +55,8 @@ class QueryInterface:
         result["context_note"] = "observation-only; effects rules are learned, not ground truth"
         if self._available_actions is not None:
             result["available_actions"] = list(self._available_actions)
+        result["residual"] = self._build_residual()
+        result["pruned_rules"] = self._build_pruned_rules()
         return result
 
     # -- field builders -------------------------------------------------------
@@ -89,3 +97,21 @@ class QueryInterface:
                 entry["delta"] = step.delta
             out.append(entry)
         return out
+
+    def _build_residual(self) -> list[dict[str, object]]:
+        if self._residual is None:
+            return []
+        return [
+            {
+                "dim": r.dim,
+                "entity_id": r.entity_id,
+                "predicted": r.predicted,
+                "observed": r.observed,
+            }
+            for r in self._residual
+        ]
+
+    def _build_pruned_rules(self) -> list[dict[str, object]]:
+        if self._pruned_rules is None:
+            return []
+        return [rule_to_dsl(r) for r in self._pruned_rules]
