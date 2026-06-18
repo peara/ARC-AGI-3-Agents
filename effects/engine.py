@@ -144,12 +144,20 @@ def propose_rules(
     residual: tuple[ResidualEntry, ...],
     *,
     controllable_id: int | None = None,
+    llm_proposals: tuple[Rule, ...] = (),
 ) -> EffectContext:
     """Add candidate rules for unexplained Markovian residuals."""
     proposed = list(ctx.proposed_rules)
     relational_keys = {r.key() for r in ctx.relational_rules}
     proposed_keys = {r.key() for r in proposed}
     terminal_keys = {r.key() for r in ctx.terminal_rules}
+
+    # Merge LLM proposals with support=0, deduplicating against existing rules
+    for rule in llm_proposals:
+        key = rule.key()
+        if key not in terminal_keys | relational_keys | proposed_keys:
+            proposed.append(replace(rule, support=0))
+            proposed_keys.add(key)
 
     for entry in residual:
         if entry.dim == "size" and entry.entity_id is not None:
@@ -265,6 +273,7 @@ def engine_step(
     controllable_id: int | None = None,
     step_label: str | None = None,
     log_changes: bool = False,
+    llm_proposals: tuple[Rule, ...] = (),
 ) -> EffectContext:
     """Run propose / confirm / prune for one verified transition."""
     if not should_engine_step(ctx, state_before, action):
@@ -289,6 +298,7 @@ def engine_step(
             action,
             residual,
             controllable_id=controllable_id,
+            llm_proposals=llm_proposals,
         )
     updated = confirm_rules(updated, state_before, action, observed)
     if log_changes:

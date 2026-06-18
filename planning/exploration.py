@@ -8,7 +8,9 @@ import random
 from effects import (
     EffectContext,
     Pos,
+    ResidualEntry,
     SceneState,
+    compute_residual,
     diff_effect_context,
     engine_step,
     entity_size_at,
@@ -18,6 +20,7 @@ from effects import (
     predict,
     replay_predicted,
 )
+from effects.rules import Rule
 from perception.session import RESET_ACTION, SceneSnapshot
 
 from .adapters import snapshot_from_scene
@@ -65,6 +68,8 @@ class ExplorationPolicy:
         self._last_scene: SceneSnapshot | None = None
         self._last_phase = "init"
         self._last_diverged = False
+        self._last_residual: tuple[ResidualEntry, ...] = ()
+        self._llm_proposals: tuple[Rule, ...] = ()
         self.rng = random.Random(self.cfg.seed)
 
     def on_observed(self, scene: SceneSnapshot) -> None:
@@ -127,6 +132,17 @@ class ExplorationPolicy:
             return
         step_label = f"f{scene.frame_idx} a{action}"
         before_ctx = self._engine_ctx
+        predicted = predict(self._engine_state_before, action, before_ctx)
+        if predicted is not None:
+            self._last_residual = compute_residual(
+                predicted,
+                observed,
+                entity_ids=tuple(spec.entities),
+                dims=spec.dims,
+                include_terminal=spec.include_terminal,
+            )
+        else:
+            self._last_residual = ()
         self._engine_ctx = engine_step(
             before_ctx,
             self._engine_state_before,
@@ -136,7 +152,9 @@ class ExplorationPolicy:
             dims=spec.dims,
             include_terminal=spec.include_terminal,
             controllable_id=scene.controllable_id(),
+            llm_proposals=self._llm_proposals,
         )
+        self._llm_proposals = ()
         if not self.cfg.log_engine:
             return
         lines = diff_effect_context(before_ctx, self._engine_ctx)
@@ -308,6 +326,13 @@ class ExplorationPolicy:
     @property
     def context(self) -> EffectContext | None:
         return self._ctx
+
+    @property
+    def last_residual(self) -> tuple[ResidualEntry, ...]:
+        return self._last_residual
+
+    def set_llm_proposals(self, proposals: tuple[Rule, ...]) -> None:
+        self._llm_proposals = proposals
 
     @property
     def controllable_id(self) -> int | None:

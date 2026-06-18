@@ -16,10 +16,12 @@ from typing import Any
 from arcengine import FrameData, GameAction, GameState
 
 from agents.llm_client import LLMClient
+from effects.rules import Rule
 from perception.session import RESET_ACTION, PerceptionSession, SceneSnapshot
 from planning.exploration import ExplorationPolicy
 from planning.heuristics import ExplorationConfig
-from planning.llm_planner import call_planner
+from planning.llm_planner import call_planner, call_rule_proposer
+from planning.llm_rule_proposer import NULL_RULE_PROPOSER, RuleProposerFn
 from planning.probe import ProbeGoal, execute_probe
 from planning.query import QueryInterface
 
@@ -56,6 +58,12 @@ class LlmCuriosity(Agent):
         self._llm_client = LLMClient()
         self.llm_call = self._llm_client.chat
 
+        # Rule proposer (NULL_RULE_PROPOSER on eval path — no network)
+        self._rule_proposer: RuleProposerFn = NULL_RULE_PROPOSER
+
+        # LLM-proposed rules pending injection into next engine step
+        self._llm_proposals: list[Rule] = []
+
         # Phase management
         self._phase: str = "random"  # "random" | "llm_directed"
 
@@ -89,8 +97,18 @@ class LlmCuriosity(Agent):
         # ── INGEST ─────────────────────────────────────────────────────
         if latest_frame.frame and id(latest_frame) != self._last_observed_frame_id:
             self._scene = self.session.ingest(latest_frame.frame, self._last_action_id)
+            self.policy.set_llm_proposals(tuple(self._llm_proposals))
+            self._llm_proposals = []
             self.policy.on_observed(self._scene)
             self._last_observed_frame_id = id(latest_frame)
+
+            # ── Rule proposer ──────────────────────────────────────────
+            if (
+                self._phase == "llm_directed"
+                and self._rule_proposer is not NULL_RULE_PROPOSER
+                and self.policy.last_residual
+            ):
+                self._try_propose_rules()
 
         scene = self._scene or self.session.snapshot()
 
@@ -206,6 +224,32 @@ class LlmCuriosity(Agent):
         return self._record_and_return(action_id, scene)
 
     # ── Helpers ──────────────────────────────────────────────────────────
+
+    def _try_propose_rules(self) -> None:
+        """Call the rule proposer on the current residual and store proposals."""
+        scene = self._scene or self.session.snapshot()
+        ctx = self.policy.context
+        if ctx is None:
+            return
+        residual = self.policy.last_residual
+        if not residual:
+            return
+        bundle = QueryInterface(
+            scene,
+            ctx,
+            residual=residual,
+        ).bundle()
+        residual_dicts = [
+            {"dim": r.dim, "entity_id": r.entity_id, "predicted": r.predicted, "observed": r.observed}
+            for r in residual
+        ]
+        try:
+            proposals = call_rule_proposer(bundle, residual_dicts, self.llm_call)
+            if proposals:
+                log.info("Rule proposer returned %d proposals", len(proposals))
+                self._llm_proposals.extend(proposals)
+        except Exception:
+            log.exception("Rule proposer call failed")
 
     def _legal_actions(self, available: list[int] | None) -> list[int]:
         """Return legal action IDs, excluding RESET."""

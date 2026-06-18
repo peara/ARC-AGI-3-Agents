@@ -10,6 +10,9 @@ import json
 import re
 from typing import Callable
 
+from effects.rules import Rule
+
+from .llm_rule_proposer import SYSTEM_PROMPT, parse_proposals, validate_proposal
 from .probe import ProbeGoal
 
 # ---------------------------------------------------------------------------
@@ -282,3 +285,112 @@ def call_planner(
 
     goal = _validate_goal(parsed, scene_entities)
     return goal
+
+
+# ---------------------------------------------------------------------------
+# call_rule_proposer
+# ---------------------------------------------------------------------------
+
+
+def _build_rule_proposer_messages(
+    bundle: dict[str, object],
+    residual: list[dict[str, object]],
+    failure_context: dict[str, object] | None = None,
+) -> list[dict[str, str]]:
+    """Build system + user messages for the LLM rule-proposer call."""
+    user_parts: list[str] = []
+
+    user_parts.append(f"## Scene bundle\n```json\n{json.dumps(bundle, indent=2)}\n```")
+    user_parts.append(f"## Observed residual (prediction mismatches)\n```json\n{json.dumps(residual, indent=2)}\n```")
+
+    if failure_context is not None:
+        user_parts.append(
+            f"## Failure context (previous proposals failed)\n```json\n"
+            f"{json.dumps(failure_context, indent=2)}\n```"
+        )
+
+    return [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": "\n\n".join(user_parts)},
+    ]
+
+
+def _extract_scene_entities(bundle: dict[str, object]) -> dict[int, dict]:
+    """Extract entity-id → entity-dict mapping from a scene bundle."""
+    scene_val = bundle.get("scene", {})
+    if not isinstance(scene_val, dict):
+        return {}
+    entities_val = scene_val.get("entities", [])
+    if isinstance(entities_val, list):
+        return {
+            int(e["id"]): e
+            for e in entities_val
+            if isinstance(e, dict) and "id" in e
+        }
+    if isinstance(entities_val, dict):
+        return {int(k): v for k, v in entities_val.items() if isinstance(v, dict)}
+    return {}
+
+
+def _extract_engine_rules(bundle: dict[str, object]) -> list[Rule]:
+    """Extract confirmed engine rules from a scene bundle (for dedup)."""
+    engine_rules_val = bundle.get("engine_rules", {})
+    if not isinstance(engine_rules_val, dict):
+        return []
+    confirmed_val = engine_rules_val.get("confirmed", [])
+    if not isinstance(confirmed_val, list):
+        return []
+    return [r for r in confirmed_val if isinstance(r, Rule)]
+
+
+def call_rule_proposer(
+    bundle: dict[str, object],
+    residual: list[dict[str, object]],
+    llm_call: Callable[[list[dict[str, str]]], str],
+    failure_context: dict[str, object] | None = None,
+) -> list[Rule]:
+    """Orchestrate LLM-based rule proposal: build prompt → call LLM → parse → validate → dedup.
+
+    Parameters
+    ----------
+    bundle:
+        Scene bundle dict (from ``QueryInterface.bundle()``).
+    residual:
+        List of residual entry dicts (prediction mismatches from prior steps).
+    llm_call:
+        Callable that takes a list of message dicts and returns the raw LLM
+        response string.
+    failure_context:
+        Optional dict describing why a previous proposal round failed.
+
+    Returns
+    -------
+    list[Rule]
+        Validated, deduplicated rule proposals. Returns ``[]`` on any error.
+    """
+    try:
+        messages = _build_rule_proposer_messages(bundle, residual, failure_context)
+        raw = llm_call(messages)
+        proposals = parse_proposals(raw)
+
+        scene_entities = _extract_scene_entities(bundle)
+
+        rules: list[Rule] = []
+        for proposal in proposals:
+            rule = validate_proposal(proposal, scene_entities)
+            if rule is not None:
+                rules.append(rule)
+
+        # Dedup against confirmed engine rules
+        existing_keys = {r.key() for r in _extract_engine_rules(bundle)}
+        seen_keys: set[tuple[object, ...]] = set()
+        unique: list[Rule] = []
+        for rule in rules:
+            k = rule.key()
+            if k not in existing_keys and k not in seen_keys:
+                unique.append(rule)
+                seen_keys.add(k)
+
+        return unique
+    except Exception:
+        return []

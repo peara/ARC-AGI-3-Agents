@@ -4,7 +4,7 @@
 > the reasoning behind them, what we've built, and what we found, so we can
 > refer back and revise as evidence comes in.
 >
-> Last updated: 2026-06-16 (slice 4 steps 1–2 done: query interface + ProbeGoal DSL; see llm-agent-loop.md)
+> Last updated: 2026-06-18 (LLM rule proposer + planner loop; see llm-agent-loop.md)
 
 ---
 
@@ -409,6 +409,54 @@ Design:
    BFS for unreachable entities each replan (wasted budget, not wrong). Action
    budget (RHAE) not yet optimised — this is a research driver, `MAX_ACTIONS=200`.
 
+### Rung 7 — LLM rule proposer (done, dev-only)
+
+Code: `planning/llm_rule_proposer.py` (`NULL_RULE_PROPOSER`, `SYSTEM_PROMPT`,
+`parse_proposals`, `validate_proposal`, `make_rule_proposer`),
+`planning/llm_planner.py` (`call_rule_proposer`, `_build_rule_proposer_messages`,
+`_extract_scene_entities`, `_extract_engine_rules`).
+
+The rule proposer closes the loop between observation and hypothesis. After
+`engine_step` runs and produces **unexplained residuals** (prediction mismatches
+that no confirmed rule accounts for), the proposer is invoked to generate new
+`Rule` hypotheses from those residuals. The same propose → confirm → prune
+lifecycle applies: the engine's existing machinery confirms or prunes LLM-proposed
+rules just like classical ones.
+
+**What it does:**
+
+1. Takes a scene bundle + residual list + optional failure context.
+2. Sends a structured prompt to the LLM describing guard/effect DSL syntax.
+3. Parses the LLM's JSON response into proposal dicts.
+4. Validates each proposal: kind check, guard parse, entity ID existence, effect
+   structure, DSL→Rule conversion.
+5. Deduplicates against confirmed engine rules and within the batch.
+6. Returns a list of `Rule` objects ready for engine confirmation.
+
+**Eval path:** `NULL_RULE_PROPOSER` is a zero-argument stub that always returns
+`[]`. It satisfies the `RuleProposerFn` signature on the Kaggle offline path
+where no network is available. The classical engine continues to propose from
+templates; only the LLM channel is silenced.
+
+**Trigger:** In the `llm_directed` phase, after `engine_step` fires and the
+residual is non-empty. The `make_rule_proposer` factory wraps an LLM callable
+with a cooldown circuit breaker (default 5 seconds between calls) to avoid
+hammering the API on fast game loops.
+
+**Key design choices:**
+
+- **Network-free module.** `llm_rule_proposer.py` and `llm_planner.py` take an
+  `llm_call` callable, not an API client. The agent injects the actual LLM
+  connection. This keeps `planning/` free of API dependencies and makes testing
+  straightforward with mock callables.
+- **DSL wire format.** The LLM emits rules in a structured JSON format
+  (`kind`, `guard`, `effect`, `support`). `validate_proposal` checks entity IDs
+  against the live scene, parses guard clauses through `guard_parse.py`, and
+  converts via `dsl_to_rule`. Invalid proposals silently return `None`.
+- **No separate rule hypothesis phase.** The proposer reuses the same engine
+  lifecycle. LLM proposals enter the rule store as `proposed`, then get confirmed
+  or pruned by the same residual-driven engine that handles classical proposals.
+
 ### Phase-1 wrap-up — `summary()` boundary contract (done)
 
 Code: `perception/objects.py` (`frame_stack`, `n_subframes`, settled `to_grid`),
@@ -476,9 +524,11 @@ and never assigns game semantics. Downstream EffectModel and LLM planners consum
       `effects/engine.py`; wired in `ExplorationPolicy`, optional `log_engine`).
 - [x] Effects slice 3: rule engine (propose / confirm / prune on visible dims;
       abstain + flag on non-Markovian). See `scripts/run_effect_engine.py`.
-- [ ] Effects slice 4: LLM planner + rule proposer + query interface; classical
-      verify loop (`docs/brainstorms/llm-agent-loop.md`). Closes: random → kinematics
-      → directed probes → hypothesis rules → engine confirm.
+- [x] Effects slice 4: LLM planner + rule proposer + query interface + ProbeGoal DSL;
+      classical verify loop (`docs/brainstorms/llm-agent-loop.md`). LLM rule proposer
+      ships with same propose/confirm/prune lifecycle as classical. Eval path uses
+      `NULL_RULE_PROPOSER`. Closes: random → kinematics → directed probes → hypothesis
+      rules → engine confirm.
 - [x] Add non-ls20 entries to `tests/reference_recordings.json` (C1: g50t).
 - [x] Multi-sub-frame API frames: temporal animation stacks; use last sub-frame
       as settled state (`to_grid`, `n_subframes`, animation events in `summary()`).
@@ -491,9 +541,11 @@ and never assigns game semantics. Downstream EffectModel and LLM planners consum
 ## 7. Artifacts
 
 - Code: `effects/` (incl. `residual.py`, `engine.py`, `engine_log.py`), `planning/`,
-  `perception/objects.py`, `perception/motion.py`, `perception/registry.py`,
-  `perception/entities.py`, `perception/roles.py`, `perception/session/`,
-  `perception/viz.py`, `agents/templates/curiosity_agent.py`,
+   `perception/objects.py`, `perception/motion.py`, `perception/registry.py`,
+   `perception/entities.py`, `perception/roles.py`, `perception/session/`,
+   `perception/viz.py`, `agents/templates/curiosity_agent.py`,
+   `agents/templates/llm_curiosity_agent.py`,
+   `planning/llm_rule_proposer.py`, `planning/llm_planner.py`,
   `scripts/perceive_recording.py`, `scripts/analyze_motion.py`,
   `scripts/track_recording.py`, `scripts/plan_recording.py`,
   `scripts/run_effect_engine.py`,

@@ -219,6 +219,81 @@ class TestG50tAbstain:
 
 
 @pytest.mark.unit
+class TestProposeRulesLlmProposals:
+    def _ctx(self) -> EffectContext:
+        model = MovementModel(
+            entity_id=0,
+            motion_by_action={1: (0, 0)},
+            known_transitions={((1, 1), 1): (1, 1)},
+            known_blocks=frozenset(),
+        )
+        return EffectContext(movement=model, confirm_threshold=2)
+
+    def test_llm_proposals_added_with_support_zero(self):
+        from dataclasses import replace as dc_replace
+
+        ctx = self._ctx()
+        before = SceneState(relevant=((17, ("size", 10)),))
+        residual = (ResidualEntry(17, "size", 10, 8),)
+        llm_rule = Rule(
+            guard_spec={"action": 2},
+            effects=(Effect("size", 17, "delta", -1),),
+            support=5,
+        )
+        result = propose_rules(ctx, before, 1, residual, llm_proposals=(llm_rule,))
+        llm_in_result = [r for r in result.proposed_rules if r.key() == llm_rule.key()]
+        assert len(llm_in_result) == 1
+        assert llm_in_result[0].support == 0
+
+    def test_llm_proposals_dedup_against_existing_proposed(self):
+        from dataclasses import replace as dc_replace
+
+        existing = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("size", 17, "delta", -2),),
+            support=0,
+        )
+        ctx = dc_replace(self._ctx(), proposed_rules=(existing,))
+        before = SceneState(relevant=((17, ("size", 10)),))
+        residual = (ResidualEntry(17, "size", 10, 8),)
+        result = propose_rules(ctx, before, 1, residual, llm_proposals=(existing,))
+        assert sum(1 for r in result.proposed_rules if r.key() == existing.key()) == 1
+
+    def test_llm_proposals_dedup_against_relational(self):
+        from dataclasses import replace as dc_replace
+
+        relational = Rule(
+            guard_spec={"action": 2},
+            effects=(Effect("size", 17, "delta", -1),),
+            support=3,
+        )
+        ctx = dc_replace(self._ctx(), relational_rules=(relational,))
+        before = SceneState(relevant=((17, ("size", 10)),))
+        residual = (ResidualEntry(17, "size", 10, 8),)
+        result = propose_rules(ctx, before, 1, residual, llm_proposals=(relational,))
+        assert not any(r.key() == relational.key() for r in result.proposed_rules)
+
+    def test_llm_proposals_merges_with_residual_rules(self):
+        ctx = self._ctx()
+        before = SceneState(relevant=((17, ("size", 10)),))
+        residual = (ResidualEntry(17, "size", 10, 8),)
+        llm_rule = Rule(
+            guard_spec={"action": 99},
+            effects=(Effect("size", 17, "delta", -3),),
+            support=5,
+        )
+        result = propose_rules(ctx, before, 1, residual, llm_proposals=(llm_rule,))
+        residual_rule_key = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("size", 17, "delta", -2),),
+            support=0,
+        ).key()
+        keys = [r.key() for r in result.proposed_rules]
+        assert residual_rule_key in keys
+        assert llm_rule.key() in keys
+
+
+@pytest.mark.unit
 class TestEngineLog:
     def test_diff_propose_confirm_promote(self):
         model = MovementModel(

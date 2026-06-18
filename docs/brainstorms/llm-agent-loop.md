@@ -89,7 +89,7 @@ what to probe next.
 | Slice | Scope | Status |
 |-------|--------|--------|
 | 1–3 | Kinematics, hand rules, Markovian engine | ✅ |
-| **4** | **LLM planner + query interface + ProbeGoal DSL** | 🔨 steps 1–3 done; step 4 next |
+| **4** | **LLM planner + query interface + ProbeGoal DSL + rule proposer** | ✅ done |
 | 5 (TBD) | Eval bundle: compile confirmed rules, no network | stub |
 
 ---
@@ -260,9 +260,10 @@ LlmCuriosity.choose_action:
 agent assembles a `failure_context` listing what the rule set predicted vs what
 was observed (per entity + dim), and passes it to the next `call_planner` call.
 
-**Future:** The same report-back mechanism will carry rule hypotheses — the LLM
-will propose new rules (not just probes), and classical code will verify them.
-Same loop shape; richer LLM output.
+**Now shipped:** The LLM rule proposer is implemented (`planning/llm_rule_proposer.py`,
+`call_rule_proposer` in `planning/llm_planner.py`). It proposes rules from unexplained
+residuals using the same propose/confirm/prune lifecycle as classical templates.
+Eval path uses `NULL_RULE_PROPOSER` (returns `[]`, no network).
 
 ---
 
@@ -332,8 +333,10 @@ If rules insufficient → `predict` abstains (honest non-Markovian).
 | 2 | **`planning/probe.py`** — ProbeGoal DSL + `compile_goal` + executor; `effects/guard_parse.py` | ✅ done |
 | 3 | **LLM planner adapter** — prompt template + response parser + agent loop wiring | ✅ done |
 | 4 | **`agents/templates/llm_curiosity_agent.py`** — orchestration shell | ✅ done |
-| 5 | **Tests** — mock LLM fixtures; ls20 + g50t recordings for probe paths | ✅ done |
-| 6 | **Scripts** — offline replay with logged LLM I/O for regression | ✅ done |
+| 5 | **`planning/llm_rule_proposer.py`** — LLM-backed rule hypothesis proposer with DSL validation, dedup, cooldown | ✅ done |
+| 6 | **`planning/llm_planner.py` call_rule_proposer** — orchestrate rule proposal: build prompt → call LLM → parse → validate → dedup | ✅ done |
+| 7 | **Tests** — mock LLM fixtures; ls20 + g50t recordings for probe paths | ✅ done |
+| 8 | **Scripts** — offline replay with logged LLM I/O for regression | ✅ done |
 
 ### Step 4 scope — LlmCuriosity agent shell
 
@@ -385,7 +388,7 @@ logic. All the parts it wires together already exist (Steps 1–3).
 
 - New perception roles or detectors
 - New rule templates or engine logic
-- LLM rule hypothesis proposal (future: same loop shape, richer LLM output)
+- LLM rule hypothesis proposal (shipped — `planning/llm_rule_proposer.py` + `call_rule_proposer`)
 - Complex action coordinate handling (deferred)
 - Eval bundle / Kaggle path (slice 5)
 - `ProbeState` / planner scratch (YAGNI)
@@ -428,7 +431,7 @@ no design impact.
 - RHAE-optimal global planning (probes only, not full solve)
 - Replacing classical `engine_step` confirm/prune with LLM judgment
 - ProbeState / hardcoded planner scratch (scene is memory)
-- Separate LLM rule proposer phase (deferred — will reuse same loop, richer output)
+- Separate LLM rule proposer phase (shipped — reuses same propose/confirm/prune lifecycle)
 - Complex action coordinate handling (ACTION6/ACTION7 x,y — deferred)
 - LLM cadence tuning / staleness heuristics (experiment-driven, not pre-designed)
 
@@ -451,6 +454,72 @@ no design impact.
 ## Related docs
 
 - `docs/brainstorms/effect-model.md` — slices 1–3, classical effects
-- `docs/reports/perception-agent.md` — perception contract, Rung 6 curiosity
+- `docs/reports/perception-agent.md` — perception contract, Rung 6 curiosity, Rung 7 LLM rule proposer
 - `docs/reports/slice4-query-interface.md` — Steps 1–2 implementation report
 - `AGENTS.md` — offline eval constraint, package layout
+
+---
+
+## Implementation notes — what was actually built
+
+The brainstorm above described the target loop. Here is what shipped and where
+it diverges from the original plan.
+
+### Shipped (matches brainstorm)
+
+- **Query interface** (`planning/query.py`): read-only pull API over session +
+  effects. Produces bounded JSON bundles for the LLM. Exactly as designed.
+- **ProbeGoal DSL** (`planning/probe.py`): predicate dicts, `compile_goal`,
+  executor. Near-predicates compile to BFS goals. Matches the brainstorm.
+- **LLM planner adapter** (`planning/llm_planner.py`): `call_planner` builds a
+  prompt from the scene bundle + failure context, calls the LLM, parses the
+  response into a `ProbeGoal`. Validated against live entity IDs. Network-free
+  (takes a callable, not an API client).
+- **LlmCuriosity agent** (`agents/templates/llm_curiosity_agent.py`): composes
+  `PerceptionSession` + `ExplorationPolicy` + LLM planner. Phase gate from
+  `random` to `llm_directed`. `choose_action` delegates to the planner when
+  classical needs direction, falls back to curiosity otherwise.
+- **Cooldown circuit breaker** in `make_rule_proposer`: minimum 5 seconds
+  between LLM invocations. Returns `[]` if called too soon.
+
+### Shipped (extends brainstorm)
+
+- **LLM rule proposer** (`planning/llm_rule_proposer.py`): originally deferred
+  as a future "richer LLM output" step, but now implemented. The proposer
+  consumes unexplained residuals from `engine_step` and generates `Rule`
+  hypotheses via the LLM. Key components:
+
+  | Component | What it does |
+  |-----------|-------------|
+  | `SYSTEM_PROMPT` | DSL syntax reference for the LLM (guard, effect, kind, support) |
+  | `parse_proposals` | Extracts `{"rules": [...]}` from raw LLM text (handles fenced JSON, bare JSON) |
+  | `validate_proposal` | Checks kind, guard parse, entity ID existence, effect structure, DSL→Rule conversion |
+  | `make_rule_proposer` | Factory returning a `RuleProposerFn` with cooldown circuit breaker |
+  | `NULL_RULE_PROPOSER` | Eval-path stub returning `[]` (no network) |
+
+  `call_rule_proposer` in `llm_planner.py` orchestrates: build prompt → call LLM
+  → parse → validate → dedup against confirmed engine rules. Same propose/confirm/
+  prune lifecycle as classical rules. No special treatment for LLM-originated
+  proposals.
+
+- **Dedup against confirmed rules**: `_extract_engine_rules` pulls confirmed
+  rules from the bundle and skips any LLM proposal that duplicates an existing
+  rule key. This prevents the LLM from re-proposing what the engine already
+  confirmed.
+
+### Deferred (not yet built)
+
+- **Interaction rules** (collision, push, overlap): the engine confirms terminal
+  and counter rules from templates, but richer interaction effects (entity A
+  pushes entity B, collision stops movement) are not yet template-proposed or
+  LLM-proposed. The DSL supports `delta` effects on arbitrary dimensions, so
+  the LLM *could* propose these, but no templates seed them classically.
+- **Cadence tuning / staleness heuristics**: the planner is called on every
+  probe completion or rule violation. No staleness check yet.
+- **`movement_model()` and `recent_residuals()` queries**: listed in the
+  brainstorm but not yet in `QueryInterface`. The scene summary carries enough
+  for current probes.
+- **Eval bundle (slice 5)**: frozen rules + classical predict/BFS, no network.
+  `NULL_RULE_PROPOSER` is the eval stub for the proposer path.
+- **Complex action coordinates** (ACTION6/ACTION7 with x,y): ProbeGoal
+  predicates don't yet handle coordinate parameters.

@@ -9,7 +9,12 @@ from .heuristics import (
     reach_radius,
     within,
 )
-from .llm_planner import call_planner
+from .llm_planner import call_planner, call_rule_proposer
+from .llm_rule_proposer import (
+    NULL_RULE_PROPOSER,
+    RuleProposerFn,
+    make_rule_proposer,
+)
 from .probe import (
     ProbeGoal,
     compile_goal,
@@ -32,13 +37,16 @@ __all__ = [
     "DIM_READERS",
     "ExplorationConfig",
     "ExplorationPolicy",
+    "NULL_RULE_PROPOSER",
     "Planner",
     "PlannerStatus",
     "PlanSpec",
     "ProbeGoal",
     "QueryInterface",
+    "RuleProposerFn",
     "build_effect_context",
     "call_planner",
+    "call_rule_proposer",
     "collect_observed_steps",
     "compile_goal",
     "curiosity_entity_target",
@@ -46,6 +54,7 @@ __all__ = [
     "execute_probe",
     "goal_pos",
     "is_structural_entity",
+    "make_rule_proposer",
     "plan_and_evaluate",
     "plan_and_evaluate_session",
     "plan_bfs",
