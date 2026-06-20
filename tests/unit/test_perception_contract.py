@@ -94,7 +94,7 @@ class TestPerceptionContract:
     def test_counter_expectation(self, expect):
         session, _ = PerceptionSession.from_recording(expect.recording.path)
         summary = session.snapshot().summary()
-        counters = summary["globals"]["counters"]
+        counters = [e for e in summary["entities"] if e.get("role") == "counter"]
         assert len(counters) >= expect.min_counters
 
     def test_animation_events(self, expect):

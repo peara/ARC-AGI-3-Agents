@@ -130,20 +130,7 @@ class SceneSnapshot:
         return events
 
     def _globals(self) -> dict[str, object]:
-        counters: list[dict[str, object]] = []
-        for eid, ent in sorted(self.catalog.entities.items()):
-            if ent.role != "counter":
-                continue
-            pos = self.entity_pos(eid)
-            meta = dict(ent.meta)
-            counters.append(
-                {
-                    "entity_id": eid,
-                    "pos": list(pos) if pos is not None else None,
-                    "size_range": meta.get("size_range"),
-                }
-            )
-        return {"counters": counters}
+        return {}
 
     def summary(self) -> dict[str, object]:
         """Compact, JSON-serializable scene contract (observational only).
