@@ -41,7 +41,7 @@ def _format_status(status: Any) -> str:
 class LlmCuriosity(Agent):
     """Perception session + classical curiosity + LLM-directed probing."""
 
-    MAX_ACTIONS = 50
+    MAX_ACTIONS = 60
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -211,7 +211,7 @@ class LlmCuriosity(Agent):
             else:
                 log.info("No path found for goal: %s", goal.reason)
                 self._failure_context = {
-                    "type": "probe_no_path",
+                    "type": "unreachable",
                     "last_action": self._last_action_id,
                     "previous_probe_reason": goal.reason if goal else None,
                 }
