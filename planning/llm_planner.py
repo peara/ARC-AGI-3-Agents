@@ -51,7 +51,7 @@ Example 1 — Go probe an entity (near with relative entity ref):
 {
   "predicate": {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
   "max_steps": 50,
-  "reason": "Entity 17 (counter at row 12) is unexplored — navigate close to observe size changes"
+  "reason": "Entity 17 at row 12 is unexplored — navigate close to discover its properties"
 }
 ```
 
@@ -77,6 +77,7 @@ Example 3 — Test if an object is solid (near with small radius):
 
 - Always have an opinion. If unsure, pick an unexplored entity to navigate toward.
 - Your `reason` should explain what you're doing AND what you'll do next — it helps you continue your plan across turns.
+- If the failure context says `"type": "unreachable"`, the target entity cannot be reached from the player's current position (no valid path exists). Do NOT retry the same target — pick a different entity or area to explore.
 
 ## Output format
 
