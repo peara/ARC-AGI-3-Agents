@@ -273,3 +273,13 @@ class LlmCuriosity(Agent):
             "note": _format_status(status),
         }
         return action
+
+    def _extra_record_data(self) -> dict[str, Any]:
+        """Attach scene state and effect context to each recording frame."""
+        data: dict[str, Any] = {}
+        if self._scene is not None:
+            data["scene"] = self._scene.summary()
+        ctx = self.policy.context
+        if ctx is not None:
+            data["effect_context"] = ctx.to_dict()
+        return data

@@ -141,6 +141,10 @@ class Agent(ABC):
             "reasoning": reasoning,
         }
 
+    def _extra_record_data(self) -> dict[str, Any]:
+        """Override to attach extra state (scene, rules, etc.) to each recording frame."""
+        return {}
+
     def append_frame(self, frame: FrameData, action: GameAction | None = None) -> None:
         self.frames.append(frame)
         if frame.guid:
@@ -149,6 +153,9 @@ class Agent(ABC):
             record_data = json.loads(frame.model_dump_json())
             if action is not None:
                 record_data["action_input"] = self._action_input_for_record(action)
+            extra = self._extra_record_data()
+            if extra:
+                record_data["scene_state"] = extra
             self.recorder.record(record_data)
 
     def do_action_request(self, action: GameAction) -> FrameData:

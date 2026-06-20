@@ -78,6 +78,12 @@ class Effect:
             msg = "delta effect must have non-zero value"
             raise ValueError(msg)
 
+    def to_dict(self) -> dict[str, object]:
+        v: object = self.value
+        if isinstance(v, tuple):
+            v = list(v)
+        return {"dim": self.dim, "of": self.of, "op": self.op, "value": v}
+
 
 @dataclass(frozen=True)
 class Rule:
@@ -127,6 +133,14 @@ class Rule:
     @property
     def is_positional_guard(self) -> bool:
         return any(c["has_pos"] for c in parse_guard_clauses(self.guard_spec))
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "guard_spec": self.guard_spec,
+            "effects": [e.to_dict() for e in self.effects],
+            "support": self.support,
+            "kind": self.kind,
+        }
 
 
 # ---------------------------------------------------------------------------

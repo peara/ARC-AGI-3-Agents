@@ -23,6 +23,24 @@ class MovementModel:
     grid_rows: int = 64
     grid_cols: int = 64
 
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "entity_id": self.entity_id,
+            "motion_by_action": {
+                str(k): list(v) for k, v in self.motion_by_action.items()
+            },
+            "known_transitions": {
+                f"{pos[0]},{pos[1]},{action}": list(nxt)
+                for (pos, action), nxt in self.known_transitions.items()
+            },
+            "known_blocks": [
+                [pos[0], pos[1], action]
+                for (pos, action) in sorted(self.known_blocks)
+            ],
+            "grid_rows": self.grid_rows,
+            "grid_cols": self.grid_cols,
+        }
+
 
 def observation_at(track: Track, frame_idx: int):
     for obs in track.observations:

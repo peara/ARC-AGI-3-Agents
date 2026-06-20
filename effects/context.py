@@ -93,6 +93,16 @@ class EffectContext:
                 return True
         return False
 
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "movement": self.movement.to_dict(),
+            "terminal_rules": [r.to_dict() for r in self.terminal_rules],
+            "relational_rules": [r.to_dict() for r in self.relational_rules],
+            "proposed_rules": [r.to_dict() for r in self.proposed_rules],
+            "non_markovian": self.non_markovian,
+            "confirm_threshold": self.confirm_threshold,
+        }
+
 
 def merge_effect_context(base: EffectContext, engine: EffectContext) -> EffectContext:
     """Refresh movement from ``base``; keep engine-learned rules from ``engine``."""

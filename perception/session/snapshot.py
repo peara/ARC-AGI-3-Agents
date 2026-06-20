@@ -70,6 +70,33 @@ class SceneSnapshot:
             self.registry, self.catalog, entity_id, self.frame_idx
         )
 
+    def _entity_bbox(self, entity_id: int) -> list[int] | None:
+        """Bounding box [rmin, cmin, rmax, cmax] of entity at current frame."""
+        ent = self.catalog.entities.get(entity_id)
+        if ent is None:
+            return None
+        bboxes: list[tuple[int, int, int, int]] = []
+        for tid in ent.members:
+            track = self.registry.tracks.get(tid)
+            if track is None:
+                continue
+            obs = None
+            for o in track.observations:
+                if o.frame_idx <= self.frame_idx:
+                    obs = o
+                else:
+                    break
+            if obs is not None:
+                bboxes.append(obs.bbox)
+        if not bboxes:
+            return None
+        return [
+            min(b[0] for b in bboxes),
+            min(b[1] for b in bboxes),
+            max(b[2] for b in bboxes),
+            max(b[3] for b in bboxes),
+        ]
+
     def _entity_trajectory(self, entity_id: int) -> dict[str, object]:
         ent = self.catalog.entities.get(entity_id)
         if ent is None:
@@ -157,6 +184,7 @@ class SceneSnapshot:
                     "member_track_roles": member_roles,
                     "affordances": dict(ent.affordances),
                     "pos": list(pos) if pos is not None else None,
+                    "bbox": self._entity_bbox(eid),
                     "trajectory": traj,
                     "meta": {
                         k: v
