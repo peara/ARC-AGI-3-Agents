@@ -188,7 +188,7 @@ def validate_proposal(proposal: dict, scene_entities: dict[int, dict]) -> Rule |
     """Validate a single proposal dict against scene entity data.
 
     Checks:
-    - ``kind`` is ``"delta"`` or ``"terminal"``
+    - ``kind`` is ``"delta"``, ``"terminal"``, or ``"movement"``
     - Guard spec parses without error via ``parse_guard_clauses``
     - All entity IDs in guard/effect exist in ``scene_entities``
     - Effect structure is valid (dim, of, op, value)
@@ -198,16 +198,13 @@ def validate_proposal(proposal: dict, scene_entities: dict[int, dict]) -> Rule |
     """
     # --- kind ---
     kind = proposal.get("kind")
-    if kind not in ("delta", "terminal"):
+    if kind not in ("delta", "terminal", "movement"):
         return None
 
     guard = proposal.get("guard")
-    effect = proposal.get("effect")
     support = proposal.get("support")
 
     if not isinstance(guard, dict):
-        return None
-    if not isinstance(effect, dict):
         return None
     if not isinstance(support, int):
         return None
@@ -218,35 +215,59 @@ def validate_proposal(proposal: dict, scene_entities: dict[int, dict]) -> Rule |
     except Exception:
         return None
     # If all clause fields are None/False, the guard has no recognized keys
-    if clauses and not any(c.get("has_action") or c.get("has_pos") for c in clauses):
+    if clauses and not any(c.get("has_action") or c.get("has_pos") or c.get("has_overlaps") for c in clauses):
         return None
 
-    # --- collect entity IDs from guard and effect ---
-    referenced_ids = _extract_entity_ids(guard) | _extract_entity_ids(effect)
-
-    # For terminal effects, the "of" in the effect may be 0 (placeholder);
-    # guard position clause provides the real entity. We still validate
-    # non-zero IDs. If an effect has "of": 0 it's valid (placeholder convention).
-    for eid in referenced_ids:
-        if eid != 0 and eid not in scene_entities:
+    if kind == "movement":
+        effects = proposal.get("effects")
+        if not isinstance(effects, list):
+            return None
+        for eff in effects:
+            if not isinstance(eff, dict):
+                return None
+            for key in ("dim", "of", "op", "value"):
+                if key not in eff:
+                    return None
+        referenced_ids = _extract_entity_ids(guard)
+        for eff in effects:
+            of_val = eff.get("of")
+            if isinstance(of_val, int):
+                referenced_ids.add(of_val)
+            referenced_ids |= _extract_entity_ids(eff)
+        for eid in referenced_ids:
+            if eid != 0 and eid not in scene_entities:
+                return None
+    else:
+        effect = proposal.get("effect")
+        if not isinstance(effect, dict):
             return None
 
-    # --- effect structure ---
-    dim = effect.get("dim")
-    if not isinstance(dim, str):
-        return None
+        # --- collect entity IDs from guard and effect ---
+        referenced_ids = _extract_entity_ids(guard) | _extract_entity_ids(effect)
 
-    # For terminal effects, validate terminal value
-    if kind == "terminal":
-        terminal_val = effect.get("terminal")
-        if terminal_val not in ("win", "game_over"):
+        # For terminal effects, the "of" in the effect may be 0 (placeholder);
+        # guard position clause provides the real entity. We still validate
+        # non-zero IDs. If an effect has "of": 0 it's valid (placeholder convention).
+        for eid in referenced_ids:
+            if eid != 0 and eid not in scene_entities:
+                return None
+
+        # --- effect structure ---
+        dim = effect.get("dim")
+        if not isinstance(dim, str):
             return None
 
-    # For delta effects, validate delta is non-zero
-    if kind == "delta":
-        delta_val = effect.get("delta")
-        if not isinstance(delta_val, int) or delta_val == 0:
-            return None
+        # For terminal effects, validate terminal value
+        if kind == "terminal":
+            terminal_val = effect.get("terminal")
+            if terminal_val not in ("win", "game_over"):
+                return None
+
+        # For delta effects, validate delta is non-zero
+        if kind == "delta":
+            delta_val = effect.get("delta")
+            if not isinstance(delta_val, int) or delta_val == 0:
+                return None
 
     # --- convert via dsl_to_rule ---
     try:

@@ -25,6 +25,23 @@ def rule_to_dsl(rule: Rule) -> DslRule:
             "support": rule.support,
         }
 
+    if rule.kind == "movement":
+        effects_list = [
+            {
+                "dim": e.dim,
+                "of": e.of,
+                "op": e.op,
+                "value": list(e.value) if isinstance(e.value, tuple) else e.value,
+            }
+            for e in rule.effects
+        ]
+        return {
+            "kind": "movement",
+            "guard": rule.guard_spec,
+            "effects": effects_list,
+            "support": rule.support,
+        }
+
     # Terminal rule
     effect_dict = {}
     for e in rule.effects:
@@ -41,7 +58,7 @@ def rule_to_dsl(rule: Rule) -> DslRule:
 def dsl_to_rule(dsl: DslRule) -> Rule:
     """Reconstruct a Rule from a DSL dict."""
     kind = dsl.get("kind")
-    if kind not in ("delta", "terminal"):
+    if kind not in ("delta", "terminal", "movement"):
         raise ValueError(f"unknown kind: {kind!r}")
 
     guard: dict[str, Any] = dsl["guard"]
@@ -57,6 +74,21 @@ def dsl_to_rule(dsl: DslRule) -> Rule:
             guard_spec=guard,
             effects=(Effect("size", entity_id, "delta", delta_size),),
             support=support,
+        )
+
+    if kind == "movement":
+        effects_data = dsl["effects"]
+        parsed_effects = []
+        for e in effects_data:
+            value = e["value"]
+            if isinstance(value, list):
+                value = tuple(value)
+            parsed_effects.append(Effect(e["dim"], e["of"], e["op"], value))
+        return Rule(
+            guard_spec=guard,
+            effects=tuple(parsed_effects),
+            support=support,
+            kind="movement",
         )
 
     # terminal
