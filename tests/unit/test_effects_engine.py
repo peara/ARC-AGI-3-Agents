@@ -21,6 +21,8 @@ from effects import (
     prune_rules,
     should_engine_step,
 )
+from effects.engine import _bump_support, _iter_managed_rules, _promote_rules
+from effects.engine_log import _index_rules, format_rule
 from effects.kinematics import MovementModel
 from perception.session import PerceptionSession
 from planning.adapters import snapshot_from_scene
@@ -362,3 +364,244 @@ class TestEffectsEngineManifest:
         uncovered = SceneState(relevant=((ctrl, ("pos", (999, 999))),))
         assert predict(uncovered, 5, ctx) is None
         assert not should_engine_step(ctx, uncovered, 5)
+
+
+def _make_model():
+    return MovementModel(
+        entity_id=0,
+        motion_by_action={1: (0, 0)},
+        known_transitions={((1, 1), 1): (1, 1)},
+        known_blocks=frozenset(),
+    )
+
+
+@pytest.mark.unit
+class TestMovementRulePromotionRouting:
+    def test_iter_managed_rules_returns_movement_group(self):
+        """_iter_managed_rules returns three groups: terminals, counters, movement."""
+        model = _make_model()
+        mv_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (1, 0)),),
+            support=2,
+            kind="movement",
+        )
+        ctx = EffectContext(movement=model, movement_rules=(mv_rule,))
+        terminals, counters, movement = _iter_managed_rules(ctx)
+        assert len(terminals) == 0
+        assert len(counters) == 0
+        assert len(movement) == 1
+        assert movement[0] == (mv_rule, "movement")
+
+    def test_iter_managed_rules_proposed_movement_routed_to_movement(self):
+        """Proposed rules with kind='movement' go to the movement group."""
+        model = _make_model()
+        proposed_mv = Rule(
+            guard_spec={"action": 2},
+            effects=(Effect("pos", 0, "delta", (0, 1)),),
+            support=0,
+            kind="movement",
+        )
+        ctx = EffectContext(movement=model, proposed_rules=(proposed_mv,))
+        terminals, counters, movement = _iter_managed_rules(ctx)
+        assert len(terminals) == 0
+        assert len(counters) == 0
+        assert len(movement) == 1
+        assert movement[0] == (proposed_mv, "proposed")
+
+    def test_promote_rules_routes_movement_to_movement_bucket(self):
+        """_promote_rules routes kind='movement' proposed rules to movement_rules."""
+        model = _make_model()
+        mv_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (1, 0)),),
+            support=2,
+            kind="movement",
+        )
+        ctx = EffectContext(movement=model, proposed_rules=(mv_rule,), confirm_threshold=2)
+        result = _promote_rules(ctx)
+        assert len(result.movement_rules) == 1
+        assert result.movement_rules[0].key() == mv_rule.key()
+        assert len(result.proposed_rules) == 0
+
+    def test_promote_rules_dedup_against_existing_movement(self):
+        """_promote_rules dedup movement rules against existing movement_rules."""
+        model = _make_model()
+        existing = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (1, 0)),),
+            support=3,
+            kind="movement",
+        )
+        proposed = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (1, 0)),),
+            support=2,
+            kind="movement",
+        )
+        ctx = EffectContext(
+            movement=model,
+            movement_rules=(existing,),
+            proposed_rules=(proposed,),
+            confirm_threshold=2,
+        )
+        result = _promote_rules(ctx)
+        assert len(result.movement_rules) == 1
+        assert result.movement_rules[0].support == 3
+
+    def test_promote_rules_below_threshold_stays_proposed(self):
+        """Movement proposed rules below threshold stay in proposed."""
+        model = _make_model()
+        mv_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (1, 0)),),
+            support=1,
+            kind="movement",
+        )
+        ctx = EffectContext(movement=model, proposed_rules=(mv_rule,), confirm_threshold=2)
+        result = _promote_rules(ctx)
+        assert len(result.movement_rules) == 0
+        assert len(result.proposed_rules) == 1
+
+    def test_bump_support_in_movement_bucket(self):
+        """_bump_support bumps movement rules in movement_rules bucket."""
+        model = _make_model()
+        mv_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (1, 0)),),
+            support=3,
+            kind="movement",
+        )
+        ctx = EffectContext(movement=model, movement_rules=(mv_rule,))
+        result = _bump_support(ctx, mv_rule)
+        assert len(result.movement_rules) == 1
+        assert result.movement_rules[0].support == 4
+        assert len(result.proposed_rules) == 0
+
+    def test_bump_support_proposed_movement_rule(self):
+        """_bump_support bumps movement rules in proposed when not in movement_rules."""
+        model = _make_model()
+        mv_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (1, 0)),),
+            support=0,
+            kind="movement",
+        )
+        ctx = EffectContext(movement=model, proposed_rules=(mv_rule,))
+        result = _bump_support(ctx, mv_rule)
+        assert len(result.movement_rules) == 0
+        assert len(result.proposed_rules) == 1
+        assert result.proposed_rules[0].support == 1
+
+    def test_confirm_rules_promotes_movement_via_lifecycle(self):
+        """Full confirm_rules lifecycle promotes a movement rule from proposed to movement_rules."""
+        model = _make_model()
+        mv_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("size", 17, "delta", -2),),
+            support=1,
+            kind="movement",
+        )
+        ctx = EffectContext(movement=model, proposed_rules=(mv_rule,), confirm_threshold=2)
+        before = SceneState(relevant=((0, ("pos", (1, 1))), (17, ("size", 10))))
+        observed = SceneState(relevant=((0, ("pos", (1, 1))), (17, ("size", 8))))
+        result = confirm_rules(ctx, before, 1, observed)
+        assert len(result.proposed_rules) == 0
+        assert len(result.movement_rules) == 1
+        assert result.movement_rules[0].support == 2
+
+    def test_prune_rules_includes_movement(self):
+        """prune_rules prunes mispredicting movement rules."""
+        model = _make_model()
+        bad = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("size", 17, "delta", +2),),
+            support=3,
+            kind="movement",
+        )
+        ctx = EffectContext(movement=model, movement_rules=(bad,))
+        before = SceneState(
+            relevant=(
+                (0, ("pos", (1, 1))),
+                (17, ("size", 10)),
+            )
+        )
+        observed = SceneState(
+            relevant=(
+                (0, ("pos", (1, 1))),
+                (17, ("size", 8)),
+            )
+        )
+        predicted = SceneState(
+            relevant=(
+                (0, ("pos", (1, 1))),
+                (17, ("size", 10)),
+            )
+        )
+        residual = compute_residual(
+            predicted, observed, entity_ids=(17,), dims=("size",)
+        )
+        result = prune_rules(ctx, before, 1, observed, residual)
+        assert len(result.movement_rules) == 0
+
+
+@pytest.mark.unit
+class TestEngineLogMovementKind:
+    """engine_log handles kind='movement' correctly."""
+
+    def test_format_rule_movement(self):
+        """format_rule produces 'movement ...' label for movement kind."""
+        rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (1, 0)),),
+            support=3,
+            kind="movement",
+        )
+        result = format_rule(rule)
+        assert result.startswith("movement ")
+        assert "support=3" in result
+
+    def test_format_rule_movement_with_positional_guard(self):
+        """format_rule includes guard for movement rules with positional guard."""
+        rule = Rule(
+            guard_spec={
+                "all": [
+                    {"action": 1},
+                    {"dim": "pos", "of": 0, "eq": [3, 4]},
+                ]
+            },
+            effects=(Effect("pos", 0, "delta", (1, 0)),),
+            support=2,
+            kind="movement",
+        )
+        result = format_rule(rule)
+        assert result.startswith("movement ")
+        assert "guard=" in result
+
+    def test_index_rules_includes_movement(self):
+        """_index_rules includes movement_rules bucket."""
+        model = _make_model()
+        mv_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (1, 0)),),
+            support=3,
+            kind="movement",
+        )
+        ctx = EffectContext(movement=model, movement_rules=(mv_rule,))
+        index = _index_rules(ctx)
+        assert mv_rule.key() in index
+        assert index[mv_rule.key()].bucket == "movement"
+
+    def test_diff_shows_movement_promotion(self):
+        """diff_effect_context shows promotion from proposed to movement."""
+        model = _make_model()
+        mv_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (1, 0)),),
+            support=2,
+            kind="movement",
+        )
+        before_ctx = EffectContext(movement=model, proposed_rules=(mv_rule,), confirm_threshold=2)
+        after_ctx = EffectContext(movement=model, movement_rules=(mv_rule,), confirm_threshold=2)
+        lines = diff_effect_context(before_ctx, after_ctx)
+        assert any("proposed→movement" in line for line in lines)

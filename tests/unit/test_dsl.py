@@ -148,3 +148,114 @@ class TestRuleDSL:
         assert rr1 != rr2
         # Verify guard_specs differ
         assert rr1.guard_spec != rr2.guard_spec
+
+
+@pytest.mark.unit
+class TestDslMovementKind:
+    def test_dsl_to_rule_movement_kind(self):
+        dsl = {
+            "kind": "movement",
+            "guard": {"action": 1},
+            "effects": [
+                {"dim": "pos", "of": 0, "op": "set", "value": [3, 4]},
+            ],
+            "support": 2,
+        }
+        rule = dsl_to_rule(dsl)
+        assert rule.kind == "movement"
+        assert len(rule.effects) == 1
+        assert rule.effects[0] == Effect("pos", 0, "set", (3, 4))
+        assert rule.guard_spec == {"action": 1}
+        assert rule.support == 2
+
+    def test_dsl_to_rule_movement_kind_with_revert(self):
+        dsl = {
+            "kind": "movement",
+            "guard": {"action": 2},
+            "effects": [
+                {"dim": "pos", "of": 0, "op": "set", "value": [5, 6]},
+                {"dim": "pos", "of": 0, "op": "revert", "value": "before"},
+            ],
+            "support": 1,
+        }
+        rule = dsl_to_rule(dsl)
+        assert rule.kind == "movement"
+        assert len(rule.effects) == 2
+        assert rule.effects[0] == Effect("pos", 0, "set", (5, 6))
+        assert rule.effects[1] == Effect("pos", 0, "revert", "before")
+
+    def test_rule_to_dsl_movement_kind(self):
+        rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "set", (3, 4)),),
+            support=2,
+            kind="movement",
+        )
+        dsl = rule_to_dsl(rule)
+        assert dsl["kind"] == "movement"
+        assert dsl["guard"] == {"action": 1}
+        assert len(dsl["effects"]) == 1
+        assert dsl["effects"][0] == {"dim": "pos", "of": 0, "op": "set", "value": [3, 4]}
+        assert dsl["support"] == 2
+
+    def test_rule_to_dsl_movement_kind_with_revert(self):
+        rule = Rule(
+            guard_spec={"action": 2},
+            effects=(
+                Effect("pos", 0, "set", (5, 6)),
+                Effect("pos", 0, "revert", "before"),
+            ),
+            support=1,
+            kind="movement",
+        )
+        dsl = rule_to_dsl(rule)
+        assert dsl["kind"] == "movement"
+        assert len(dsl["effects"]) == 2
+        assert dsl["effects"][0] == {"dim": "pos", "of": 0, "op": "set", "value": [5, 6]}
+        assert dsl["effects"][1] == {"dim": "pos", "of": 0, "op": "revert", "value": "before"}
+
+    def test_round_trip_movement_kind(self):
+        original_dsl = {
+            "kind": "movement",
+            "guard": {"action": 1},
+            "effects": [
+                {"dim": "pos", "of": 0, "op": "set", "value": [3, 4]},
+            ],
+            "support": 2,
+        }
+        rule = dsl_to_rule(original_dsl)
+        assert rule.kind == "movement"
+        roundtrip_dsl = rule_to_dsl(rule)
+        rule2 = dsl_to_rule(roundtrip_dsl)
+        assert rule2 == rule
+        assert rule2.kind == "movement"
+
+    def test_validate_proposal_movement_kind(self):
+        from planning.llm_rule_proposer import validate_proposal
+
+        proposal = {
+            "kind": "movement",
+            "guard": {"action": 1},
+            "effects": [
+                {"dim": "pos", "of": 0, "op": "set", "value": [3, 4]},
+            ],
+            "support": 2,
+        }
+        scene_entities = {0: {"id": 0}}
+        rule = validate_proposal(proposal, scene_entities)
+        assert rule is not None
+        assert rule.kind == "movement"
+
+    def test_validate_proposal_movement_rejects_missing_keys(self):
+        from planning.llm_rule_proposer import validate_proposal
+
+        proposal = {
+            "kind": "movement",
+            "guard": {"action": 1},
+            "effects": [
+                {"dim": "pos", "of": 0, "op": "set"},
+            ],
+            "support": 2,
+        }
+        scene_entities = {0: {"id": 0}}
+        assert validate_proposal(proposal, scene_entities) is None
