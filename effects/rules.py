@@ -70,7 +70,7 @@ class Effect:
 
     dim: str
     of: int
-    op: Literal["delta", "set"]
+    op: Literal["delta", "set", "revert"]
     value: int | tuple[int, int] | str
 
     def __post_init__(self) -> None:
@@ -92,35 +92,54 @@ class Rule:
     guard_spec: dict[str, object]
     effects: tuple[Effect, ...]
     support: int
+    kind: str = ""
 
     def __post_init__(self) -> None:
         if not self.effects:
             msg = "Rule must have at least one effect"
             raise ValueError(msg)
-
-    @property
-    def kind(self) -> str:
-        return "terminal" if any(e.dim == "terminal" for e in self.effects) else "delta"
+        if self.kind == "":
+            computed = (
+                "terminal"
+                if any(e.dim == "terminal" for e in self.effects)
+                else "delta"
+            )
+            object.__setattr__(self, "kind", computed)
 
     def guard(self, state: SceneState, action: int) -> bool:
         return evaluate_guard(self.guard_spec, state, action)
 
-    def apply(self, state: SceneState, action: int) -> SceneState:
+    def apply(
+        self,
+        state_after: SceneState,
+        action: int,
+        *,
+        state_before: SceneState | None = None,
+        entity_cells: dict[int, frozenset[tuple[int, int]]] | None = None,
+    ) -> SceneState:
         _ = action
+        _entity_cells = entity_cells  # preserved for future use
+        result = state_after
         for effect in self.effects:
-            if effect.op == "delta":
+            if effect.op == "revert":
+                if state_before is None:
+                    continue
+                old_pos = state_before.pos(effect.of)
+                if old_pos is not None:
+                    result = result.with_pos(effect.of, old_pos)
+            elif effect.op == "delta":
                 if not isinstance(effect.value, int):
                     raise TypeError(
                         f"delta effect value must be int, got {type(effect.value)}"
                     )
-                cur = state.get(effect.of, effect.dim)
+                cur = result.get(effect.of, effect.dim)
                 base = 0 if cur is None else int(cast(int | float, cur))
-                state = state.set_dim(effect.of, effect.dim, base + effect.value)
+                result = result.set_dim(effect.of, effect.dim, base + effect.value)
             elif effect.dim == "terminal":
-                state = state.with_terminal(cast(Terminal, effect.value))
+                result = result.with_terminal(cast(Terminal, effect.value))
             else:
-                state = state.set_dim(effect.of, effect.dim, effect.value)
-        return state
+                result = result.set_dim(effect.of, effect.dim, effect.value)
+        return result
 
     def key(self) -> tuple[str, tuple[object, ...], tuple[object, ...]]:
         guard_key = _canonical_guard(self.guard_spec)

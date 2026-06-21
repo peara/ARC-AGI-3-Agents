@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .dsl import rule_to_dsl
 from .kinematics import MovementModel, TransitionKey
 from .rules import Rule
 from .state import SceneState
@@ -67,6 +68,7 @@ class EffectContext:
     terminal_rules: tuple[Rule, ...] = ()
     relational_rules: tuple[Rule, ...] = ()
     proposed_rules: tuple[Rule, ...] = ()
+    movement_rules: tuple[Rule, ...] = ()
     non_markovian: bool = False
     confirm_threshold: int = 2
     latent_defaults: dict[tuple[int, str], object] = field(default_factory=dict)
@@ -99,6 +101,7 @@ class EffectContext:
             "terminal_rules": [r.to_dict() for r in self.terminal_rules],
             "relational_rules": [r.to_dict() for r in self.relational_rules],
             "proposed_rules": [r.to_dict() for r in self.proposed_rules],
+            "movement_rules": [rule_to_dsl(r) for r in self.movement_rules],
             "non_markovian": self.non_markovian,
             "confirm_threshold": self.confirm_threshold,
         }
@@ -106,11 +109,25 @@ class EffectContext:
 
 def merge_effect_context(base: EffectContext, engine: EffectContext) -> EffectContext:
     """Refresh movement from ``base``; keep engine-learned rules from ``engine``."""
+    seen_keys: set[tuple[str, tuple[object, ...], tuple[object, ...]]] = set()
+    merged_movement_rules: list[Rule] = []
+    for rule in base.movement_rules:
+        k = rule.key()
+        if k not in seen_keys:
+            seen_keys.add(k)
+            merged_movement_rules.append(rule)
+    for rule in engine.movement_rules:
+        k = rule.key()
+        if k not in seen_keys:
+            seen_keys.add(k)
+            merged_movement_rules.append(rule)
+
     return EffectContext(
         movement=base.movement,
         terminal_rules=engine.terminal_rules,
         relational_rules=engine.relational_rules,
         proposed_rules=engine.proposed_rules,
+        movement_rules=tuple(merged_movement_rules),
         non_markovian=base.non_markovian,
         confirm_threshold=engine.confirm_threshold,
         latent_defaults=base.latent_defaults,

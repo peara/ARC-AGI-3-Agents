@@ -16,16 +16,34 @@ class GuardClause(TypedDict):
     has_pos: bool
     entity_id: int | None
     pos: tuple[int, int] | None
+    has_overlaps: bool
+    overlaps_entity_ids: tuple[int, int] | None
 
 
 def parse_guard_clauses(guard: dict[str, Any]) -> list[GuardClause]:
     """Parse a DSL guard dict into a list of normalised GuardClause dicts.
 
-    Handles two formats:
+    Handles formats:
     - ``{"action": N}`` → single action clause
-    - ``{"all": [...]}`` → conjunction of clauses (action and/or pos)
+    - ``{"all": [...]}`` → conjunction of clauses (action and/or pos and/or overlaps)
+    - ``{"overlaps": {"entity_a": N, "entity_b": M}}`` → overlaps clause
     - ``{"all": []}`` → empty list
     """
+    # Top-level overlaps guard (not inside "all")
+    if "overlaps" in guard and "all" not in guard:
+        ov = guard["overlaps"]
+        return [
+            GuardClause(
+                has_action=False,
+                action=None,
+                has_pos=False,
+                entity_id=None,
+                pos=None,
+                has_overlaps=True,
+                overlaps_entity_ids=(ov["entity_a"], ov["entity_b"]),
+            )
+        ]
+
     if "all" not in guard:
         # Simple single-action guard: {"action": N}
         action_val: int | None = guard.get("action")
@@ -36,6 +54,8 @@ def parse_guard_clauses(guard: dict[str, Any]) -> list[GuardClause]:
                 has_pos=False,
                 entity_id=None,
                 pos=None,
+                has_overlaps=False,
+                overlaps_entity_ids=None,
             )
         ]
 
@@ -50,6 +70,8 @@ def parse_guard_clauses(guard: dict[str, Any]) -> list[GuardClause]:
                     has_pos=False,
                     entity_id=None,
                     pos=None,
+                    has_overlaps=False,
+                    overlaps_entity_ids=None,
                 )
             )
         if "dim" in clause and clause["dim"] == "pos":
@@ -61,13 +83,32 @@ def parse_guard_clauses(guard: dict[str, Any]) -> list[GuardClause]:
                     has_pos=True,
                     entity_id=clause.get("of"),
                     pos=(eq[0], eq[1]),
+                    has_overlaps=False,
+                    overlaps_entity_ids=None,
+                )
+            )
+        if "overlaps" in clause:
+            ov = clause["overlaps"]
+            result.append(
+                GuardClause(
+                    has_action=False,
+                    action=None,
+                    has_pos=False,
+                    entity_id=None,
+                    pos=None,
+                    has_overlaps=True,
+                    overlaps_entity_ids=(ov["entity_a"], ov["entity_b"]),
                 )
             )
     return result
 
 
 def evaluate_guard(
-    guard: dict[str, object], state: SceneState, action: int
+    guard: dict[str, object],
+    state: SceneState,
+    action: int,
+    *,
+    entity_cells: dict[int, frozenset[tuple[int, int]]] | None = None,
 ) -> bool:
     """Evaluate a guard dict against the current state and action.
 
@@ -85,4 +126,17 @@ def evaluate_guard(
             if eid is not None and pos is not None:
                 if state.pos(eid) != pos:
                     return False
+        if clause["has_overlaps"]:
+            if entity_cells is None:
+                msg = "overlaps guard requires entity_cells"
+                raise ValueError(msg)
+            ids = clause["overlaps_entity_ids"]
+            if ids is None:
+                return False
+            cells_a = entity_cells.get(ids[0])
+            cells_b = entity_cells.get(ids[1])
+            if cells_a is None or cells_b is None:
+                return False
+            if not (cells_a & cells_b):
+                return False
     return True
