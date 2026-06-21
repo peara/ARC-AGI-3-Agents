@@ -25,25 +25,31 @@ def _replace_rule_in_bucket(
 
 def _iter_managed_rules(
     ctx: EffectContext,
-) -> tuple[tuple[tuple[Rule, str], ...], tuple[tuple[Rule, str], ...]]:
-    """Yield (rule, bucket) for terminal/relational/proposed lists."""
+) -> tuple[tuple[tuple[Rule, str], ...], tuple[tuple[Rule, str], ...], tuple[tuple[Rule, str], ...]]:
+    """Yield (rule, bucket) for terminal/relational/movement/proposed lists."""
     terminals: list[tuple[Rule, str]] = [
         (r, "terminal") for r in ctx.terminal_rules if r.kind == "terminal"
     ]
     counters: list[tuple[Rule, str]] = [
         (r, "relational") for r in ctx.relational_rules if r.kind == "delta"
     ]
+    movement: list[tuple[Rule, str]] = [
+        (r, "movement") for r in ctx.movement_rules if r.kind == "movement"
+    ]
     for rule in ctx.proposed_rules:
         if rule.kind == "terminal":
             terminals.append((rule, "proposed"))
+        elif rule.kind == "movement":
+            movement.append((rule, "proposed"))
         else:
             counters.append((rule, "proposed"))
-    return tuple(terminals), tuple(counters)
+    return tuple(terminals), tuple(counters), tuple(movement)
 
 
 def _promote_rules(ctx: EffectContext) -> EffectContext:
     terminal = list(ctx.terminal_rules)
     relational = list(ctx.relational_rules)
+    movement = list(ctx.movement_rules)
     still_proposed: list[Rule] = []
     for rule in ctx.proposed_rules:
         if rule.support < ctx.confirm_threshold:
@@ -52,6 +58,9 @@ def _promote_rules(ctx: EffectContext) -> EffectContext:
         if rule.kind == "terminal":
             if rule.key() not in {r.key() for r in terminal}:
                 terminal.append(rule)
+        elif rule.kind == "movement":
+            if rule.key() not in {r.key() for r in movement}:
+                movement.append(rule)
         else:
             if rule.key() not in {r.key() for r in relational}:
                 relational.append(rule)
@@ -59,6 +68,7 @@ def _promote_rules(ctx: EffectContext) -> EffectContext:
         ctx,
         terminal_rules=tuple(terminal),
         relational_rules=tuple(relational),
+        movement_rules=tuple(movement),
         proposed_rules=tuple(still_proposed),
     )
 
@@ -72,6 +82,20 @@ def _bump_support(ctx: EffectContext, rule: Rule) -> EffectContext:
                 ctx,
                 terminal_rules=_replace_rule_in_bucket(
                     ctx.terminal_rules, key, bumped
+                ),
+            )
+        return replace(
+            ctx,
+            proposed_rules=tuple(
+                bumped if r.key() == key else r for r in ctx.proposed_rules
+            ),
+        )
+    if rule.kind == "movement":
+        if any(r.key() == key for r in ctx.movement_rules):
+            return replace(
+                ctx,
+                movement_rules=_replace_rule_in_bucket(
+                    ctx.movement_rules, key, bumped
                 ),
             )
         return replace(
@@ -207,8 +231,8 @@ def confirm_rules(
 ) -> EffectContext:
     """Increment support on rules whose guard fired and outcome matched."""
     updated = ctx
-    terminals, counters = _iter_managed_rules(ctx)
-    all_rules: list[tuple[Rule, str]] = list(terminals) + list(counters)
+    terminals, counters, movement = _iter_managed_rules(ctx)
+    all_rules: list[tuple[Rule, str]] = list(terminals) + list(counters) + list(movement)
     for rule, _bucket in all_rules:
         if _rule_matches_observation(rule, state_before, action, observed):
             updated = _bump_support(updated, rule)
@@ -228,6 +252,7 @@ def prune_rules(
 
     terminal = list(ctx.terminal_rules)
     relational = list(ctx.relational_rules)
+    movement = list(ctx.movement_rules)
     proposed: list[Rule] = []
 
     for rule in ctx.proposed_rules:
@@ -245,11 +270,17 @@ def prune_rules(
         for r in relational
         if not _rule_mispredicted(r, state_before, action, observed, residual)
     ]
+    movement = [
+        r
+        for r in movement
+        if not _rule_mispredicted(r, state_before, action, observed, residual)
+    ]
 
     return replace(
         ctx,
         terminal_rules=tuple(terminal),
         relational_rules=tuple(relational),
+        movement_rules=tuple(movement),
         proposed_rules=tuple(proposed),
     )
 
