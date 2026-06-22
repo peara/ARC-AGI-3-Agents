@@ -42,6 +42,27 @@ def rule_to_dsl(rule: Rule) -> DslRule:
             "support": rule.support,
         }
 
+    if rule.kind == "collision":
+        effects_list = [
+            {
+                "dim": e.dim,
+                "of": e.of,
+                "op": e.op,
+                **(
+                    {"value": list(e.value) if isinstance(e.value, tuple) else e.value}
+                    if e.op != "revert"
+                    else {"value": ""}
+                ),
+            }
+            for e in rule.effects
+        ]
+        return {
+            "kind": "collision",
+            "guard": rule.guard_spec,
+            "effects": effects_list,
+            "support": rule.support,
+        }
+
     # Terminal rule
     effect_dict = {}
     for e in rule.effects:
@@ -58,7 +79,7 @@ def rule_to_dsl(rule: Rule) -> DslRule:
 def dsl_to_rule(dsl: DslRule) -> Rule:
     """Reconstruct a Rule from a DSL dict."""
     kind = dsl.get("kind")
-    if kind not in ("delta", "terminal", "movement"):
+    if kind not in ("delta", "terminal", "movement", "collision"):
         raise ValueError(f"unknown kind: {kind!r}")
 
     guard: dict[str, Any] = dsl["guard"]
@@ -89,6 +110,22 @@ def dsl_to_rule(dsl: DslRule) -> Rule:
             effects=tuple(parsed_effects),
             support=support,
             kind="movement",
+        )
+
+    if kind == "collision":
+        effects_data = dsl["effects"]
+        parsed_effects = []
+        for e in effects_data:
+            op = e["op"]
+            value = e.get("value", "")
+            if op != "revert" and isinstance(value, list):
+                value = tuple(value)
+            parsed_effects.append(Effect(e["dim"], e["of"], op, value))
+        return Rule(
+            guard_spec=guard,
+            effects=tuple(parsed_effects),
+            support=support,
+            kind="collision",
         )
 
     # terminal

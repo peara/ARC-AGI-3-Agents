@@ -1,4 +1,4 @@
-"""Effect model context: movement + learned rules."""
+"""Effect model context: learned rules."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .dsl import rule_to_dsl
-from .kinematics import MovementModel, TransitionKey
 from .rules import Rule
 from .state import SceneState
 
@@ -64,47 +63,48 @@ def frame_meta_from_steps(
 
 @dataclass(frozen=True)
 class EffectContext:
-    movement: MovementModel
     terminal_rules: tuple[Rule, ...] = ()
     relational_rules: tuple[Rule, ...] = ()
     proposed_rules: tuple[Rule, ...] = ()
     movement_rules: tuple[Rule, ...] = ()
+    collision_rules: tuple[Rule, ...] = ()
+    available_actions: tuple[int, ...] = ()
     non_markovian: bool = False
     confirm_threshold: int = 2
     latent_defaults: dict[tuple[int, str], object] = field(default_factory=dict)
 
     def has_confirmed(self, state: SceneState, action: int) -> bool:
-        """True when a non-Markovian transition is safe to predict (slice 2)."""
+        """True when a non-Markovian transition is safe to predict (slice 2).
+
+        Checks movement_rules, collision_rules, terminal_rules, and
+        relational_rules for rules with ``support >= 1`` that have a
+        positional guard (``is_positional_guard``) and whose guard matches.
+        """
         if not self.non_markovian:
             return True
-        pos = state.pos(self.movement.entity_id)
-        if pos is not None:
-            key: TransitionKey = (pos, action)
-            if (
-                key in self.movement.known_transitions
-                or key in self.movement.known_blocks
-            ):
+        for rule in self.movement_rules + self.collision_rules:
+            if rule.support >= 1 and rule.is_positional_guard and rule.guard(state, action):
                 return True
         for rule in self.terminal_rules:
-            if rule.support >= 1 and rule.guard(state, action):
+            if rule.support >= 1 and rule.is_positional_guard and rule.guard(state, action):
                 return True
         for rule in self.relational_rules:
-            if rule.support >= 1 and rule.guard(state, action):
-                if rule.kind == "delta" and not rule.is_positional_guard:
-                    continue
+            if rule.support >= 1 and rule.is_positional_guard and rule.guard(state, action):
                 return True
         return False
 
     def to_dict(self) -> dict[str, object]:
-        return {
-            "movement": self.movement.to_dict(),
+        result: dict[str, object] = {
             "terminal_rules": [r.to_dict() for r in self.terminal_rules],
             "relational_rules": [r.to_dict() for r in self.relational_rules],
             "proposed_rules": [r.to_dict() for r in self.proposed_rules],
             "movement_rules": [rule_to_dsl(r) for r in self.movement_rules],
+            "collision_rules": [rule_to_dsl(r) for r in self.collision_rules],
+            "available_actions": list(self.available_actions),
             "non_markovian": self.non_markovian,
             "confirm_threshold": self.confirm_threshold,
         }
+        return result
 
 
 def merge_effect_context(base: EffectContext, engine: EffectContext) -> EffectContext:
@@ -122,12 +122,30 @@ def merge_effect_context(base: EffectContext, engine: EffectContext) -> EffectCo
             seen_keys.add(k)
             merged_movement_rules.append(rule)
 
+    collision_seen: set[tuple[str, tuple[object, ...], tuple[object, ...]]] = set()
+    merged_collision_rules: list[Rule] = []
+    for rule in base.collision_rules:
+        k = rule.key()
+        if k not in collision_seen:
+            collision_seen.add(k)
+            merged_collision_rules.append(rule)
+    for rule in engine.collision_rules:
+        k = rule.key()
+        if k not in collision_seen:
+            collision_seen.add(k)
+            merged_collision_rules.append(rule)
+
+    merged_available_actions = tuple(
+        sorted(set(base.available_actions) | set(engine.available_actions))
+    )
+
     return EffectContext(
-        movement=base.movement,
         terminal_rules=engine.terminal_rules,
         relational_rules=engine.relational_rules,
         proposed_rules=engine.proposed_rules,
         movement_rules=tuple(merged_movement_rules),
+        collision_rules=tuple(merged_collision_rules),
+        available_actions=merged_available_actions,
         non_markovian=base.non_markovian,
         confirm_threshold=engine.confirm_threshold,
         latent_defaults=base.latent_defaults,

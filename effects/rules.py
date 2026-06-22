@@ -54,7 +54,13 @@ def _canonical_effect_value(value: object) -> tuple[object, ...] | object:
 class EffectRule(Protocol):
     support: int
 
-    def guard(self, state: SceneState, action: int) -> bool: ...
+    def guard(
+        self,
+        state: SceneState,
+        action: int,
+        *,
+        entity_cells: dict[int, frozenset[tuple[int, int]]] | None = None,
+    ) -> bool: ...
 
     def apply(self, state: SceneState, action: int) -> SceneState: ...
 
@@ -102,12 +108,20 @@ class Rule:
             computed = (
                 "terminal"
                 if any(e.dim == "terminal" for e in self.effects)
+                else "collision"
+                if any(e.op == "revert" for e in self.effects)
                 else "delta"
             )
             object.__setattr__(self, "kind", computed)
 
-    def guard(self, state: SceneState, action: int) -> bool:
-        return evaluate_guard(self.guard_spec, state, action)
+    def guard(
+        self,
+        state: SceneState,
+        action: int,
+        *,
+        entity_cells: dict[int, frozenset[tuple[int, int]]] | None = None,
+    ) -> bool:
+        return evaluate_guard(self.guard_spec, state, action, entity_cells=entity_cells)
 
     def apply(
         self,
@@ -128,13 +142,19 @@ class Rule:
                 if old_pos is not None:
                     result = result.with_pos(effect.of, old_pos)
             elif effect.op == "delta":
-                if not isinstance(effect.value, int):
-                    raise TypeError(
-                        f"delta effect value must be int, got {type(effect.value)}"
-                    )
-                cur = result.get(effect.of, effect.dim)
-                base = 0 if cur is None else int(cast(int | float, cur))
-                result = result.set_dim(effect.of, effect.dim, base + effect.value)
+                if effect.dim == "pos" and isinstance(effect.value, tuple):
+                    cur = result.pos(effect.of)
+                    if cur is not None:
+                        new_pos = (cur[0] + effect.value[0], cur[1] + effect.value[1])
+                        result = result.with_pos(effect.of, new_pos)
+                else:
+                    if not isinstance(effect.value, int):
+                        raise TypeError(
+                            f"delta effect value must be int, got {type(effect.value)}"
+                        )
+                    cur = result.get(effect.of, effect.dim)
+                    base = 0 if cur is None else int(cast(int | float, cur))
+                    result = result.set_dim(effect.of, effect.dim, base + effect.value)
             elif effect.dim == "terminal":
                 result = result.with_terminal(cast(Terminal, effect.value))
             else:
