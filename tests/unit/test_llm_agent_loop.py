@@ -244,7 +244,7 @@ class TestLlmCuriosityAgentLoop:
     # -----------------------------------------------------------------------
 
     def test_probe_exhaustion_triggers_failure_context(self) -> None:
-        """When the last probe plan action is consumed, failure_context is set to 'probe_exhausted' and passed to the next LLM call."""
+        """When the last probe plan action is consumed, it is executed and failure_context is set to 'probe_exhausted'."""
         agent = _make_agent()
         agent._phase = "llm_directed"
         agent._probe_plan = [1]  # one action left
@@ -267,24 +267,18 @@ class TestLlmCuriosityAgentLoop:
         with patch(
             "agents.templates.llm_curiosity_agent.call_planner"
         ) as mock_call_planner:
-            mock_call_planner.return_value = None  # no new goal this time
+            mock_call_planner.return_value = None
 
             action = agent.choose_action([frame], frame)
 
-        # After exhaustion + LLM returning None, action is random.choice(actions)
+        # The last action (1) is executed directly — not dropped
         assert isinstance(action, GameAction)
-        assert action.value in [1, 2, 3, 4]
-        # Probe plan is now empty / None
+        assert action.value == 1
         assert agent._probe_plan is None
-        # The failure context "probe_exhausted" was passed to call_planner as failure_context
-        call_args = mock_call_planner.call_args
-        assert call_args is not None
-        # Check keyword argument
-        kw_failure = call_args.kwargs.get("failure_context")
-        assert kw_failure is not None
-        assert kw_failure["type"] == "probe_exhausted"
-        # After the LLM call completes (even with None goal), _failure_context is cleared
-        assert agent._failure_context is None
+        assert agent._failure_context is not None
+        assert agent._failure_context["type"] == "probe_exhausted"
+        assert agent._current_goal is None
+        mock_call_planner.assert_not_called()
 
     # -----------------------------------------------------------------------
     # 6. Divergence detection → clear plan

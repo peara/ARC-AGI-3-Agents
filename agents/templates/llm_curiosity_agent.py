@@ -150,6 +150,7 @@ class LlmCuriosity(Agent):
                 }
                 self._probe_plan = None
                 self._current_goal = None
+                return self._record_and_return(action_id, scene)
             elif action_id not in actions:
                 log.info(
                     "Probe action %d not in available actions, discarding plan",
