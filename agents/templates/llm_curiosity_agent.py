@@ -228,7 +228,6 @@ class LlmCuriosity(Agent):
                 action_id = random.choice(actions)
                 return self._record_and_return(action_id, scene)
             else:
-                # No path found — store unknowns in failure context
                 log.info("No path found for goal: %s", goal.reason)
                 self._failure_context = {
                     "type": "unreachable",
@@ -240,6 +239,35 @@ class LlmCuriosity(Agent):
                     "previous_probe_reason": goal.reason if goal else None,
                 }
                 self._current_goal = None
+                if unknowns:
+                    ua = random.choice(unknowns)
+                    target = {
+                        "all": [
+                            {
+                                "dim": dim,
+                                "of": eid,
+                                "eq": list(val) if isinstance(val, tuple) else val,
+                            }
+                            for eid, (dim, val) in ua.state.relevant
+                        ]
+                    }
+                    fallback = ProbeGoal(
+                        target=target,
+                        action=ua.action,
+                        max_steps=goal.max_steps,
+                        reason=f"fallback: probe unknown action {ua.action} at reachable state",
+                    )
+                    fb_plan, fb_unknowns = execute_probe(fallback, scene, ctx, actions)
+                    if fb_plan is not None and len(fb_plan) > 0:
+                        log.info(
+                            "Fallback probe: %d actions for unknown action %d",
+                            len(fb_plan),
+                            ua.action,
+                        )
+                        self._probe_plan = fb_plan
+                        self._current_goal = fallback
+                        action_id = self._probe_plan.pop(0)
+                        return self._record_and_return(action_id, scene)
                 action_id = random.choice(actions)
                 return self._record_and_return(action_id, scene)
 
