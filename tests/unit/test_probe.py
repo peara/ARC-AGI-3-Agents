@@ -25,7 +25,9 @@ def _state(entity_id: int, dim: str, value: object) -> SceneState:
     return SceneState(relevant=((entity_id, (dim, value)),), terminal="alive")
 
 
-def _mock_scene(entity_pos: dict[int, tuple[int, int] | None] | None = None) -> MagicMock:
+def _mock_scene(
+    entity_pos: dict[int, tuple[int, int] | None] | None = None,
+) -> MagicMock:
     """Build a mock SceneSnapshot with configurable entity_pos results."""
     scene = MagicMock()
     if entity_pos is None:
@@ -223,7 +225,9 @@ class TestProbeGoal:
 
     def test_compile_relative_near_raises(self) -> None:
         """Relative near reference must be resolved before compile_goal."""
-        with pytest.raises(ValueError, match="relative near references must be resolved"):
+        with pytest.raises(
+            ValueError, match="relative near references must be resolved"
+        ):
             compile_goal({"dim": "pos", "of": 0, "near": {"of": 5, "radius": 2}})
 
     # -----------------------------------------------------------------------

@@ -60,9 +60,7 @@ def collect_observed_steps(
     return out
 
 
-def _observed_next(
-    observed: list[ObservedStep], pos: Pos, action: int
-) -> Pos | None:
+def _observed_next(observed: list[ObservedStep], pos: Pos, action: int) -> Pos | None:
     hits = [nxt for p, a, nxt in observed if p == pos and a == action]
     if not hits:
         return None
@@ -122,9 +120,7 @@ def verify_plan_on_recording(
     for i, action in enumerate(plan):
         pos_before = state.pos(entity_id)
         if pos_before is None:
-            checks.append(
-                StepCheck(i, action, (0, 0), None, None, "predict_failed")
-            )
+            checks.append(StepCheck(i, action, (0, 0), None, None, "predict_failed"))
             break
 
         nxt = predict(state, action, ctx)
@@ -144,9 +140,7 @@ def verify_plan_on_recording(
         else:
             status = "extrapolated"
 
-        checks.append(
-            StepCheck(i, action, pos_before, pred_pos, obs_next, status)
-        )
+        checks.append(StepCheck(i, action, pos_before, pred_pos, obs_next, status))
         state = nxt_state
 
     end = replay_predicted(start, plan, ctx)

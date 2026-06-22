@@ -70,7 +70,9 @@ def main() -> None:
         return
 
     if args.recording is None or args.entity is None:
-        ap.error("recording path and --entity are required unless --manifest-case is set")
+        ap.error(
+            "recording path and --entity are required unless --manifest-case is set"
+        )
 
     frames, action_ids, _ = load_recording_frames(args.recording)
     print(f"loaded {len(frames)} frames from {args.recording}")
