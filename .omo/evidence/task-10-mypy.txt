@@ -1,0 +1,33 @@
+effects/rules.py:27: error: Incompatible types in assignment (expression has type "object", variable has type "list[dict[str, object]]")  [assignment]
+effects/rules.py:28: error: Unused "type: ignore" comment  [unused-ignore]
+effects/rules.py:95: error: No overload variant of "int" matches argument type "object"  [call-overload]
+effects/rules.py:95: note: Possible overload variants:
+effects/rules.py:95: note:     def int(str | Buffer | SupportsInt | SupportsIndex | SupportsTrunc = ..., /) -> int
+effects/rules.py:95: note:     def int(str | bytes | bytearray, /, base: SupportsIndex) -> int
+effects/rules.py:98: error: Argument 1 to "with_terminal" of "SceneState" has incompatible type "int | tuple[int, int] | str"; expected "Literal['alive', 'game_over', 'win']"  [arg-type]
+effects/rules.py:158: error: No overload variant of "int" matches argument type "object"  [call-overload]
+effects/rules.py:158: note: Possible overload variants:
+effects/rules.py:158: note:     def int(str | Buffer | SupportsInt | SupportsIndex | SupportsTrunc = ..., /) -> int
+effects/rules.py:158: note:     def int(str | bytes | bytearray, /, base: SupportsIndex) -> int
+perception/registry.py:337: error: Missing type parameters for generic type "dict"  [type-arg]
+perception/registry.py:339: error: Missing type parameters for generic type "dict"  [type-arg]
+perception/registry.py:384: error: Missing type parameters for generic type "dict"  [type-arg]
+perception/registry.py:386: error: Missing type parameters for generic type "dict"  [type-arg]
+effects/kinematics.py:27: error: Function is missing a return type annotation  [no-untyped-def]
+effects/context.py:55: error: "object" has no attribute "frame_idx"  [attr-defined]
+effects/context.py:56: error: "object" has no attribute "action_id"  [attr-defined]
+effects/learn.py:69: error: Unused "type: ignore" comment  [unused-ignore]
+effects/engine.py:158: error: No overload variant of "int" matches argument type "object"  [call-overload]
+effects/engine.py:158: note: Possible overload variants:
+effects/engine.py:158: note:     def int(str | Buffer | SupportsInt | SupportsIndex | SupportsTrunc = ..., /) -> int
+effects/engine.py:158: note:     def int(str | bytes | bytearray, /, base: SupportsIndex) -> int
+perception/session/snapshot.py:186: error: No overload variant of "int" matches argument type "object"  [call-overload]
+perception/session/snapshot.py:186: note: Possible overload variants:
+perception/session/snapshot.py:186: note:     def int(str | Buffer | SupportsInt | SupportsIndex | SupportsTrunc = ..., /) -> int
+perception/session/snapshot.py:186: note:     def int(str | bytes | bytearray, /, base: SupportsIndex) -> int
+perception/session/snapshot.py:195: error: Argument 1 to "list" has incompatible type "tuple[int, int] | None"; expected "Iterable[int]"  [arg-type]
+planning/recording_eval.py:72: error: Function is missing a type annotation for one or more arguments  [no-untyped-def]
+planning/recording_eval.py:165: error: Function is missing a type annotation for one or more arguments  [no-untyped-def]
+planning/exploration.py:8: error: Module "effects" does not explicitly export attribute "diff_effect_context"  [attr-defined]
+planning/exploration.py:305: error: Function is missing a return type annotation  [no-untyped-def]
+Found 20 errors in 9 files (checked 13 source files)

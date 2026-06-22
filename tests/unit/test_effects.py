@@ -180,7 +180,7 @@ class TestBFSPrunesGameOver:
         )
         ctx = EffectContext(movement_rules=(movement_rule_1, movement_rule_2), available_actions=(1, 2), terminal_rules=(dead,))
         start = SceneState(relevant=((0, ("pos", (0, 0))),))
-        plan = plan_bfs(
+        plan, unknowns = plan_bfs(
             start,
             lambda s: s.get(0, "pos") == (1, 0),
             [1, 2],

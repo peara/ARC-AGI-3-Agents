@@ -130,7 +130,7 @@ def main() -> None:
     if not actions_available:
         raise SystemExit("no actions available in effect context")
 
-    plan = plan_bfs(
+    plan, _unknowns = plan_bfs(
         start,
         goal_pos(args.entity, target),
         actions_available,

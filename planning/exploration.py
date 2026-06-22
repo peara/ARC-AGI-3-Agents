@@ -274,7 +274,7 @@ class ExplorationPolicy:
             )
             if entity_target is not None:
                 radius = reach_radius(self.cfg, ctx.movement_rules)
-                plan = plan_bfs(
+                plan, _unknowns = plan_bfs(
                     start,
                     lambda s: within(s.pos(controllable_id), entity_target, radius),
                     legal,
@@ -289,7 +289,7 @@ class ExplorationPolicy:
                     return
 
         visited = self.visited
-        plan = plan_bfs(
+        plan, _unknowns = plan_bfs(
             start,
             lambda s: s.pos(controllable_id) not in visited,
             legal,

@@ -1,0 +1,21 @@
+[1m============================= test session starts ==============================[0m
+platform linux -- Python 3.12.3, pytest-8.4.1, pluggy-1.6.0 -- /home/peara/projects/kaggle/ARC-AGI-3-Agents/.venv/bin/python
+cachedir: .pytest_cache
+rootdir: /home/peara/projects/kaggle/ARC-AGI-3-Agents
+configfile: pytest.ini
+plugins: requests-mock-1.12.1, langsmith-0.4.10, asyncio-1.1.0, anyio-4.10.0
+asyncio: mode=Mode.STRICT, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+[1mcollecting ... [0mcollected 10 items
+
+tests/unit/test_llm_rule_proposer.py::test_parse_proposals_valid_json [32mPASSED[0m[32m [ 10%][0m
+tests/unit/test_llm_rule_proposer.py::test_parse_proposals_with_fences [32mPASSED[0m[32m [ 20%][0m
+tests/unit/test_llm_rule_proposer.py::test_parse_proposals_malformed_json [32mPASSED[0m[32m [ 30%][0m
+tests/unit/test_llm_rule_proposer.py::test_parse_proposals_missing_rules_key [32mPASSED[0m[32m [ 40%][0m
+tests/unit/test_llm_rule_proposer.py::test_validate_proposal_valid_delta [32mPASSED[0m[32m [ 50%][0m
+tests/unit/test_llm_rule_proposer.py::test_validate_proposal_invalid_entity_id [32mPASSED[0m[32m [ 60%][0m
+tests/unit/test_llm_rule_proposer.py::test_validate_proposal_invalid_guard [32mPASSED[0m[32m [ 70%][0m
+tests/unit/test_llm_rule_proposer.py::test_call_rule_proposer_returns_list_of_rules [32mPASSED[0m[32m [ 80%][0m
+tests/unit/test_llm_rule_proposer.py::test_call_rule_proposer_dedups_existing [32mPASSED[0m[32m [ 90%][0m
+tests/unit/test_llm_rule_proposer.py::test_null_rule_proposer_returns_empty_list [32mPASSED[0m[32m [100%][0m
+
+[32m============================== [32m[1m10 passed[0m[32m in 0.03s[0m[32m ==============================[0m

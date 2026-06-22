@@ -1,0 +1,20 @@
+configfile: pytest.ini
+plugins: requests-mock-1.12.1, langsmith-0.4.10, asyncio-1.1.0, anyio-4.10.0
+asyncio: mode=Mode.STRICT, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+[1mcollecting ... [0mcollected 13 items
+
+tests/unit/test_query_interface.py::TestQueryInterface::test_bundle_json_round_trip [32mPASSED[0m[32m [  7%][0m
+tests/unit/test_query_interface.py::TestQueryInterface::test_bundle_top_level_keys [32mPASSED[0m[32m [ 15%][0m
+tests/unit/test_query_interface.py::TestQueryInterface::test_bundle_with_effect_context [32mPASSED[0m[32m [ 23%][0m
+tests/unit/test_query_interface.py::TestQueryInterface::test_bundle_without_effect_context [32mPASSED[0m[32m [ 30%][0m
+tests/unit/test_query_interface.py::TestQueryInterface::test_fields_filter [32mPASSED[0m[32m [ 38%][0m
+tests/unit/test_query_interface.py::TestQueryInterface::test_max_recent_limits_recent_actions [32mPASSED[0m[32m [ 46%][0m
+tests/unit/test_query_interface.py::TestQueryInterface::test_action_legend_present_or_empty [32mPASSED[0m[32m [ 53%][0m
+tests/unit/test_query_interface.py::TestQueryInterface::test_available_actions_presence [32mPASSED[0m[32m [ 61%][0m
+tests/unit/test_query_interface.py::TestQueryInterface::test_recent_actions_omit_none_delta [32mPASSED[0m[32m [ 69%][0m
+tests/unit/test_query_interface.py::TestQueryInterface::test_bundle_residual_default [32mPASSED[0m[32m [ 76%][0m
+tests/unit/test_query_interface.py::TestQueryInterface::test_bundle_pruned_rules_default [32mPASSED[0m[32m [ 84%][0m
+tests/unit/test_query_interface.py::TestQueryInterface::test_bundle_with_residual [32mPASSED[0m[32m [ 92%][0m
+tests/unit/test_query_interface.py::TestQueryInterface::test_bundle_with_pruned_rules [32mPASSED[0m[32m [100%][0m
+
+[32m============================== [32m[1m13 passed[0m[32m in 0.03s[0m[32m ==============================[0m

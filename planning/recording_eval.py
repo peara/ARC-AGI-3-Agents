@@ -206,7 +206,7 @@ def plan_and_evaluate(
     if ctx is None or not ctx.available_actions:
         return None
 
-    plan = plan_bfs(
+    plan, _unknowns = plan_bfs(
         start,
         goal_pos(entity_id, target),
         sorted(ctx.available_actions),

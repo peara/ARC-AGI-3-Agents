@@ -381,11 +381,11 @@ class TestProbeGoal:
 
         with (
             patch("planning.probe.snapshot_from_scene", return_value=fake_start),
-            patch("planning.probe.plan_bfs", return_value=[1, 2]) as mock_bfs,
+            patch("planning.probe.plan_bfs", return_value=([1, 2], [])) as mock_bfs,
         ):
             result = execute_probe(goal, scene, fake_ctx, fake_actions)
 
-        assert result == [1, 2]
+        assert result == ([1, 2], [])
         mock_bfs.assert_called_once()
         call_kwargs = mock_bfs.call_args
         assert call_kwargs[1]["max_nodes"] == 100
@@ -404,7 +404,7 @@ class TestProbeGoal:
         ):
             result = execute_probe(goal, scene, fake_ctx, [0, 1])
 
-        assert result is None
+        assert result == (None, [])
         mock_bfs.assert_not_called()
 
     def test_execute_probe_returns_none_when_no_plan(self) -> None:
@@ -418,11 +418,11 @@ class TestProbeGoal:
 
         with (
             patch("planning.probe.snapshot_from_scene", return_value=fake_start),
-            patch("planning.probe.plan_bfs", return_value=None),
+            patch("planning.probe.plan_bfs", return_value=(None, [])),
         ):
             result = execute_probe(goal, scene, fake_ctx, [0, 1, 2, 3])
 
-        assert result is None
+        assert result == (None, [])
 
     def test_execute_probe_with_explicit_entities_dims(self) -> None:
         """execute_probe uses explicit entities/dims when provided."""
@@ -440,9 +440,9 @@ class TestProbeGoal:
 
         with (
             patch("planning.probe.snapshot_from_scene", return_value=fake_start),
-            patch("planning.probe.plan_bfs", return_value=[]) as mock_bfs,
+            patch("planning.probe.plan_bfs", return_value=([], [])) as mock_bfs,
         ):
             result = execute_probe(goal, scene, fake_ctx, [0, 1])
 
-        assert result == []
+        assert result == ([], [])
         assert mock_bfs.call_args[1]["max_nodes"] == 50

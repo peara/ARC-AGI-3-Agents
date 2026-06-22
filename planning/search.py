@@ -19,6 +19,7 @@ from perception.entities import EntityCatalog
 from perception.registry import ObjectRegistry
 
 from .adapters import snapshot_from_registry
+from .query import UnknownAction
 
 
 @dataclass
@@ -53,19 +54,23 @@ def plan_bfs(
     ctx: EffectContext,
     *,
     max_nodes: int = 10_000,
-) -> list[int] | None:
-    """Return an action sequence reaching ``goal``, or None."""
+) -> tuple[list[int] | None, list[UnknownAction]]:
+    """Return an action sequence reaching ``goal`` (or None) and collected unknowns."""
     if goal(start):
-        return []
+        return ([], [])
 
     queue: deque[tuple[SceneState, list[int]]] = deque([(start, [])])
     visited: set[tuple[object, ...]] = {start.fingerprint()}
+    unknowns: list[UnknownAction] = []
 
     while queue and len(visited) < max_nodes:
         state, path = queue.popleft()
         for action in actions:
             pred = predict(state, action, ctx)
-            if pred.unknown or is_terminal_dead_end(pred.state):
+            if pred.unknown:
+                unknowns.append(UnknownAction(action=action, state=pred.state))
+                continue
+            if is_terminal_dead_end(pred.state):
                 continue
             nxt = pred.state
             fp = nxt.fingerprint()
@@ -74,10 +79,10 @@ def plan_bfs(
             visited.add(fp)
             new_path = path + [action]
             if goal(nxt):
-                return new_path
+                return (new_path, unknowns)
             queue.append((nxt, new_path))
 
-    return None
+    return (None, unknowns)
 
 
 def goal_pos(entity_id: int, target: Pos) -> Callable[[SceneState], bool]:

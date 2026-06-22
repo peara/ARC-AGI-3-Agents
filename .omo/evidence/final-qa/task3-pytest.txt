@@ -1,0 +1,32 @@
+=== test_llm_planner.py: 25 passed ===
+tests/unit/test_llm_planner.py::TestLLMPlanner::test_build_messages_structure PASSED
+tests/unit/test_llm_planner.py::TestLLMPlanner::test_build_messages_system_has_schema PASSED
+tests/unit/test_llm_planner.py::TestLLMPlanner::test_build_messages_system_has_examples PASSED
+tests/unit/test_llm_planner.py::TestLLMPlanner::test_build_messages_system_has_instructions PASSED
+tests/unit/test_llm_planner.py::TestLLMPlanner::test_build_messages_user_has_bundle PASSED
+tests/unit/test_llm_planner.py::TestLLMPlanner::test_build_messages_user_has_actions PASSED
+tests/unit/test_llm_planner.py::TestLLMPlanner::test_build_messages_with_failure_context PASSED
+tests/unit/test_llm_planner.py::TestLLMPlanner::test_build_messages_without_failure_context PASSED
+tests/unit/test_llm_planner.py::TestLLMPlanner::test_parse_markdown_json_block PASSED
+tests/unit/test_llm_planner.py::TestLLMPlanner::test_parse_raw_json PASSED
+tests/unit/test_llm_planner.py::TestLLMPlanner::test_parse_garbage_returns_none PASSED
+tests/unit/test_llm_planner.py::TestLLMPlanner::test_parse_multiple_blocks_first_valid PASSED
+tests/unit/test_llm_planner.py::TestLLMPlanner::test_parse_empty_string_returns_none PASSED
+tests/unit/test_llm_planner.py::TestLLMPlanner::test_parse_invalid_json_in_block_fallback PASSED
+tests/unit/test_llm_planner.py::TestLLMPlanner::test_validate_valid_goal PASSED
+tests/unit/test_llm_planner.py::TestLLMPlanner::test_validate_invalid_entity_in_of PASSED
+tests/unit/test_llm_planner.py::TestLLMPlanner::test_validate_invalid_entity_in_near PASSED
+tests/unit/test_llm_planner.py::TestLLMPlanner::test_validate_missing_required_keys PASSED
+tests/unit/test_llm_planner.py::TestLLMPlanner::test_validate_predicate_not_dict PASSED
+tests/unit/test_llm_planner.py::TestLLMPlanner::test_validate_all_conjunction PASSED
+tests/unit/test_llm_planner.py::TestLLMPlanner::test_call_planner_valid_response PASSED
+tests/unit/test_llm_planner.py::TestLLMPlanner::test_call_planner_garbage_response PASSED
+tests/unit/test_llm_planner.py::TestLLMPlanner::test_call_planner_invalid_entity PASSED
+tests/unit/test_llm_planner.py::TestLLMPlanner::test_call_planner_with_failure_context PASSED
+tests/unit/test_llm_planner.py::TestLLMPlanner::test_call_planner_missing_keys PASSED
+
+=== test_probe.py + test_dsl.py: 43 passed ===
+All 33 probe tests passed.
+All 10 DSL tests passed.
+
+Total: 68 tests, 68 passed, 0 failed

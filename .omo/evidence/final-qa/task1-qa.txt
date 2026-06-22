@@ -1,0 +1,9 @@
+=== Task 1 QA: LLMClient with env vars ===
+$ LLM_BASE_URL=http://localhost:11434/v1 LLM_MODEL=llama3 LLM_API_KEY=unused uv run python -c "from agents.llm_client import LLMClient; c = LLMClient(); print(f'url={c.base_url} model={c.model}')"
+url=http://localhost:11434/v1 model=llama3
+RESULT: PASS
+
+=== Task 1 QA: LLMClient explicit params ===
+$ uv run python -c "from agents.llm_client import LLMClient; c = LLMClient(base_url='http://localhost:11434/v1', model='llama3', api_key='test'); print(f'url={c.base_url} model={c.model}')"
+url=http://localhost:11434/v1 model=llama3
+RESULT: PASS

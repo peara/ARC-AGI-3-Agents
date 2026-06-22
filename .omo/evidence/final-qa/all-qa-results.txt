@@ -1,0 +1,91 @@
+ProbeGoal DSL + Compiler — Full QA Execution Results
+=====================================================
+
+## Task 1 QA Scenarios
+
+### QA1: CounterRule round-trip unchanged after refactor
+Command: uv run pytest tests/unit/test_dsl.py -v
+Result: 10/10 PASS
+
+### QA2: Guard clause parsing correctness
+Command 1: parse_guard_clauses({'action': 3}) → len==1, has_action=True, action==3
+Result: PASS
+Command 2: parse_guard_clauses({'all': [{'action': 3}, {'dim': 'pos', 'of': 0, 'eq': [10, 15]}]}) → len==2
+Result: PASS
+
+## Task 2 QA Scenarios
+
+### QA1: All guard parse tests pass
+Command: uv run pytest tests/unit/test_guard_parse.py -v
+Result: 5/5 PASS
+
+## Task 3 QA Scenarios
+
+### QA1: compile_goal with position equality
+Command: compile_goal({'dim':'pos','of':0,'eq':[5,10]}) on matching/non-matching SceneState
+Result: PASS
+
+### QA2: compile_goal with near comparator
+Command: compile_goal({'dim':'pos','of':0,'near':[5,10],'radius':2}) within/outside radius
+Result: PASS
+
+### QA3: compile_goal with conjunction
+Command: compile_goal({'all':[...]}) with two sub-predicates
+Result: PASS
+
+### QA4: compile_goal with empty conjunction (vacuously True)
+Command: compile_goal({'all':[]}) → True for any state
+Result: PASS
+
+### QA5: derive_spec_from_predicate auto-derives
+Command: derive_spec_from_predicate({'all':[...]}) → entities={0,17}, dims={'pos','size'}
+Result: PASS
+
+### QA6: compile_goal rejects invalid predicates
+Command: compile_goal({'invalid_key':42}) → raises ValueError
+Result: PASS
+
+## Task 4 QA Scenarios
+
+### QA1: All probe tests pass
+Command: uv run pytest tests/unit/test_probe.py -v
+Result: 29/29 PASS
+
+### QA2: DSL regression
+Command: uv run pytest tests/unit/test_dsl.py tests/unit/test_guard_parse.py tests/unit/test_probe.py -v
+Result: 44/44 PASS
+
+## Cross-task Integration Tests
+
+### Integration 1: parse_guard_clauses shared by dsl.py AND probe.py
+- dsl.py uses parse_guard_clauses: PASS
+- Both consumers handle action guard consistently: PASS
+- Both consumers handle conjunction guard consistently: PASS
+- Both consumers handle empty conjunction consistently: PASS
+Result: 4/4 PASS
+
+### Integration 2: compile_goal round-trip through PlanSpec
+- Auto-derive entities/dims from predicate: PASS
+- PlanSpec constructed from ProbeGoal-derived components: PASS
+- Goal predicate works through PlanSpec round-trip: PASS
+- ProbeGoal defaults work (auto-derive at execution): PASS
+Result: 4/4 PASS
+
+## Edge Cases Tested
+
+1. Empty conjunction (vacuously True)
+2. Action-only guard (vacuous True for goals)
+3. Position equality with list [r,c] → tuple conversion
+4. Near comparator with radius=0 (default)
+5. Near comparator exactly on target
+6. Near comparator outside radius
+7. Invalid predicate keys → ValueError
+8. Relative near without resolution → ValueError
+9. Missing entity position in resolve → ValueError
+10. Frozen dataclass immutability
+
+Total edge cases: 10
+
+## Summary
+
+Scenarios [13/13 pass] | Integration [8/8] | Edge Cases [10 tested] | VERDICT: PASS

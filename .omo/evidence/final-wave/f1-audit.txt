@@ -1,0 +1,261 @@
+===============================================================================
+F1 — PLAN COMPLIANCE AUDIT: generic-rule-dataclass
+===============================================================================
+Date: 2026-06-17
+Auditor: Oracle (F1 Plan Compliance Audit)
+
+===============================================================================
+SECTION 1: MUST HAVE (9 items)
+===============================================================================
+
+1. ✅ Behavioral equivalence: every existing test that constructs/compares
+   rules must pass identically
+   - Tests run: 25 passed, 2 failed (recording file missing — pre-existing
+     issue, NOT caused by refactor), 7 skipped
+   - The 2 failures are FileNotFoundError for recording fixtures, unrelated
+     to the Rule refactor
+   - All Rule-specific tests pass
+
+2. ✅ Rule is a frozen dataclass with guard: dict, effects: tuple[Effect, ...],
+   support: int
+   - Verified: effects/rules.py:67 — @dataclass(frozen=True) class Rule
+   - Fields: guard_spec: dict[str, object], effects: tuple[Effect, ...],
+     support: int
+   - NOTE: field named "guard_spec" not "guard" — minor deviation from plan
+     spec but functionally equivalent; the "guard" name would shadow the
+     guard() method
+
+3. ✅ Effect is a frozen dataclass with dim: str, of: int,
+   op: Literal["delta", "set"], value: int | tuple[int, int] | str
+   - Verified: effects/rules.py:51 — @dataclass(frozen=True) class Effect
+   - Fields match spec exactly: dim, of, op, value
+   - __post_init__ validates delta value != 0
+
+4. ✅ Rule.guard() method evaluates the guard dict against (SceneState, action)
+   - Verified: effects/rules.py:83 — def guard(self, state, action) -> bool
+   - Delegates to evaluate_guard(self.guard_spec, state, action)
+
+5. ✅ Rule.apply() method applies all effects to SceneState
+   - Verified: effects/rules.py:86-101
+   - op=="delta": state.set_dim(effect.of, effect.dim, base + effect.value)
+     with base=0 if None (matches CounterRule)
+   - op=="set" + dim=="terminal": state.with_terminal(effect.value) (matches
+     TerminalRule)
+   - op=="set" + other dim: state.set_dim(effect.of, effect.dim, effect.value)
+
+6. ✅ Rule.key() method produces canonical hashable tuple for dedup
+   (excluding support)
+   - Verified: effects/rules.py:103-109
+   - Returns (self.kind, guard_key, effects_key_tuple)
+   - guard_key via _canonical_guard (sorted recursive tuple)
+   - Support NOT included — verified by test
+
+7. ✅ DSL format remains backward-compatible (kind: "delta" / "terminal")
+   - Verified: effects/dsl.py — rule_to_dsl produces {"kind": "delta", ...}
+     and {"kind": "terminal", ...}
+   - dsl_to_rule reconstructs Rule instances from same format
+   - Round-trip test confirmed
+
+8. ✅ Engine lifecycle (propose/confirm/prune/promote) works with Rule
+   - Verified: effects/engine.py — all functions use Rule instances
+   - propose_rules constructs Rule/Effect instances
+   - confirm_rules uses rule.guard(), rule.apply(), rule.key()
+   - _iter_managed_rules routes by rule.kind
+   - should_engine_step / has_confirmed use rule.kind and
+     rule.is_positional_guard
+
+9. ✅ Rule.kind property: "terminal" if any effect has dim=="terminal",
+   else "delta"
+   - Verified: effects/rules.py:80-81
+   - Exactly one effect per Rule in this refactor (no multi-effect enforcement
+     in __post_init__, but all code constructs single-effect Rules)
+
+BONUS CHECKS (from Must Have):
+- ✅ evaluate_guard() in effects/guard_parse.py (line 69)
+- ✅ Rule.is_positional_guard property (line 112)
+- ✅ Effect.__post_init__ validates delta value != 0
+- ✅ Rule.__post_init__ validates effects non-empty
+- ✅ Rule satisfies EffectRule Protocol (has support, guard(), apply())
+
+MUST HAVE SCORE: 9/9
+
+===============================================================================
+SECTION 2: MUST NOT HAVE (9 items)
+===============================================================================
+
+1. ✅ No LLM rule proposal wiring
+   - grep for "llm_planner" and "probe" in effects/ and planning/query.py
+     found zero matches
+
+2. ✅ No changes to planning/llm_planner.py or planning/probe.py
+   - git diff --stat HEAD shows no changes to these files
+
+3. ✅ No new rule types beyond CounterRule/TerminalRule expression
+   - grep for "SpawnRule" and "TransformRule" found zero matches
+
+4. ✅ No changes to SceneState
+   - git diff HEAD -- effects/state.py returns empty (no changes)
+
+5. ✅ No multi-effect rules (each Rule has exactly one Effect)
+   - No enforcement in __post_init__ for len(effects)==1, but all construction
+     sites use single-effect tuples. Slight deviation from plan spec item
+     "Exactly one effect per Rule in this refactor" — the __post_init__ only
+     enforces non-empty, not exactly-one.
+   - VERDICT: Acceptable — all code uses single effects; future extensibility
+     preserved as per plan's future scope note
+
+6. ✅ No new guard clause types (no "any", no negation, no "dim": "size" guards)
+   - guard_parse.py only handles action and pos clause types
+   - No "any", negation, or size-based guards found
+
+7. ✅ No changes to the DSL output format
+   - DSL dicts still use "kind": "delta" / "terminal"
+   - rule_to_dsl produces identical format for both kinds
+
+8. ⚠️ No RelationalRule alias kept — PARTIAL VIOLATION
+   - effects/rules.py:162 still has: RelationalRule = CounterRule
+   - This is a forbidden pattern per plan spec: "No RelationalRule alias
+     kept (it was just CounterRule; replace everywhere)"
+   - LOCATION: effects/rules.py:162
+
+9. ⚠️ No CounterRule/TerminalRule in effects/ except deprecated aliases
+   — PARTIAL VIOLATION
+   - CounterRule and TerminalRule classes still exist as "deprecated" in
+     effects/rules.py:122-162
+   - They are still exported from effects/__init__.py (lines 38, 42, 55)
+   - Plan spec says: "CounterRule/TerminalRule removed (or kept as deprecated
+     aliases)" — the plan allows deprecated aliases
+   - BUT plan "Must NOT Have" item says: "No RelationalRule alias kept"
+   - AND Definition of Done says: "No CounterRule or TerminalRule references
+     in effects/ (except deprecated aliases if kept)"
+
+   Assessment: CounterRule/TerminalRule as deprecated classes are allowed
+   per plan. But RelationalRule alias is explicitly forbidden.
+   
+   LOCATION of RelationalRule: effects/rules.py:162
+   LOCATION of exports: effects/__init__.py:38,42,55
+
+MUST NOT HAVE SCORE: 7/9 (2 violations)
+
+===============================================================================
+SECTION 3: EVIDENCE FILES
+===============================================================================
+
+Task 10 evidence (exists):
+  ✅ .omo/evidence/task-10-full-test-suite.txt
+  ✅ .omo/evidence/task-10-mypy.txt
+  ✅ .omo/evidence/task-10-no-old-types.txt
+  ✅ .omo/evidence/task-10-ruff.txt
+
+Task 1-9 evidence (per-plan QA scenarios):
+  ❌ .omo/evidence/task-1-*.txt — NOT FOUND (only task1-qa.txt in final-qa/)
+  ❌ .omo/evidence/task-2-*.txt — NOT FOUND
+  ❌ .omo/evidence/task-3-*.txt — NOT FOUND (only task3-pytest.txt in final-qa/)
+  ❌ .omo/evidence/task-4-*.txt through task-9-*.txt — NOT FOUND
+
+  NOTE: Evidence was captured in .omo/evidence/final-qa/ directory instead
+  of .omo/evidence/ root. The final-qa directory contains:
+  - all-qa-results.txt, edge-cases-qa.txt, integration-qa.txt, qa-results.md,
+    task1-qa.txt, task2-qa.txt, task3-pytest.txt
+
+  This is a minor deviation from the plan's evidence naming convention
+  (.omo/evidence/task-{N}-{scenario-slug}.{ext}) but evidence does exist.
+
+EVIDENCE SCORE: 4/4 task-10 evidence present; per-task evidence in alternate
+location
+
+===============================================================================
+SECTION 4: VERIFICATION COMMANDS
+===============================================================================
+
+1. Tests:
+   uv run pytest tests/unit/test_effects.py tests/unit/test_effects_engine.py
+     tests/unit/test_dsl.py tests/unit/test_query_interface.py -v
+   Result: 25 passed, 2 failed (pre-existing recording file missing), 7 skipped
+   The 2 failures are FileNotFoundError for missing recording fixtures — NOT
+   related to the Rule refactor.
+
+2. Lint:
+   uv run ruff check effects/ planning/query.py
+   Result: All checks passed!
+
+3. Type checking:
+   uv run mypy --strict effects/ planning/query.py
+   Result: Errors in effects/rules.py (lines 27,28,95,98) and
+   effects/engine.py (line 158) — type narrowing issues with object/cast,
+   plus pre-existing errors in perception/ and planning/ modules outside
+   scope. The errors in effects/rules.py are in the new code (Rule.apply
+   cast handling).
+
+4. Forbidden pattern search:
+   grep -rn "CounterRule\|TerminalRule\|RelationalRule" effects/ --include="*.py"
+   Result: Found in:
+     effects/rules.py:47 (comment), :122 (class), :138 (class), :162 (alias)
+     effects/__init__.py:38 (import), :42 (__all__), :55 (__all__)
+   
+   Per plan Definition of Done: "No CounterRule or TerminalRule references
+   in effects/ (except deprecated aliases if kept)" — the deprecated classes
+   are allowed, but RelationalRule alias is explicitly forbidden.
+
+===============================================================================
+SECTION 5: MYPY ISSUES (DETAILED)
+===============================================================================
+
+New-code mypy errors (in scope):
+  effects/rules.py:27  — Incompatible types (assignment, list[dict[str,object]])
+  effects/rules.py:28  — Unused "type: ignore" comment
+  effects/rules.py:95  — No overload variant of "int" matches "object"
+  effects/rules.py:98  — Argument type mismatch for with_terminal
+  effects/engine.py:158 — No overload variant of "int" matches "object"
+
+Pre-existing mypy errors (NOT in scope):
+  perception/registry.py, effects/kinematics.py, effects/context.py,
+  planning/recording_eval.py, perception/session/snapshot.py
+
+===============================================================================
+SECTION 6: DELIVERABLES CHECK
+===============================================================================
+
+Per plan "Concrete Deliverables" (lines 63-74):
+
+  ✅ effects/rules.py: Rule and Effect frozen dataclasses
+  ✅ effects/guard_parse.py: evaluate_guard() function
+  ✅ effects/engine.py: all isinstance checks replaced with Rule-based logic
+  ✅ effects/dsl.py: rule_to_dsl/dsl_to_rule work with Rule
+  ✅ effects/context.py: EffectContext uses tuple[Rule, ...] for all buckets
+  ✅ effects/predict.py: applies Rule effects generically (unchanged iteration)
+  ✅ effects/learn.py: returns tuple[Rule, ...]
+  ✅ effects/engine_log.py: format_rule/rule_id work with Rule
+  ✅ effects/__init__.py: exports Rule, Effect; old names still exported
+  ✅ planning/query.py: _build_engine_rules works with Rule
+  ✅ Tests updated and passing (except pre-existing recording fixture issue)
+
+DELIVERABLES SCORE: 11/11
+
+===============================================================================
+SECTION 7: SUMMARY
+===============================================================================
+
+MUST HAVE:      9/9 ✅
+MUST NOT HAVE:  7/9 ⚠️ (2 violations: RelationalRule alias kept, 
+                            CounterRule/TerminalRule still exported)
+TASKS:         10/10 (all tasks completed, all checkboxes checked in plan)
+EVIDENCE:       4/4 task-10 files present; per-task evidence in alternate dir
+
+VIOLATIONS (specific):
+  1. effects/rules.py:162 — RelationalRule = CounterRule (forbidden alias)
+  2. effects/__init__.py:38,42,55 — CounterRule, TerminalRule still 
+     exported/imported (allowed as deprecated per plan, but the
+     RelationalRule alias at line 162 is explicitly forbidden)
+
+MYPY: Not clean — 5 new-code errors in effects/rules.py and effects/engine.py
+  (type narrowing issues; functional correctness not impacted)
+
+VERDICT: REJECT
+
+Reason: RelationalRule alias still present at effects/rules.py:162, which
+violates the explicit "Must NOT Have" constraint: "No RelationalRule alias
+kept (it was just CounterRule; replace everywhere)". Additionally, mypy
+strict mode has type errors in new code that should be resolved per the
+Definition of Done ("uv run mypy --strict effects/ planning/query.py → no
+errors").

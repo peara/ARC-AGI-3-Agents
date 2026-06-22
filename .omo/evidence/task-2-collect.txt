@@ -1,0 +1,13 @@
+cachedir: .pytest_cache
+asyncio: mode=Mode.STRICT, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+      <Module test_llm_rule_proposer.py>
+        <Function test_parse_proposals_valid_json>
+        <Function test_parse_proposals_with_fences>
+        <Function test_parse_proposals_malformed_json>
+        <Function test_parse_proposals_missing_rules_key>
+        <Function test_validate_proposal_valid_delta>
+        <Function test_validate_proposal_invalid_entity_id>
+        <Function test_validate_proposal_invalid_guard>
+        <Function test_call_rule_proposer_returns_list_of_rules>
+        <Function test_call_rule_proposer_dedups_existing>
+        <Function test_null_rule_proposer_returns_empty_list>

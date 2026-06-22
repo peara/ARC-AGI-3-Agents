@@ -1,0 +1,7 @@
+effects/rules.py:47:# New unified Effect / Rule (replaces CounterRule / TerminalRule)
+effects/rules.py:122:class TerminalRule:  # deprecated, replaced by Rule
+effects/rules.py:138:class CounterRule:  # deprecated, replaced by Rule
+effects/rules.py:162:RelationalRule = CounterRule
+effects/__init__.py:38:from .rules import CounterRule, Effect, Rule, TerminalRule
+effects/__init__.py:42:    "CounterRule",
+effects/__init__.py:55:    "TerminalRule",

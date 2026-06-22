@@ -1,0 +1,178 @@
+===============================================================
+F2 — CODE QUALITY REVIEW: generic-rule-dataclass refactor
+===============================================================
+
+Build [PASS] | Lint [PASS] | Tests [25 pass/2 fail/7 skip] | Files [7 clean/5 issues] | VERDICT: CONDITIONAL PASS
+
+===============================================================
+1. BUILD & LINT
+===============================================================
+
+ruff check effects/ planning/query.py → PASS (all checks passed)
+
+mypy --strict effects/ planning/query.py → 15 errors in 8 files
+  - effects/rules.py:158  — int(object) call-overload (CounterRule.apply, legacy)
+  - effects/engine.py:158 — int(object) call-overload (propose_rules, same pattern)
+  - effects/context.py:55-56 — "object" has no attribute frame_idx/action_id
+  - effects/kinematics.py:27 — missing return type on observation_at()
+  - perception/* — 7 pre-existing errors NOT in scope (registry.py, snapshot.py, etc.)
+  - planning/exploration.py:8 — Module "effects" missing explicit export
+
+===============================================================
+2. TEST RESULTS
+===============================================================
+
+25 passed, 2 failed, 7 skipped
+
+FAILURES (both from missing recording file, NOT code bugs):
+  - test_effects.py::TestLearnEffectContext::test_ls20_no_terminal_rules
+  - test_effects_engine.py::TestLs20CounterPropose::test_entity_17_decrease_proposed_with_size_in_spec
+  → FileNotFoundError for ls20-9607627b.random.80.*.recording.jsonl
+  → These are fixture/data issues, not code regressions
+
+PASSED (core unit tests):
+  - test_dsl.py: 8/8 passed (DSL roundtrip, validation, serialization)
+  - test_query_interface.py: 8/8 passed
+  - test_effects_engine.py: 4/4 synthetic tests passed
+  - test_effects.py: 3/4 passed (1 fixture-missing failure)
+
+===============================================================
+3. FILE-BY-FILE QUALITY REVIEW
+===============================================================
+
+--- CLEAN FILES (no issues) ---
+
+  effects/predict.py      — Clean. Simple, focused, well-typed.
+  effects/residual.py     — Clean. Pure dataclass + diff function.
+  effects/engine.py       — Clean. Good use of dataclasses.replace, no slop.
+  effects/engine_log.py   — Clean. Single logger.info() call is appropriate
+                             (not debug logging in production path).
+  effects/guard_parse.py  — Clean. TypedDict used properly, TYPE_CHECKING guard.
+  planning/query.py       — Clean. Clean interface, proper typing, no slop.
+
+--- FILES WITH ISSUES ---
+
+  ▸ effects/rules.py
+    [Q1] # type: ignore[return-value] on line 81 (state.py:81) —
+         state.pos() returns `object | None` but the return annotation says
+         `Pos | None`. The suppression hides a real type-unsoundness: `val`
+         is typed as `object` from `get()` but is actually a tuple. This is
+         a known trade-off in SceneState's open-dim design; not a blocker but
+         worth a brief inline doc-note rather than a bare suppress.
+    [Q2] # pyright: ignore on line 34 — Suppresses pyright's
+         reportUnknownVariableType/ArgumentType on `tuple(value)`. Acceptable
+         given value could be list or scalar.
+    [Q3] CounterRule.apply (line 158): `int(cur)` where `cur: object` —
+         same mypy error as engine.py:158. Both use `int()` on `object`
+         returned by `state.get()`. Needs explicit cast, not implicit coercion.
+    [Q4] CounterRule / TerminalRule: Marked "# deprecated, replaced by Rule"
+         in inline comments only. NO `warnings.warn()` or
+         `DeprecationWarning` emitted. Consumers importing these from
+         `effects/__init__.py` get zero runtime notice. This is the most
+         significant quality gap.
+         ALSO: `__init__.py` exports CounterRule and TerminalRule in
+         `__all__` — they remain first-class public API despite being
+         deprecated.
+    [Q5] `RelationalRule = CounterRule` alias on line 162 — Not deprecated
+         at all. Should also carry a deprecation notice.
+
+  ▸ effects/state.py
+    [Q6] `state.pos()` uses `# type: ignore[return-value]` — same as Q1
+         above. The `get()` method returns `object | None` but `pos()` needs
+         `Pos | None`. This is a design smell in SceneState: `get()` is too
+         loosely typed.
+
+  ▸ effects/context.py
+    [Q7] `frame_meta_from_steps(step_observations: tuple[object, ...])` —
+         the parameter is typed as `object`, then lines 55-56 access
+         `step.frame_idx` and `step.action_id` on `object`. mypy --strict
+         correctly flags this. Should type as `tuple[StepObservation, ...]`
+         or use a Protocol.
+    [Q8] `latent_defaults: dict[tuple[int, str], object]` — wide-open value
+         type. Acceptable for now (latent defaults are heterogeneous).
+
+  ▸ effects/kinematics.py
+    [Q9] `observation_at()` (line 27) missing return type annotation.
+         mypy --strict flags this. Should be `-> Observation | None`.
+
+  ▸ effects/dsl.py
+    [Q10] `rule_to_dsl()` iterates effects but only uses the LAST matching
+          effect for each kind (delta/terminal), silently discarding earlier
+          ones. Not a bug for current 1-effect rules, but fragile if
+          multi-effect rules are added.
+
+  ▸ effects/__init__.py
+    [Q11] Exports `diff_effect_context` via `# noqa: F401` re-export from
+          `engine_log`, but `planning/exploration.py` imports it and mypy
+          flags `Module "effects" does not explicitly export attribute
+          "diff_effect_context"`. Either add to `__all__` or remove the
+          F401 suppression.
+    [Q12] CounterRule, TerminalRule, and RelationalRule in `__all__` —
+          these deprecated names remain fully public.
+
+--- ISSUES NOT FOUND (good) ---
+
+  ✅ No empty catch blocks
+  ✅ No debug logging in production code (only engine_log.py logger.info,
+     which is appropriate for a debug/diagnostic module)
+  ✅ No commented-out code blocks
+  ✅ No unused imports (ruff would catch these)
+  ✅ No AI slop: no temp_var, data, item naming; no excessive comments;
+    comments are purposeful (section headers, design rationale)
+  ✅ No over-abstraction; Rule/Effect dataclasses are appropriate
+
+===============================================================
+4. DEPRECATION ASSESSMENT
+===============================================================
+
+CounterRule and TerminalRule:
+  - Inline comment says "# deprecated, replaced by Rule"
+  - NO runtime DeprecationWarning emitted
+  - NO `__getattr__`-based deprecation pattern
+  - Still exported in `__all__` and `__init__.py`
+  - RelationalRule = CounterRule alias has NO deprecation at all
+
+RECOMMENDATION: Add `warnings.warn()` in `CounterRule.__init__` and
+`TerminalRule.__init__` with `DeprecationWarning`, or add a module-level
+`__getattr__` that warns on access. Remove from `__all__` (keep importable
+but not advertised).
+
+===============================================================
+5. SUMMARY TABLE
+===============================================================
+
+| Check                     | Result                              |
+|---------------------------|-------------------------------------|
+| ruff check                | PASS                                |
+| mypy --strict             | FAIL (15 errors, 6 in-scope)       |
+| pytest (in-scope tests)   | 25 pass / 2 fail (fixture-missing) |
+| # type: ignore            | 1 instance (state.py:81) — marginal |
+| pyright: ignore            | 1 instance (rules.py:34) — marginal |
+| Empty catch blocks        | 0                                   |
+| Debug logging             | 0 (engine_log is diagnostic, ok)    |
+| Commented-out code        | 0                                   |
+| Unused imports            | 0                                   |
+| AI slop                   | 0                                   |
+| Deprecated aliases        | INCOMPLETE — comments only, no warn |
+| Missing type annot.       | 1 (kinematics.py:observation_at)     |
+| Unsafe object access      | 2 (context.py:55-56, rules.py:158)   |
+| __all__ export gap        | 1 (diff_effect_context missing)      |
+
+===============================================================
+6. VERDICT
+===============================================================
+
+Build [PASS] | Lint [PASS] | Tests [25 pass/2 fail] | Files [7 clean/5 issues] | CONDITIONAL PASS
+
+The 2 test failures are fixture/data issues (missing recording file), not
+code regressions. All core logic tests pass.
+
+The codebase is clean of slop, has good structure, and the refactored
+Rule/Effect dataclasses are well-designed. The main quality gaps are:
+
+  1. DEPRECATION (medium): CounterRule/TerminalRule have comment-only
+     deprecation — should emit DeprecationWarning.
+  2. TYPING (low-medium): 6 in-scope mypy errors from `object`-typed
+     parameters (state.get(), step_observations, int() coercion).
+  3. EXPORT (low): diff_effect_context re-exported with noqa but missing
+     from __all__.

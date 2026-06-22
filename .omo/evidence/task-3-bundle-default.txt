@@ -1,0 +1,12 @@
+from unittest.mock import MagicMock
+from planning.query import QueryInterface
+scene = MagicMock()
+scene.summary.return_value = {'frame_idx': 0}
+scene.step_observations = ()
+qi = QueryInterface(scene)
+b = qi.bundle()
+assert 'residual' in b, f'residual missing: {b}'
+assert 'pruned_rules' in b, f'pruned_rules missing: {b}'
+assert b['residual'] == []
+assert b['pruned_rules'] == []
+print('PASS')

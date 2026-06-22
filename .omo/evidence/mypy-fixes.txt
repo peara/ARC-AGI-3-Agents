@@ -1,0 +1,16 @@
+effects/rules.py:158: error: No overload variant of "int" matches argument type "object"  [call-overload]
+effects/rules.py:158: note: Possible overload variants:
+effects/rules.py:158: note:     def int(str | Buffer | SupportsInt | SupportsIndex | SupportsTrunc = ..., /) -> int
+effects/rules.py:158: note:     def int(str | bytes | bytearray, /, base: SupportsIndex) -> int
+perception/registry.py:337: error: Missing type parameters for generic type "dict"  [type-arg]
+perception/registry.py:339: error: Missing type parameters for generic type "dict"  [type-arg]
+perception/registry.py:384: error: Missing type parameters for generic type "dict"  [type-arg]
+perception/registry.py:386: error: Missing type parameters for generic type "dict"  [type-arg]
+effects/kinematics.py:27: error: Function is missing a return type annotation  [no-untyped-def]
+effects/context.py:55: error: "object" has no attribute "frame_idx"  [attr-defined]
+effects/context.py:56: error: "object" has no attribute "action_id"  [attr-defined]
+effects/engine.py:158: error: No overload variant of "int" matches argument type "object"  [call-overload]
+effects/engine.py:158: note: Possible overload variants:
+effects/engine.py:158: note:     def int(str | Buffer | SupportsInt | SupportsIndex | SupportsTrunc = ..., /) -> int
+effects/engine.py:158: note:     def int(str | bytes | bytearray, /, base: SupportsIndex) -> int
+Found 9 errors in 5 files (checked 2 source files)

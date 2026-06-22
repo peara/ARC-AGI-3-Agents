@@ -10,6 +10,7 @@ from perception.session import SceneSnapshot
 
 from .adapters import snapshot_from_scene
 from .heuristics import within
+from .query import UnknownAction
 from .search import PlanSpec, plan_bfs
 
 
@@ -147,7 +148,7 @@ def execute_probe(
     scene: SceneSnapshot,
     ctx: EffectContext,
     actions: list[int],
-) -> list[int] | None:
+) -> tuple[list[int] | None, list[UnknownAction]]:
     """Resolve predicate, build spec, and run BFS to find an action sequence."""
 
     resolved = resolve_predicate(goal.predicate, scene)
@@ -170,6 +171,6 @@ def execute_probe(
 
     start = snapshot_from_scene(scene, spec)
     if start is None:
-        return None
+        return (None, [])
 
     return plan_bfs(start, compiled_goal, actions, ctx, max_nodes=goal.max_steps)

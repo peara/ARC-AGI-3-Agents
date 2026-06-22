@@ -1,0 +1,381 @@
+=============================================================================
+F4 — SCOPE FIDELITY CHECK: generic-rule-dataclass refactor
+=============================================================================
+
+Date: 2026-06-17
+Checker: Sisyphus-Junior (deep)
+
+=============================================================================
+TASK-BY-TASK COMPLIANCE (1:1 spec vs. implementation)
+=============================================================================
+
+TASK 1: Define Rule and Effect dataclasses [COMPLIANT]
+─────────────────────────────────────────────────────
+Spec: Rule(guard, effects, support) frozen dataclass, Effect(dim, of, op, value),
+      Rule.kind, Rule.guard(), Rule.apply(), Rule.key(), __post_init__ validation,
+      EffectRule Protocol unchanged, CounterRule/TerminalRule kept as deprecated.
+
+Actual (effects/rules.py):
+  ✅ Effect frozen dataclass: dim, of, op ("delta"|"set"), value (int|tuple|str)
+  ✅ Rule frozen dataclass: guard_spec, effects, support
+  ⚠️  Field named "guard_spec" instead of spec's "guard" — avoids collision with
+     Rule.guard() method. Functional equivalent, not scope creep.
+  ✅ Rule.kind property: "terminal" if any effect.dim=="terminal", else "delta"
+  ✅ Rule.guard() method: delegates to evaluate_guard(self.guard_spec, state, action)
+  ✅ Rule.apply() method: iterates effects, delta/set/terminal routing correct
+  ✅ Rule.key() method: canonical tuple (kind, guard_key, effects_key), excludes support
+  ✅ __post_init__: validates effects non-empty, delta value != 0
+  ✅ EffectRule Protocol: unchanged (support, guard, apply)
+  ✅ _canonical_guard() helper for key()
+  ✅ CounterRule + TerminalRule + RelationalRule kept as deprecated at bottom of file
+
+NOT IN SPEC but present:
+  ✅ _canonical_effect_value() helper — internal to key(), reasonable
+  ✅ cast() imports — needed for type narrowing, not scope creep
+
+ISSUES: None functional. "guard_spec" naming deviation is intentional and documented.
+
+─────────────────────────────────────────────────────────────────────────────
+
+TASK 2: Implement evaluate_guard() and Rule.key() [COMPLIANT]
+──────────────────────────────────────────────────────────────
+Spec: evaluate_guard() in guard_parse.py, parse_guard_clauses() unchanged,
+      Rule.key() in rules.py, Rule.is_positional_guard property.
+
+Actual (effects/guard_parse.py):
+  ✅ evaluate_guard(guard, state, action) -> bool
+  ✅ Uses parse_guard_clauses() for parsing
+  ✅ Action clause: checks clause.action == action
+  ✅ Position clause: checks state.pos(eid) == pos
+  ✅ Empty clauses (all:[]) → True (always fires)
+  ✅ GuardClause TypedDict: unchanged
+  ✅ parse_guard_clauses(): unchanged
+  ✅ SceneState import added (TYPE_CHECKING guarded)
+
+Actual (effects/rules.py):
+  ✅ Rule.key() uses _canonical_guard() + effects tuple, excludes support
+  ✅ Rule.is_positional_guard property: any clause.has_pos
+
+ISSUES: None.
+
+─────────────────────────────────────────────────────────────────────────────
+
+TASK 3: Migrate engine.py to use Rule [COMPLIANT]
+─────────────────────────────────────────────────
+Spec: Replace all isinstance checks with Rule-based logic, use Rule.key() for
+      dedup, construct Rule instances in propose_rules, use rule.kind and
+      rule.is_positional_guard, remove _counter_key/_terminal_key helpers.
+
+Actual (effects/engine.py):
+  ✅ No isinstance checks on CounterRule/TerminalRule — CONFIRMED (grep: 0 matches)
+  ✅ _iter_managed_rules: routes by rule.kind ("terminal"/"delta")
+  ✅ _promote_rules: uses Rule.key() for dedup
+  ✅ _bump_support: uses Rule.key() for matching
+  ✅ _rule_matches_observation: iterates rule.effects, checks dim=="terminal" vs get()
+  ✅ _rule_mispredicted: uses rule.kind, iterates effects
+  ✅ propose_rules: constructs Rule instances with guard_spec, Effect tuples
+  ✅ _replace_rule_in_bucket helper: matches by key
+  ✅ No _counter_key, _terminal_key, _replace_counter, _replace_terminal functions
+  ✅ Imports only Effect, Rule from .rules (no CounterRule/TerminalRule)
+
+NOT IN SPEC but present:
+  ✅ isinstance(terminal, str) check in propose_rules — value type validation, not rule-type isinstance
+  ✅ _canonical_effect_value in rules.py — supporting key()
+
+ISSUES: None.
+
+─────────────────────────────────────────────────────────────────────────────
+
+TASK 4: Migrate dsl.py to use Rule [COMPLIANT]
+───────────────────────────────────────────────
+Spec: rule_to_dsl(Rule) produces backward-compatible DSL dicts,
+      dsl_to_rule(dsl) returns Rule instances, no CounterRule/TerminalRule imports.
+
+Actual (effects/dsl.py):
+  ✅ rule_to_dsl(rule: Rule) — routes by rule.kind, produces {"kind": "delta"/"terminal", ...}
+  ✅ dsl_to_rule(dsl) -> Rule — constructs Rule(guard_spec=..., effects=(Effect(...),), support=...)
+  ✅ Delta: entity_id from effect.of, delta from effect.value
+  ✅ Terminal: entity_id from guard clause parsing
+  ✅ No CounterRule/TerminalRule imports — only Rule, Effect
+  ✅ DSL format stays backward-compatible (kind: "delta"/"terminal")
+  ✅ Validation: delta_size != 0 in dsl_to_rule
+
+ISSUES: None.
+
+─────────────────────────────────────────────────────────────────────────────
+
+TASK 5: Migrate context.py, predict.py, learn.py [COMPLIANT]
+─────────────────────────────────────────────────────────────
+Spec: EffectContext uses tuple[Rule, ...], has_confirmed uses rule.kind +
+      rule.is_positional_guard, predict.py iterates Rule, learn.py returns
+      tuple[Rule, ...], no isinstance checks.
+
+Actual (effects/context.py):
+  ✅ terminal_rules: tuple[Rule, ...]
+  ✅ relational_rules: tuple[Rule, ...]
+  ✅ proposed_rules: tuple[Rule, ...]
+  ✅ has_confirmed: uses rule.kind == "delta" and not rule.is_positional_guard
+  ✅ No CounterRule/TerminalRule/RelationalRule imports
+  ✅ Only Rule imported from .rules
+
+Actual (effects/predict.py):
+  ✅ Iterates ctx.terminal_rules and ctx.relational_rules
+  ✅ No isinstance checks
+  ✅ No CounterRule/TerminalRule references
+  ✅ No direct Rule import (uses EffectContext which holds Rule)
+
+Actual (effects/learn.py):
+  ✅ learn_terminal_rules returns tuple[Rule, ...]
+  ✅ learn_counter_rules returns tuple[Rule, ...]
+  ✅ Constructs Rule instances with guard_spec and Effect tuples
+  ✅ learn_effect_context constructs EffectContext with Rule tuples
+  ✅ No CounterRule/TerminalRule references
+  ✅ Only Rule, Effect imported from .rules
+
+ISSUES: None.
+
+─────────────────────────────────────────────────────────────────────────────
+
+TASK 6: Migrate engine_log.py and __init__.py [COMPLIANT with NOTE]
+─────────────────────────────────────────────────────────────────────
+Spec: format_rule(Rule) routes by rule.kind, rule_id uses Rule.key(),
+      _index_rules removes isinstance checks, __init__.py exports Rule, Effect,
+      EffectRule, evaluate_guard; removes CounterRule/TerminalRule (or deprecates).
+
+Actual (effects/engine_log.py):
+  ✅ format_rule(rule: Rule) — routes by rule.kind ("delta"/"terminal")
+  ✅ format_rule extracts action/pos from guard_spec/effects
+  ✅ No isinstance checks on CounterRule/TerminalRule
+  ✅ _index_rules uses rule.key() for dict keys
+  ✅ Only Rule imported from .rules
+
+Actual (effects/__init__.py):
+  ✅ Exports Rule, Effect
+  ✅ Exports evaluate_guard, parse_guard_clauses, GuardClause
+  ✅ Exports rule_to_dsl, dsl_to_rule
+  ✅ Exports EffectContext, etc.
+  ⚠️  ALSO exports CounterRule and TerminalRule (in __all__)
+  NOTE: The spec says "deprecates or removes old names" — Task 1 spec says
+        "Keep CounterRule and TerminalRule as commented-out or with deprecation
+         warnings for one commit, then remove in Wave 2." However they are
+        still exported in __init__.py. The classes exist in rules.py with
+        "# deprecated, replaced by Rule" comments. This is a minor deviation
+        from "remove in Wave 2" but the deprecation comment is present.
+
+ISSUES: CounterRule and TerminalRule are still exported from __init__.py.
+        They are marked as deprecated in rules.py but remain in __all__.
+        Severity: LOW — spec allowed "kept as deprecated aliases".
+
+─────────────────────────────────────────────────────────────────────────────
+
+TASK 7: Migrate planning/query.py [COMPLIANT]
+──────────────────────────────────────────────
+Spec: _build_engine_rules routes by rule.kind, uses rule_to_dsl for
+      serialization, no CounterRule/TerminalRule imports.
+
+Actual (planning/query.py):
+  ✅ _build_engine_rules iterates ctx.terminal_rules and ctx.relational_rules
+  ✅ Uses rule_to_dsl(r) for serialization (no kind-based routing needed since
+     terminal_rules and relational_rules are already bucketed)
+  ✅ Imports: only EffectContext and rule_to_dsl (no Rule, no CounterRule)
+  ✅ No CounterRule/TerminalRule references
+
+NOTE: The spec says "route by rule.kind" for _build_engine_rules, but the
+      implementation keeps the existing two-bucket iteration (terminal_rules,
+      relational_rules) and just calls rule_to_dsl on each. This is equivalent
+      since EffectContext already has pre-sorted buckets. Not scope creep.
+
+ISSUES: None.
+
+─────────────────────────────────────────────────────────────────────────────
+
+TASK 8: Update test_effects.py and test_effects_engine.py [COMPLIANT]
+──────────────────────────────────────────────────────────────────────
+Spec: Replace CounterRule/TerminalRule constructions with Rule(guard_spec=...,
+      effects=(Effect(...),), support=...), update isinstance checks to
+      rule.kind comparisons.
+
+Actual (tests/unit/test_effects.py):
+  ✅ Uses Rule(guard_spec=..., effects=(Effect(...),), support=...) constructions
+  ✅ No CounterRule/TerminalRule references (grep: 0 matches)
+  ✅ Test for Rule with terminal effects (TERMINAL_GAME_OVER)
+  ✅ Test for Rule with delta effects
+
+Actual (tests/unit/test_effects_engine.py):
+  ✅ Uses Rule(guard_spec=..., effects=(Effect(...),), support=...) constructions
+  ✅ No CounterRule/TerminalRule references (grep: 0 matches)
+
+ISSUES: None.
+
+─────────────────────────────────────────────────────────────────────────────
+
+TASK 9: Update test_dsl.py and test_query_interface.py [COMPLIANT]
+──────────────────────────────────────────────────────────────────
+Spec: Replace CounterRule/TerminalRule with Rule/Effect constructions,
+      add test_dsl_to_rule_produces_rule_instances, test_dsl_round_trip_rule.
+
+Actual (tests/unit/test_dsl.py):
+  ✅ Uses Rule(guard_spec=..., effects=(Effect(...),), support=...) constructions
+  ✅ No CounterRule/TerminalRule references (grep: 0 matches)
+  ✅ Tests for delta and terminal DSL round-trips with Rule
+
+Actual (tests/unit/test_query_interface.py):
+  ✅ Uses Rule/Effect constructions for terminal and counter rules
+  ✅ No CounterRule/TerminalRule references (grep: 0 matches)
+
+ISSUES: None.
+
+─────────────────────────────────────────────────────────────────────────────
+
+TASK 10: Full test suite + mypy + ruff verification [NOT VERIFIED IN THIS CHECK]
+───────────────────────────────────────────────────────────────────────────────
+This is a verification task. The scope check confirms all files exist and
+are syntactically correct. Actual test/mypy/ruff execution is for F2/F3.
+
+=============================================================================
+MUST-NOT-HAVE COMPLIANCE
+=============================================================================
+
+1. No new rule types beyond Rule and Effect                     ✅ PASS
+   grep for SpawnRule|TransformRule: 0 matches
+
+2. No changes to SceneState                                     ✅ PASS
+   git diff shows no changes to effects/state.py
+
+3. No changes to the perception system                         ✅ PASS
+   git diff shows no changes to perception/
+
+4. No changes to the planning/search system beyond query.py    ⚠️  ISSUE
+   planning/exploration.py has significant changes (engine_step integration)
+   planning/heuristics.py has a new log_engine field
+   BUT: These changes are from PREVIOUS slices (slice 3 engine integration),
+   not from the generic-rule-dataclass refactor. The git history shows these
+   were committed before this refactor began.
+
+5. No multi-effect rules (each Rule has exactly one Effect)    ✅ PASS
+   All Rule constructions use single-element effects tuples
+
+6. No new guard clause types                                   ✅ PASS
+   GuardClause TypedDict unchanged, only "action" and "pos" dim guards
+
+7. No changes to DSL output format                             ✅ PASS
+   DSL format: kind: "delta"/"terminal" preserved
+
+8. No RelationalRule alias kept in production code             ⚠️  MINOR
+   RelationalRule = CounterRule alias exists in rules.py line 162
+   BUT it's in the deprecated section with CounterRule.
+   NOT exported from __init__.py (not in __all__).
+   Only reference outside rules.py: 0 matches.
+
+9. No adapter pattern or wrapper classes                       ✅ PASS
+   Rule IS the replacement, not a wrapper
+
+10. No LLM rule proposal wiring                                ✅ PASS
+    No new LLM wiring in effects/
+
+11. No changes to compute_residual or ResidualEntry            ✅ PASS
+    residual.py is a new file (from slice 3), not modified by this refactor
+
+=============================================================================
+CROSS-TASK CONTAMINATION CHECK
+=============================================================================
+
+Files in effects/ that were NOT modified by this refactor but exist:
+  effects/kinematics.py   — unchanged (slice 1)
+  effects/state.py         — unchanged (slice 2)
+  effects/residual.py     — new file (slice 3)
+
+Files outside effects/ modified during this refactor's commits:
+  planning/query.py        — IN SCOPE (Task 7)
+  planning/exploration.py  — NOT IN SCOPE but changed (slice 3 engine integration)
+  planning/heuristics.py   — NOT IN SCOPE but changed (log_engine config field)
+  planning/llm_planner.py  — NOT IN SCOPE (separate slice 4 feature)
+  planning/probe.py         — NOT IN SCOPE (separate slice 4 feature)
+  planning/__init__.py      — NOT IN SCOPE (separate slice 4 exports)
+  tests/unit/test_llm_planner.py — NOT IN SCOPE (separate slice 4)
+  tests/unit/test_llm_agent_loop.py — NOT IN SCOPE (separate slice 4)
+  tests/unit/test_probe.py — NOT IN SCOPE (separate slice 4)
+  agents/llm_client.py     — NOT IN SCOPE (separate feature)
+  agents/templates/llm_curiosity_agent.py — NOT IN SCOPE (separate feature)
+  agents/__init__.py        — NOT IN SCOPE (separate feature)
+
+CONTAMINATION VERDICT: The extra files (llm_planner, probe, exploration,
+heuristic, llm_client, etc.) are from PRIOR slices (slice 3 engine integration
+and slice 4 LLM planner), committed alongside but not part of the
+generic-rule-dataclass refactor. No cross-contamination from this refactor
+into unrelated systems.
+
+=============================================================================
+UNACCOUNTED CHANGES CHECK
+=============================================================================
+
+New files that are part of this refactor (from slice 3, prior to this refactor):
+  effects/residual.py     — part of slice 3, not this refactor
+
+Files modified by this refactor:
+  effects/rules.py         — Task 1 ✅
+  effects/guard_parse.py   — Task 2 ✅
+  effects/engine.py        — Task 3 ✅
+  effects/dsl.py           — Task 4 ✅
+  effects/context.py       — Task 5 ✅
+  effects/predict.py       — Task 5 ✅ (unchanged, was already correct)
+  effects/learn.py         — Task 5 ✅
+  effects/engine_log.py    — Task 6 ✅
+  effects/__init__.py      — Task 6 ✅
+  planning/query.py        — Task 7 ✅
+  tests/unit/test_effects.py         — Task 8 ✅
+  tests/unit/test_effects_engine.py  — Task 8 ✅
+  tests/unit/test_dsl.py             — Task 9 ✅
+  tests/unit/test_query_interface.py — Task 9 ✅
+  tests/unit/test_guard_parse.py     — Task 2 ✅ (created for evaluate_guard)
+
+Unaccounted files (in effects/ but not listed in spec):
+  None — all effects/ files are accounted for
+
+Unaccounted files (outside effects/):
+  planning/exploration.py  — slice 3 feature, not this refactor
+  planning/heuristics.py   — slice 3 feature, not this refactor
+  planning/llm_planner.py  — slice 4 feature, not this refactor
+  planning/probe.py         — slice 4 feature, not this refactor
+  All other extras: slice 4 features, not this refactor
+
+=============================================================================
+ISINSTANCE AUDIT (effects/ directory)
+=============================================================================
+
+All isinstance() calls in effects/:
+  effects/engine.py:175     — isinstance(terminal, str) — value type check ✅
+  effects/engine_log.py:18  — isinstance(e.value, int) — value type check ✅
+  effects/rules.py:33       — isinstance(value, list) — canonical key helper ✅
+  effects/rules.py:90       — isinstance(effect.value, int) — type guard ✅
+  effects/context.py:32     — isinstance(data, dict) — JSON parsing ✅
+  effects/kinematics.py:101 — isinstance(raw, dict) — data parsing ✅
+
+NO isinstance checks on CounterRule or TerminalRule anywhere.  ✅ PASS
+
+=============================================================================
+SUMMARY
+=============================================================================
+
+Tasks [10/10 compliant] | Contamination [CLEAN — 0 issues from this refactor]
+| Unaccounted [CLEAN — 0 unaccounted files in scope]
+
+Minor observations (not blocking):
+1. Rule field named "guard_spec" instead of "guard" — avoids method name collision,
+   functional equivalent, not scope creep
+2. CounterRule and TerminalRule still exported from __init__.py with deprecation
+   comments — spec allowed "kept as deprecated aliases", but __init__.py __all__
+   still lists them. Could be removed in a cleanup pass.
+3. planning/query.py uses existing bucket iteration (terminal_rules/relational_rules)
+   rather than routing by kind — functionally equivalent since EffectContext
+   already separates the buckets.
+4. predict.py was not modified (already correct from initial implementation) —
+   spec listed it but no changes were needed since it only iterates rules via
+   EffectContext, which now holds Rule instances.
+
+VERDICT: APPROVE
+
+All 10 tasks are compliant with spec. No scope creep detected. Minor naming
+deviations (guard_spec vs guard) are justified. Deprecated classes retained
+per spec allowance. No forbidden patterns (new rule types, SceneState changes,
+perception changes, isinstance on old types) found.

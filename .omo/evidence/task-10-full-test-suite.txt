@@ -1,0 +1,115 @@
+[1m============================= test session starts ==============================[0m
+platform linux -- Python 3.12.3, pytest-8.4.1, pluggy-1.6.0 -- /home/peara/projects/kaggle/ARC-AGI-3-Agents/.venv/bin/python
+cachedir: .pytest_cache
+rootdir: /home/peara/projects/kaggle/ARC-AGI-3-Agents
+configfile: pytest.ini
+plugins: requests-mock-1.12.1, langsmith-0.4.10, asyncio-1.1.0, anyio-4.10.0
+asyncio: mode=Mode.STRICT, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+[1mcollecting ... [0mcollected 71 items
+
+tests/unit/test_effects.py::TestLearnEffectContext::test_g50t_learns_terminal_rule [33mSKIPPED[0m[32m [  1%][0m
+tests/unit/test_effects.py::TestLearnEffectContext::test_g50t_learns_counter_rules [33mSKIPPED[0m[32m [  2%][0m
+tests/unit/test_effects.py::TestLearnEffectContext::test_ls20_no_terminal_rules [31mFAILED[0m[31m [  4%][0m
+tests/unit/test_effects.py::TestPredictPipeline::test_terminal_rule_sets_game_over [32mPASSED[0m[31m [  5%][0m
+tests/unit/test_effects.py::TestPredictPipeline::test_counter_rule_updates_size [32mPASSED[0m[31m [  7%][0m
+tests/unit/test_effects.py::TestBFSPrunesGameOver::test_game_over_branch_not_expanded [32mPASSED[0m[31m [  8%][0m
+tests/unit/test_effects.py::TestEffectsManifest::test_manifest_effect_expectations[ls20-random-legal] [33mSKIPPED[0m[31m [  9%][0m
+tests/unit/test_effects.py::TestEffectsManifest::test_manifest_effect_expectations[g50t-curiosity] [33mSKIPPED[0m[31m [ 11%][0m
+tests/unit/test_effects_engine.py::TestComputeResidual::test_size_mismatch [32mPASSED[0m[31m [ 12%][0m
+tests/unit/test_effects_engine.py::TestRuleEngineSynthetic::test_confirm_promotes_counter_rule [32mPASSED[0m[31m [ 14%][0m
+tests/unit/test_effects_engine.py::TestRuleEngineSynthetic::test_prune_removes_mispredicting_rule [32mPASSED[0m[31m [ 15%][0m
+tests/unit/test_effects_engine.py::TestLs20CounterPropose::test_entity_17_decrease_proposed_with_size_in_spec [31mFAILED[0m[31m [ 16%][0m
+tests/unit/test_effects_engine.py::TestG50tAbstain::test_action5_abstains_when_not_confirmed [33mSKIPPED[0m[31m [ 18%][0m
+tests/unit/test_effects_engine.py::TestEngineLog::test_diff_propose_confirm_promote [32mPASSED[0m[31m [ 19%][0m
+tests/unit/test_effects_engine.py::TestEffectsEngineManifest::test_abstain_expectations[ls20-random-legal] [33mSKIPPED[0m[31m [ 21%][0m
+tests/unit/test_effects_engine.py::TestEffectsEngineManifest::test_abstain_expectations[g50t-curiosity] [33mSKIPPED[0m[31m [ 22%][0m
+tests/unit/test_effects_state.py::TestSceneStateV2::test_default_terminal_is_alive [32mPASSED[0m[31m [ 23%][0m
+tests/unit/test_effects_state.py::TestSceneStateV2::test_get_set_dim [32mPASSED[0m[31m [ 25%][0m
+tests/unit/test_effects_state.py::TestSceneStateV2::test_set_dim_replaces_existing [32mPASSED[0m[31m [ 26%][0m
+tests/unit/test_effects_state.py::TestSceneStateV2::test_with_pos_matches_set_dim [32mPASSED[0m[31m [ 28%][0m
+tests/unit/test_effects_state.py::TestSceneStateV2::test_with_terminal [32mPASSED[0m[31m [ 29%][0m
+tests/unit/test_effects_state.py::TestSceneStateV2::test_fingerprint_default_excludes_terminal [32mPASSED[0m[31m [ 30%][0m
+tests/unit/test_effects_state.py::TestSceneStateV2::test_fingerprint_include_terminal [32mPASSED[0m[31m [ 32%][0m
+tests/unit/test_effects_state.py::TestSceneStateV2::test_latent_dim_round_trip [32mPASSED[0m[31m [ 33%][0m
+tests/unit/test_dsl.py::TestRuleDSL::test_counter_roundtrip_no_pos_guard [32mPASSED[0m[31m [ 35%][0m
+tests/unit/test_dsl.py::TestRuleDSL::test_counter_roundtrip_with_pos_guard [32mPASSED[0m[31m [ 36%][0m
+tests/unit/test_dsl.py::TestRuleDSL::test_terminal_roundtrip [32mPASSED[0m[31m      [ 38%][0m
+tests/unit/test_dsl.py::TestRuleDSL::test_two_hop_idempotency [32mPASSED[0m[31m     [ 39%][0m
+tests/unit/test_dsl.py::TestRuleDSL::test_dsl_json_serializable [32mPASSED[0m[31m   [ 40%][0m
+tests/unit/test_dsl.py::TestRuleDSL::test_validation_delta_size_zero [32mPASSED[0m[31m [ 42%][0m
+tests/unit/test_dsl.py::TestRuleDSL::test_validation_unknown_kind [32mPASSED[0m[31m [ 43%][0m
+tests/unit/test_dsl.py::TestRuleDSL::test_counter_action_only_guard [32mPASSED[0m[31m [ 45%][0m
+tests/unit/test_dsl.py::TestRuleDSL::test_multiple_counter_rules_differing_guard_pos_preserve_keys [32mPASSED[0m[31m [ 46%][0m
+tests/unit/test_guard_parse.py::TestGuardParse::test_simple_action_guard [32mPASSED[0m[31m [ 47%][0m
+tests/unit/test_guard_parse.py::TestGuardParse::test_pos_guard_conjunction [32mPASSED[0m[31m [ 49%][0m
+tests/unit/test_guard_parse.py::TestGuardParse::test_empty_conjunction [32mPASSED[0m[31m [ 50%][0m
+tests/unit/test_guard_parse.py::TestGuardParse::test_single_clause_all [32mPASSED[0m[31m [ 52%][0m
+tests/unit/test_guard_parse.py::TestGuardParse::test_pos_clause_with_of [32mPASSED[0m[31m [ 53%][0m
+tests/unit/test_exploration.py::TestExplorationLoopSimulated::test_controllable_detected [32mPASSED[0m[31m [ 54%][0m
+tests/unit/test_exploration.py::TestExplorationLoopSimulated::test_learned_motion_matches_truth [32mPASSED[0m[31m [ 56%][0m
+tests/unit/test_exploration.py::TestExplorationLoopSimulated::test_enters_bfs_phase [32mPASSED[0m[31m [ 57%][0m
+tests/unit/test_exploration.py::TestExplorationLoopSimulated::test_verify_loop_triggers_replan_on_wall [32mPASSED[0m[31m [ 59%][0m
+tests/unit/test_exploration.py::TestExplorationLoopSimulated::test_exploration_visits_many_cells [32mPASSED[0m[31m [ 60%][0m
+tests/unit/test_exploration.py::TestPerceptionSession::test_from_recording_recovers_controllable [33mSKIPPED[0m[31m [ 61%][0m
+tests/unit/test_exploration.py::TestPerceptionSession::test_summary_is_llm_ready [33mSKIPPED[0m[31m [ 63%][0m
+tests/unit/test_exploration.py::TestExplorationOnRecording::test_session_plus_policy_recovers_controllable [33mSKIPPED[0m[31m [ 64%][0m
+tests/unit/test_planning.py::TestReferenceRecordingsManifest::test_manifest_loads [32mPASSED[0m[31m [ 66%][0m
+tests/unit/test_planning.py::TestReferenceRecordingsManifest::test_manifest_paths_exist [31mFAILED[0m[31m [ 67%][0m
+tests/unit/test_planning.py::TestReferenceRecordingsManifest::test_manifest_file_is_valid_json [32mPASSED[0m[31m [ 69%][0m
+tests/unit/test_planning.py::TestPlanningOnRecordings::test_controllable_entity_exists[NOTSET] [33mSKIPPED[0m[31m [ 70%][0m
+tests/unit/test_planning.py::TestPlanningOnRecordings::test_movement_model_from_recording[NOTSET] [33mSKIPPED[0m[31m [ 71%][0m
+tests/unit/test_planning.py::TestPlanningOnRecordings::test_observed_steps_collected[NOTSET] [33mSKIPPED[0m[31m [ 73%][0m
+tests/unit/test_planning.py::TestPlanningOnRecordings::test_plan_reaches_goal[NOTSET] [33mSKIPPED[0m[31m [ 74%][0m
+tests/unit/test_planning.py::TestPlanningOnRecordings::test_plan_steps_match_or_extrapolate[NOTSET] [33mSKIPPED[0m[31m [ 76%][0m
+tests/unit/test_planning.py::TestPlanningOnRecordings::test_goal_matches_recording_end_frame[NOTSET] [33mSKIPPED[0m[31m [ 77%][0m
+tests/unit/test_query_interface.py::TestQueryInterface::test_bundle_json_round_trip [32mPASSED[0m[31m [ 78%][0m
+tests/unit/test_query_interface.py::TestQueryInterface::test_bundle_top_level_keys [32mPASSED[0m[31m [ 80%][0m
+tests/unit/test_query_interface.py::TestQueryInterface::test_bundle_with_effect_context [32mPASSED[0m[31m [ 81%][0m
+tests/unit/test_query_interface.py::TestQueryInterface::test_bundle_without_effect_context [32mPASSED[0m[31m [ 83%][0m
+tests/unit/test_query_interface.py::TestQueryInterface::test_fields_filter [32mPASSED[0m[31m [ 84%][0m
+tests/unit/test_query_interface.py::TestQueryInterface::test_max_recent_limits_recent_actions [32mPASSED[0m[31m [ 85%][0m
+tests/unit/test_query_interface.py::TestQueryInterface::test_action_legend_present_or_empty [32mPASSED[0m[31m [ 87%][0m
+tests/unit/test_query_interface.py::TestQueryInterface::test_available_actions_presence [32mPASSED[0m[31m [ 88%][0m
+tests/unit/test_query_interface.py::TestQueryInterface::test_recent_actions_omit_none_delta [32mPASSED[0m[31m [ 90%][0m
+tests/unit/test_perception_contract.py::TestSettledSubframeExtraction::test_last_subframe_is_settled_state [31mFAILED[0m[31m [ 91%][0m
+tests/unit/test_perception_contract.py::TestSettledSubframeExtraction::test_to_grid_defaults_to_last_subframe [32mPASSED[0m[31m [ 92%][0m
+tests/unit/test_perception_contract.py::TestPerceptionContract::test_summary_is_json_serializable[NOTSET] [33mSKIPPED[0m[31m [ 94%][0m
+tests/unit/test_perception_contract.py::TestPerceptionContract::test_controllable_expectation[NOTSET] [33mSKIPPED[0m[31m [ 95%][0m
+tests/unit/test_perception_contract.py::TestPerceptionContract::test_counter_expectation[NOTSET] [33mSKIPPED[0m[31m [ 97%][0m
+tests/unit/test_perception_contract.py::TestPerceptionContract::test_animation_events[NOTSET] [33mSKIPPED[0m[31m [ 98%][0m
+tests/unit/test_perception_contract.py::TestPerceptionContract::test_non_markovian_beacon[NOTSET] [33mSKIPPED[0m[31m [100%][0m
+
+=================================== FAILURES ===================================
+[31m[1m______________ TestLearnEffectContext.test_ls20_no_terminal_rules ______________[0m
+[1m[31mtests/unit/test_effects.py[0m:87: in test_ls20_no_terminal_rules
+    [0msession, _ = PerceptionSession.from_recording(path)[90m[39;49;00m
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[90m[39;49;00m
+[1m[31mperception/session/session.py[0m:142: in from_recording
+    [0m[94mwith[39;49;00m [96mopen[39;49;00m(path, encoding=[33m"[39;49;00m[33mutf-8[39;49;00m[33m"[39;49;00m) [94mas[39;49;00m f:[90m[39;49;00m
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^[90m[39;49;00m
+[1m[31mE   FileNotFoundError: [Errno 2] No such file or directory: '/home/peara/projects/kaggle/ARC-AGI-3-Agents/recordings/ls20-9607627b.random.80.4778fe67-d8c5-4853-90d8-36aff85bb079.recording.jsonl'[0m
+[31m[1m__ TestLs20CounterPropose.test_entity_17_decrease_proposed_with_size_in_spec ___[0m
+[1m[31mtests/unit/test_effects_engine.py[0m:150: in test_entity_17_decrease_proposed_with_size_in_spec
+    [0msession, _ = PerceptionSession.from_recording(path)[90m[39;49;00m
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[90m[39;49;00m
+[1m[31mperception/session/session.py[0m:142: in from_recording
+    [0m[94mwith[39;49;00m [96mopen[39;49;00m(path, encoding=[33m"[39;49;00m[33mutf-8[39;49;00m[33m"[39;49;00m) [94mas[39;49;00m f:[90m[39;49;00m
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^[90m[39;49;00m
+[1m[31mE   FileNotFoundError: [Errno 2] No such file or directory: '/home/peara/projects/kaggle/ARC-AGI-3-Agents/recordings/ls20-9607627b.random.80.4778fe67-d8c5-4853-90d8-36aff85bb079.recording.jsonl'[0m
+[31m[1m__________ TestReferenceRecordingsManifest.test_manifest_paths_exist ___________[0m
+[1m[31mtests/unit/test_planning.py[0m:34: in test_manifest_paths_exist
+    [0m[94massert[39;49;00m [95mnot[39;49;00m missing, [33mf[39;49;00m[33m"[39;49;00m[33mmissing recording files: [39;49;00m[33m{[39;49;00mmissing[33m}[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+[1m[31mE   AssertionError: missing recording files: ['/home/peara/projects/kaggle/ARC-AGI-3-Agents/recordings/ls20-9607627b.random.80.4778fe67-d8c5-4853-90d8-36aff85bb079.recording.jsonl', '/home/peara/projects/kaggle/ARC-AGI-3-Agents/recordings/ls20-9607627b.random.80.4778fe67-d8c5-4853-90d8-36aff85bb079.recording.jsonl'][0m
+[1m[31mE   assert not ['/home/peara/projects/kaggle/ARC-AGI-3-Agents/recordings/ls20-9607627b.random.80.4778fe67-d8c5-4853-90d8-36aff85bb079.recording.jsonl', '/home/peara/projects/kaggle/ARC-AGI-3-Agents/recordings/ls20-9607627b.random.80.4778fe67-d8c5-4853-90d8-36aff85bb079.recording.jsonl'][0m
+[31m[1m______ TestSettledSubframeExtraction.test_last_subframe_is_settled_state _______[0m
+[1m[31mtests/unit/test_perception_contract.py[0m:35: in test_last_subframe_is_settled_state
+    [0m[94mwith[39;49;00m [96mopen[39;49;00m(path, encoding=[33m"[39;49;00m[33mutf-8[39;49;00m[33m"[39;49;00m) [94mas[39;49;00m f:[90m[39;49;00m
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^[90m[39;49;00m
+[1m[31mE   FileNotFoundError: [Errno 2] No such file or directory: '/home/peara/projects/kaggle/ARC-AGI-3-Agents/recordings/g50t-5849a774.curiosity.200.31c022a3-dd4e-4ebe-8ad9-c237c6053bb1.recording.jsonl'[0m
+[36m[1m=========================== short test summary info ============================[0m
+[31mFAILED[0m tests/unit/test_effects.py::[1mTestLearnEffectContext::test_ls20_no_terminal_rules[0m - FileNotFoundError: [Errno 2] No such file or directory: '/home/peara/projects/kaggle/ARC-AGI-3-Agents/recordings/ls20-9607627b.random.80.4778fe67-d8c5-4853-90d8-36aff85bb079.recording.jsonl'
+[31mFAILED[0m tests/unit/test_effects_engine.py::[1mTestLs20CounterPropose::test_entity_17_decrease_proposed_with_size_in_spec[0m - FileNotFoundError: [Errno 2] No such file or directory: '/home/peara/projects/kaggle/ARC-AGI-3-Agents/recordings/ls20-9607627b.random.80.4778fe67-d8c5-4853-90d8-36aff85bb079.recording.jsonl'
+[31mFAILED[0m tests/unit/test_planning.py::[1mTestReferenceRecordingsManifest::test_manifest_paths_exist[0m - AssertionError: missing recording files: ['/home/peara/projects/kaggle/ARC-AGI-3-Agents/recordings/ls20-9607627b.random.80.4778fe67-d8c5-4853-90d8-36aff85bb079.recording.jsonl', '/home/peara/projects/kaggle/ARC-AGI-3-Agents/recordings/ls20-9607627b.random.80.4778fe67-d8c5-4853-90d8-36aff85bb079.recording.jsonl']
+assert not ['/home/peara/projects/kaggle/ARC-AGI-3-Agents/recordings/ls20-9607627b.random.80.4778fe67-d8c5-4853-90d8-36aff85bb079.recording.jsonl', '/home/peara/projects/kaggle/ARC-AGI-3-Agents/recordings/ls20-9607627b.random.80.4778fe67-d8c5-4853-90d8-36aff85bb079.recording.jsonl']
+[31mFAILED[0m tests/unit/test_perception_contract.py::[1mTestSettledSubframeExtraction::test_last_subframe_is_settled_state[0m - FileNotFoundError: [Errno 2] No such file or directory: '/home/peara/projects/kaggle/ARC-AGI-3-Agents/recordings/g50t-5849a774.curiosity.200.31c022a3-dd4e-4ebe-8ad9-c237c6053bb1.recording.jsonl'
+[31m=================== [31m[1m4 failed[0m, [32m46 passed[0m, [33m21 skipped[0m[31m in 0.30s[0m[31m ===================[0m

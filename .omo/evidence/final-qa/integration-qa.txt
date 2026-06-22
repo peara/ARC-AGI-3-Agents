@@ -1,0 +1,2 @@
+=== Cross-task Integration Test ===
+PASS: full pipeline -> ProbeGoal(predicate={'dim': 'pos', 'of': 0, 'near': {'of': 17, 'radius': 3}}, entities=None, dims=None, max_steps=50, reason='Entity 17 is unexplored')

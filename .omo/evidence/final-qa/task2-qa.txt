@@ -1,0 +1,14 @@
+=== Task 2 QA: _build_messages structure ===
+PASS: message structure
+
+=== Task 2 QA: _parse_response markdown ===
+PASS: markdown parse
+
+=== Task 2 QA: _parse_response raw JSON ===
+PASS: raw JSON parse
+
+=== Task 2 QA: _validate_goal invalid entity ===
+PASS: invalid entity rejected
+
+=== Task 2 QA: _build_messages failure context ===
+PASS: failure context in message
