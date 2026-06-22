@@ -22,18 +22,12 @@ from .engine_log import (  # noqa: F401
 )
 from .guard_parse import GuardClause, evaluate_guard, parse_guard_clauses
 from .kinematics import (
-    MovementModel,
     entity_exists_at,
     entity_pos_at,
     entity_size_at,
-    learn_movement_model,
-    predict_move,
-)
-from .kinematics import (
-    replay_predicted as replay_predicted_move,
 )
 from .learn import learn_counter_rules, learn_effect_context, learn_terminal_rules
-from .predict import is_terminal_dead_end, predict, replay_predicted
+from .predict import Prediction, is_terminal_dead_end, predict, replay_predicted
 from .residual import ResidualEntry, compute_residual
 from .rules import Effect, Rule
 from .state import Pos, SceneState, Terminal, terminal_from_state_name
@@ -45,8 +39,8 @@ __all__ = [
     "rule_to_dsl",
     "EffectContext",
     "FrameMeta",
-    "MovementModel",
     "Pos",
+    "Prediction",
     "ResidualEntry",
     "SceneState",
     "Terminal",
@@ -61,7 +55,6 @@ __all__ = [
     "is_terminal_dead_end",
     "learn_counter_rules",
     "learn_effect_context",
-    "learn_movement_model",
     "learn_terminal_rules",
     "load_recording_meta",
     "evaluate_guard",
@@ -69,12 +62,10 @@ __all__ = [
     "log_effect_context_diff",
     "merge_effect_context",
     "predict",
-    "predict_move",
     "propose_rules",
     "parse_guard_clauses",
     "prune_rules",
     "replay_predicted",
-    "replay_predicted_move",
     "should_engine_step",
     "terminal_from_state_name",
 ]

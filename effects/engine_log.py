@@ -24,6 +24,12 @@ def format_rule(rule: Rule) -> str:
             parts.append(f"e{e.of} {e.dim} {e.op}={e.value:+d}" if isinstance(e.value, int) else f"e{e.of} {e.dim} {e.op}={e.value}")
         guard = f" guard={rule.guard_spec}" if rule.is_positional_guard else ""
         return f"movement {' '.join(parts)} support={rule.support}{guard}"
+    if rule.kind == "collision":
+        parts = []
+        for e in rule.effects:
+            parts.append(f"e{e.of} {e.dim} {e.op}={e.value:+d}" if isinstance(e.value, int) else f"e{e.of} {e.dim} {e.op}={e.value}")
+        guard = f" guard={rule.guard_spec}" if rule.is_positional_guard else ""
+        return f"collision {' '.join(parts)} support={rule.support}{guard}"
     pos_guard = ""
     for e in rule.effects:
         if e.dim == "terminal":
@@ -45,6 +51,7 @@ def _index_rules(ctx: EffectContext) -> dict[tuple[object, ...], RuleIndexEntry]
         ("relational", ctx.relational_rules),
         ("terminal", ctx.terminal_rules),
         ("movement", ctx.movement_rules),
+        ("collision", ctx.collision_rules),
     ):
         for rule in rules:
             out[rule.key()] = RuleIndexEntry(
