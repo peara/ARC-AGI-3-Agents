@@ -12,8 +12,6 @@ from dataclasses import replace
 
 import pytest
 
-from dataclasses import replace
-
 from effects import (
     Effect,
     EffectContext,
@@ -24,7 +22,6 @@ from effects import (
     engine_step,
     propose_rules,
 )
-from effects.kinematics import MovementModel
 from planning.llm_planner import call_rule_proposer
 from planning.llm_rule_proposer import (
     NULL_RULE_PROPOSER,
@@ -41,13 +38,17 @@ from planning.llm_rule_proposer import (
 
 def _make_ctx(**overrides: object) -> EffectContext:
     """Build a minimal EffectContext for testing."""
-    model = MovementModel(
-        entity_id=0,
-        motion_by_action={1: (0, 0)},
-        known_transitions={((1, 1), 1): (1, 1)},
-        known_blocks=frozenset(),
+    m_rules = (
+        Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (0, 0)),),
+            support=1,
+            kind="movement",
+        ),
     )
-    ctx = EffectContext(movement=model, confirm_threshold=2)
+    c_rules: tuple[Rule, ...] = ()
+    actions = (1,)
+    ctx = EffectContext(movement_rules=m_rules, collision_rules=c_rules, available_actions=actions, confirm_threshold=2)
     if overrides:
         ctx = replace(ctx, **overrides)  # type: ignore[arg-type]
     return ctx
@@ -585,3 +586,127 @@ class TestNullProposerDoesNotBreakEngine:
         result2 = proposer(bundle, [])
         assert result2 == []
         assert call_count == 1  # LLM not called again
+
+
+# ---------------------------------------------------------------------------
+# Test 7: Collision DSL round-trip and validate_proposal
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestCollisionDslRoundTrip:
+    """rule_to_dsl / dsl_to_rule round-trip for collision rules."""
+
+    def test_collision_dsl_round_trip(self) -> None:
+        """A collision rule serializes and deserializes correctly."""
+        from effects.dsl import dsl_to_rule, rule_to_dsl
+
+        rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 5, "revert", ""),),
+            support=2,
+            kind="collision",
+        )
+        dsl = rule_to_dsl(rule)
+        assert dsl["kind"] == "collision"
+        assert dsl["guard"] == {"action": 1}
+        assert dsl["support"] == 2
+        assert len(dsl["effects"]) == 1
+        assert dsl["effects"][0]["op"] == "revert"
+        assert dsl["effects"][0]["value"] == ""
+
+        restored = dsl_to_rule(dsl)
+        assert restored.kind == "collision"
+        assert restored.guard_spec == {"action": 1}
+        assert restored.support == 2
+        assert len(restored.effects) == 1
+        assert restored.effects[0].op == "revert"
+        assert restored.effects[0].of == 5
+
+    def test_collision_dsl_round_trip_positional_guard(self) -> None:
+        """A collision rule with positional guard round-trips."""
+        from effects.dsl import dsl_to_rule, rule_to_dsl
+
+        rule = Rule(
+            guard_spec={
+                "all": [
+                    {"action": 1},
+                    {"dim": "pos", "of": 0, "eq": [3, 4]},
+                ]
+            },
+            effects=(Effect("pos", 0, "revert", ""),),
+            support=3,
+            kind="collision",
+        )
+        dsl = rule_to_dsl(rule)
+        restored = dsl_to_rule(dsl)
+        assert restored.key() == rule.key()
+
+    def test_collision_dsl_revert_value_defaults_to_empty(self) -> None:
+        """dsl_to_rule defaults value to '' for revert effects when key is missing."""
+        from effects.dsl import dsl_to_rule
+
+        dsl = {
+            "kind": "collision",
+            "guard": {"action": 2},
+            "effects": [{"dim": "pos", "of": 5, "op": "revert"}],
+            "support": 1,
+        }
+        rule = dsl_to_rule(dsl)
+        assert rule.effects[0].op == "revert"
+        assert rule.effects[0].value == ""
+
+
+@pytest.mark.unit
+class TestValidateCollisionProposal:
+    """validate_proposal accepts collision proposals."""
+
+    def test_valid_collision_proposal(self) -> None:
+        """A valid collision proposal with revert effect passes validation."""
+        proposal = {
+            "kind": "collision",
+            "guard": {"action": 1},
+            "effects": [{"dim": "pos", "of": 5, "op": "revert", "value": ""}],
+            "support": 2,
+        }
+        scene_entities: dict[int, dict] = {5: {"dim": "pos"}}
+        result = validate_proposal(proposal, scene_entities)
+        assert result is not None
+        assert result.kind == "collision"
+
+    def test_collision_proposal_revert_without_value_key(self) -> None:
+        """A collision proposal revert effect without value key passes validation."""
+        proposal = {
+            "kind": "collision",
+            "guard": {"action": 1},
+            "effects": [{"dim": "pos", "of": 5, "op": "revert"}],
+            "support": 1,
+        }
+        scene_entities: dict[int, dict] = {5: {"dim": "pos"}}
+        result = validate_proposal(proposal, scene_entities)
+        assert result is not None
+        assert result.kind == "collision"
+
+    def test_collision_proposal_without_revert_rejected(self) -> None:
+        """A collision proposal with no revert effect is rejected."""
+        proposal = {
+            "kind": "collision",
+            "guard": {"action": 1},
+            "effects": [{"dim": "pos", "of": 5, "op": "set", "value": (0, 0)}],
+            "support": 1,
+        }
+        scene_entities: dict[int, dict] = {5: {"dim": "pos"}}
+        result = validate_proposal(proposal, scene_entities)
+        assert result is None
+
+    def test_collision_proposal_invalid_entity_rejected(self) -> None:
+        """A collision proposal referencing non-existent entity is rejected."""
+        proposal = {
+            "kind": "collision",
+            "guard": {"action": 1},
+            "effects": [{"dim": "pos", "of": 99, "op": "revert", "value": ""}],
+            "support": 1,
+        }
+        scene_entities: dict[int, dict] = {5: {"dim": "pos"}}
+        result = validate_proposal(proposal, scene_entities)
+        assert result is None
