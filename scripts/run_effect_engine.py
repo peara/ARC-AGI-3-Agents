@@ -156,7 +156,7 @@ def main() -> None:
             continue
         action = int(session.action_ids[fidx])
         predicted = predict(before, action, ctx)
-        if predicted is None:
+        if predicted.unknown:
             if not args.quiet_residuals:
                 print(f"f{fidx} a{action} | predict abstained")
             continue
@@ -179,7 +179,7 @@ def main() -> None:
             change_steps += 1
         elif not args.quiet_residuals:
             residual = compute_residual(
-                predicted,
+                predicted.state,
                 after,
                 entity_ids=tuple(entity_ids),
                 dims=dims,

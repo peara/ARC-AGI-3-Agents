@@ -115,21 +115,20 @@ def main() -> None:
     ctx = build_effect_context(reg, catalog, action_ids, args.entity)
     if ctx is None:
         raise SystemExit("could not build effect context")
-    model = ctx.movement
 
     start_pos = start.pos(args.entity)
     print(f"\nentity #{args.entity}")
     print(f"  start frame {args.start_frame} pos={start_pos}")
     print(f"  goal pos={target}")
-    print(f"  motion_by_action={model.motion_by_action}")
+    print(f"  available_actions={ctx.available_actions}")
     print(
-        f"  known transitions={len(model.known_transitions)} "
-        f"blocks={len(model.known_blocks)}"
+        f"  movement_rules={len(ctx.movement_rules)} "
+        f"collision_rules={len(ctx.collision_rules)}"
     )
 
-    actions_available = sorted(model.motion_by_action)
+    actions_available = sorted(ctx.available_actions)
     if not actions_available:
-        raise SystemExit("no actions in movement model")
+        raise SystemExit("no actions available in effect context")
 
     plan = plan_bfs(
         start,

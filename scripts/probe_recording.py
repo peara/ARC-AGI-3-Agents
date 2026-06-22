@@ -219,9 +219,9 @@ def main() -> None:
     if ctx is None:
         raise SystemExit("could not build effect context")
 
-    actions_available = sorted(ctx.movement.motion_by_action)
+    actions_available = sorted(ctx.available_actions)
     if not actions_available:
-        raise SystemExit("no actions in movement model")
+        raise SystemExit("no actions available in effect context")
 
     print(f"actions: {actions_available}")
     print(f"rules: {len(ctx.relational_rules)} relational, {len(ctx.terminal_rules)} terminal")
