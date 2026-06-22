@@ -446,3 +446,190 @@ class TestProbeGoal:
 
         assert result == ([], [])
         assert mock_bfs.call_args[1]["max_nodes"] == 50
+
+
+# ===========================================================================
+# TestExecuteProbeWithAction
+# ===========================================================================
+
+
+@pytest.mark.unit
+class TestExecuteProbeWithAction:
+    """Tests for execute_probe when ProbeGoal has an action field."""
+
+    # -----------------------------------------------------------------------
+    # ProbeGoal construction with action
+    # -----------------------------------------------------------------------
+
+    def test_probegoal_with_action_construction(self) -> None:
+        """ProbeGoal accepts action field and defaults to None."""
+        goal_no_action = ProbeGoal(target={"dim": "pos", "of": 0, "eq": [5, 10]})
+        assert goal_no_action.action is None
+
+        goal_with_action = ProbeGoal(
+            target={"dim": "pos", "of": 0, "eq": [5, 10]},
+            action=3,
+        )
+        assert goal_with_action.action == 3
+
+    # -----------------------------------------------------------------------
+    # action=3 and already at target → returns ([action], [])
+    # -----------------------------------------------------------------------
+
+    def test_action_already_at_target_returns_action_only(self) -> None:
+        """When goal.action is set and start state satisfies target, returns ([action], [])."""
+        from unittest.mock import patch
+
+        scene = _mock_scene()
+        goal = ProbeGoal(
+            target={"dim": "pos", "of": 0, "eq": [5, 10]},
+            action=3,
+            max_steps=50,
+        )
+        # Start state already satisfies the goal predicate
+        fake_start = _state(0, "pos", (5, 10))
+        fake_ctx = MagicMock()
+
+        with (
+            patch("planning.probe.snapshot_from_scene", return_value=fake_start),
+            patch("planning.probe.plan_bfs") as mock_bfs,
+        ):
+            result = execute_probe(goal, scene, fake_ctx, [0, 1, 2, 3])
+
+        assert result == ([3], [])
+        mock_bfs.assert_not_called()
+
+    # -----------------------------------------------------------------------
+    # action=3 and BFS finds plan → returns (plan + [action], [])
+    # -----------------------------------------------------------------------
+
+    def test_action_bfs_finds_plan_appends_action(self) -> None:
+        """When goal.action is set and BFS finds a plan, returns plan + [action]."""
+        from unittest.mock import patch
+
+        scene = _mock_scene()
+        goal = ProbeGoal(
+            target={"dim": "pos", "of": 0, "eq": [5, 10]},
+            action=3,
+            max_steps=50,
+        )
+        # Start state does NOT satisfy the goal (wrong position)
+        fake_start = _state(0, "pos", (0, 0))
+        fake_ctx = MagicMock()
+
+        with (
+            patch("planning.probe.snapshot_from_scene", return_value=fake_start),
+            patch("planning.probe.plan_bfs", return_value=([1, 1, 2], [])),
+        ):
+            result = execute_probe(goal, scene, fake_ctx, [0, 1, 2, 3])
+
+        assert result == ([1, 1, 2, 3], [])
+
+    # -----------------------------------------------------------------------
+    # action=3 and BFS fails → returns (None, unknowns)
+    # -----------------------------------------------------------------------
+
+    def test_action_bfs_fails_returns_none_unknowns(self) -> None:
+        """When goal.action is set and BFS fails, returns (None, unknowns)."""
+        from unittest.mock import patch
+
+        from planning.query import UnknownAction
+
+        scene = _mock_scene()
+        goal = ProbeGoal(
+            target={"dim": "pos", "of": 0, "eq": [5, 10]},
+            action=3,
+            max_steps=50,
+        )
+        fake_start = _state(0, "pos", (0, 0))
+        fake_ctx = MagicMock()
+        unknown_state = _state(0, "pos", (3, 3))
+        unknowns = [UnknownAction(action=4, state=unknown_state)]
+
+        with (
+            patch("planning.probe.snapshot_from_scene", return_value=fake_start),
+            patch("planning.probe.plan_bfs", return_value=(None, unknowns)),
+        ):
+            result = execute_probe(goal, scene, fake_ctx, [0, 1, 2, 3])
+
+        assert result == (None, unknowns)
+        # The unknowns are passed through as-is; action is NOT appended to a None plan
+
+    # -----------------------------------------------------------------------
+    # action=None (default) and BFS succeeds → returns (plan, [])
+    # -----------------------------------------------------------------------
+
+    def test_no_action_bfs_succeeds_returns_plan(self) -> None:
+        """When goal.action is None and BFS succeeds, returns (plan, []) unchanged."""
+        from unittest.mock import patch
+
+        scene = _mock_scene()
+        goal = ProbeGoal(
+            target={"dim": "pos", "of": 0, "eq": [5, 10]},
+            action=None,
+            max_steps=50,
+        )
+        fake_start = _state(0, "pos", (0, 0))
+        fake_ctx = MagicMock()
+
+        with (
+            patch("planning.probe.snapshot_from_scene", return_value=fake_start),
+            patch("planning.probe.plan_bfs", return_value=([1, 2], [])),
+        ):
+            result = execute_probe(goal, scene, fake_ctx, [0, 1, 2, 3])
+
+        assert result == ([1, 2], [])
+
+    # -----------------------------------------------------------------------
+    # action=None (default) and BFS fails → returns (None, unknowns)
+    # -----------------------------------------------------------------------
+
+    def test_no_action_bfs_fails_returns_none_unknowns(self) -> None:
+        """When goal.action is None and BFS fails, returns (None, unknowns)."""
+        from unittest.mock import patch
+
+        from planning.query import UnknownAction
+
+        scene = _mock_scene()
+        goal = ProbeGoal(
+            target={"dim": "pos", "of": 0, "eq": [5, 10]},
+            action=None,
+            max_steps=50,
+        )
+        fake_start = _state(0, "pos", (0, 0))
+        fake_ctx = MagicMock()
+        unknowns = [UnknownAction(action=7, state=_state(0, "pos", (1, 1)))]
+
+        with (
+            patch("planning.probe.snapshot_from_scene", return_value=fake_start),
+            patch("planning.probe.plan_bfs", return_value=(None, unknowns)),
+        ):
+            result = execute_probe(goal, scene, fake_ctx, [0, 1, 2, 3])
+
+        assert result == (None, unknowns)
+
+    # -----------------------------------------------------------------------
+    # plan_bfs NOT called when already at target with action
+    # -----------------------------------------------------------------------
+
+    def test_plan_bfs_not_called_when_already_at_target_with_action(self) -> None:
+        """Verify plan_bfs is never called when start state already satisfies target and action is set."""
+        from unittest.mock import patch
+
+        scene = _mock_scene()
+        goal = ProbeGoal(
+            target={"dim": "pos", "of": 0, "eq": [5, 10]},
+            action=3,
+            max_steps=50,
+        )
+        fake_start = _state(0, "pos", (5, 10))
+        fake_ctx = MagicMock()
+
+        with (
+            patch("planning.probe.snapshot_from_scene", return_value=fake_start),
+            patch("planning.probe.plan_bfs") as mock_bfs,
+        ):
+            result = execute_probe(goal, scene, fake_ctx, [0, 1, 2, 3])
+
+        assert result == ([3], [])
+        mock_bfs.assert_not_called()
