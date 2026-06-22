@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from effects.rules import Rule
 from effects import Pos
+from effects.rules import Rule
 from perception.session import SceneSnapshot
 
 

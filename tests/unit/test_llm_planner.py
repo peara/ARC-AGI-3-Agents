@@ -15,7 +15,6 @@ from planning.llm_planner import (
 )
 from planning.probe import ProbeGoal
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -386,11 +385,13 @@ class TestLLMPlanner:
 
     def test_call_planner_valid_response(self) -> None:
         """Mock returns valid JSON → ProbeGoal."""
-        response_json = json.dumps({
-            "target": {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
-            "max_steps": 50,
-            "reason": "Entity 17 is unexplored — navigate close to observe",
-        })
+        response_json = json.dumps(
+            {
+                "target": {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
+                "max_steps": 50,
+                "reason": "Entity 17 is unexplored — navigate close to observe",
+            }
+        )
         bundle = _bundle()
         result = call_planner(bundle, [0, 1, 2, 3], _mock_llm_call(response_json))
         assert result is not None
@@ -402,11 +403,13 @@ class TestLLMPlanner:
 
     def test_call_planner_list_entities_format(self) -> None:
         """Entity list format (actual scene.summary() output) validates correctly."""
-        response_json = json.dumps({
-            "target": {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
-            "max_steps": 50,
-            "reason": "Entity 17 is unexplored — navigate close to observe",
-        })
+        response_json = json.dumps(
+            {
+                "target": {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
+                "max_steps": 50,
+                "reason": "Entity 17 is unexplored — navigate close to observe",
+            }
+        )
         bundle = _bundle(entities_format="list")
         result = call_planner(bundle, [0, 1, 2, 3], _mock_llm_call(response_json))
         assert result is not None
@@ -416,11 +419,13 @@ class TestLLMPlanner:
 
     def test_call_planner_list_entities_rejects_invalid(self) -> None:
         """List entity format rejects goals referencing nonexistent entities."""
-        response_json = json.dumps({
-            "target": {"dim": "pos", "of": 99, "near": {"of": 17, "radius": 3}},
-            "max_steps": 50,
-            "reason": "navigate to nonexistent entity 99",
-        })
+        response_json = json.dumps(
+            {
+                "target": {"dim": "pos", "of": 99, "near": {"of": 17, "radius": 3}},
+                "max_steps": 50,
+                "reason": "navigate to nonexistent entity 99",
+            }
+        )
         bundle = _bundle(entities_format="list")
         result = call_planner(bundle, [0, 1, 2, 3], _mock_llm_call(response_json))
         assert result is None
@@ -433,11 +438,13 @@ class TestLLMPlanner:
 
     def test_call_planner_invalid_entity(self) -> None:
         """Mock returns JSON with invalid entity → None."""
-        response_json = json.dumps({
-            "target": {"dim": "pos", "of": 99, "eq": [5, 10]},
-            "max_steps": 50,
-            "reason": "navigate to nonexistent",
-        })
+        response_json = json.dumps(
+            {
+                "target": {"dim": "pos", "of": 99, "eq": [5, 10]},
+                "max_steps": 50,
+                "reason": "navigate to nonexistent",
+            }
+        )
         bundle = _bundle()  # has entities 0 and 17 only
         result = call_planner(bundle, [0, 1, 2, 3], _mock_llm_call(response_json))
         assert result is None
@@ -446,11 +453,15 @@ class TestLLMPlanner:
         """Failure context is passed through to messages."""
         failure = {"type": "prediction_failure", "detail": "no path found"}
         bundle = _bundle()
-        llm_call = _mock_llm_call(json.dumps({
-            "target": {"dim": "pos", "of": 0, "eq": [5, 10]},
-            "max_steps": 30,
-            "reason": "retry",
-        }))
+        llm_call = _mock_llm_call(
+            json.dumps(
+                {
+                    "target": {"dim": "pos", "of": 0, "eq": [5, 10]},
+                    "max_steps": 30,
+                    "reason": "retry",
+                }
+            )
+        )
 
         result = call_planner(bundle, [0, 1, 2, 3], llm_call, failure_context=failure)
 
@@ -464,22 +475,26 @@ class TestLLMPlanner:
 
     def test_call_planner_missing_keys(self) -> None:
         """Mock returns JSON missing 'reason' → None."""
-        response_json = json.dumps({
-            "target": {"dim": "pos", "of": 0, "eq": [5, 10]},
-            "max_steps": 50,
-        })
+        response_json = json.dumps(
+            {
+                "target": {"dim": "pos", "of": 0, "eq": [5, 10]},
+                "max_steps": 50,
+            }
+        )
         bundle = _bundle()
         result = call_planner(bundle, [0, 1, 2, 3], _mock_llm_call(response_json))
         assert result is None
 
     def test_call_planner_with_action(self) -> None:
         """Mock returns valid JSON with action field → ProbeGoal."""
-        response_json = json.dumps({
-            "target": {"dim": "pos", "of": 0, "near": [5, 10], "radius": 2},
-            "action": 3,
-            "max_steps": 50,
-            "reason": "probe action 3",
-        })
+        response_json = json.dumps(
+            {
+                "target": {"dim": "pos", "of": 0, "near": [5, 10], "radius": 2},
+                "action": 3,
+                "max_steps": 50,
+                "reason": "probe action 3",
+            }
+        )
         bundle = _bundle()
         result = call_planner(bundle, [0, 1, 2, 3], _mock_llm_call(response_json))
         assert result is not None

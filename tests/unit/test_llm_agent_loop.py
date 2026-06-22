@@ -1,4 +1,5 @@
 """Unit tests for agents/templates/llm_curiosity_agent.py — LLM agent loop state machine."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -36,10 +37,11 @@ def _make_agent() -> LlmCuriosity:
     """Create an LlmCuriosity agent with mocked-out infrastructure."""
     from agents.templates.llm_curiosity_agent import LlmCuriosity
 
-    with patch("agents.templates.llm_curiosity_agent.LLMClient"), patch(
-        "agents.templates.llm_curiosity_agent.PerceptionSession"
-    ), patch("agents.templates.llm_curiosity_agent.ExplorationPolicy") as MockPolicy, patch(
-        "agents.templates.llm_curiosity_agent.ExplorationConfig"
+    with (
+        patch("agents.templates.llm_curiosity_agent.LLMClient"),
+        patch("agents.templates.llm_curiosity_agent.PerceptionSession"),
+        patch("agents.templates.llm_curiosity_agent.ExplorationPolicy") as MockPolicy,
+        patch("agents.templates.llm_curiosity_agent.ExplorationConfig"),
     ):
         # ExplorationPolicy mock
         mock_policy = MagicMock()
@@ -66,7 +68,9 @@ def _make_agent() -> LlmCuriosity:
             arc_env=MagicMock(),
         )
         # Replace llm_call with a mock so no network calls happen
-        agent.llm_call = MagicMock(return_value='{"target": {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}}, "max_steps": 50, "reason": "probe entity 17"}')
+        agent.llm_call = MagicMock(
+            return_value='{"target": {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}}, "max_steps": 50, "reason": "probe entity 17"}'
+        )
     return agent
 
 
@@ -95,9 +99,13 @@ class TestLlmCuriosityAgentLoop:
         """When controllable_id is None and policy.context is None, agent stays in 'random' and never calls LLM."""
         agent = _make_agent()
         # Force llm_call to raise if ever called
-        agent.llm_call = MagicMock(side_effect=AssertionError("LLM should not be called"))
+        agent.llm_call = MagicMock(
+            side_effect=AssertionError("LLM should not be called")
+        )
 
-        frame = _FakeFrameData(state=GameState.NOT_FINISHED, available_actions=[1, 2, 3, 4])
+        frame = _FakeFrameData(
+            state=GameState.NOT_FINISHED, available_actions=[1, 2, 3, 4]
+        )
         # With no scene controllable and no context, phase stays "random"
         agent._phase = "random"
         # Mock scene with no controllable
@@ -121,7 +129,9 @@ class TestLlmCuriosityAgentLoop:
     def test_phase_transition_to_llm_directed(self) -> None:
         """When controllable_id and context become available, phase transitions to 'llm_directed' and LLM is called."""
         agent = _make_agent()
-        frame = _FakeFrameData(state=GameState.NOT_FINISHED, available_actions=[1, 2, 3, 4])
+        frame = _FakeFrameData(
+            state=GameState.NOT_FINISHED, available_actions=[1, 2, 3, 4]
+        )
 
         # Set up scene with controllable entity
         scene = _make_scene_with_controllable()
@@ -132,9 +142,12 @@ class TestLlmCuriosityAgentLoop:
         agent.policy.status.return_value.diverged = False
 
         # First call should transition to llm_directed and call LLM
-        with patch("agents.templates.llm_curiosity_agent.call_planner") as mock_call_planner, patch(
-            "agents.templates.llm_curiosity_agent.execute_probe"
-        ) as mock_execute:
+        with (
+            patch(
+                "agents.templates.llm_curiosity_agent.call_planner"
+            ) as mock_call_planner,
+            patch("agents.templates.llm_curiosity_agent.execute_probe") as mock_execute,
+        ):
             mock_call_planner.return_value = ProbeGoal(
                 target={"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
                 max_steps=50,
@@ -163,9 +176,13 @@ class TestLlmCuriosityAgentLoop:
         agent.policy.context = MagicMock()
         agent.policy.status.return_value.diverged = False
 
-        frame = _FakeFrameData(state=GameState.NOT_FINISHED, available_actions=[1, 2, 3, 4])
+        frame = _FakeFrameData(
+            state=GameState.NOT_FINISHED, available_actions=[1, 2, 3, 4]
+        )
 
-        with patch("agents.templates.llm_curiosity_agent.call_planner") as mock_call_planner:
+        with patch(
+            "agents.templates.llm_curiosity_agent.call_planner"
+        ) as mock_call_planner:
             # call_planner returns None (parse failure)
             mock_call_planner.return_value = None
 
@@ -192,7 +209,9 @@ class TestLlmCuriosityAgentLoop:
         agent.policy.context = MagicMock()
         agent.policy.status.return_value.diverged = False
 
-        frame = _FakeFrameData(state=GameState.NOT_FINISHED, available_actions=[1, 2, 3, 4])
+        frame = _FakeFrameData(
+            state=GameState.NOT_FINISHED, available_actions=[1, 2, 3, 4]
+        )
 
         goal = ProbeGoal(
             target={"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
@@ -200,8 +219,14 @@ class TestLlmCuriosityAgentLoop:
             reason="probe entity 17",
         )
 
-        with patch("agents.templates.llm_curiosity_agent.call_planner") as mock_call_planner, patch(
-            "agents.templates.llm_curiosity_agent.execute_probe", return_value=([3, 1, 1, 4], [])
+        with (
+            patch(
+                "agents.templates.llm_curiosity_agent.call_planner"
+            ) as mock_call_planner,
+            patch(
+                "agents.templates.llm_curiosity_agent.execute_probe",
+                return_value=([3, 1, 1, 4], []),
+            ),
         ):
             mock_call_planner.return_value = goal
 
@@ -235,9 +260,13 @@ class TestLlmCuriosityAgentLoop:
         agent.policy.context = MagicMock()
         agent.policy.status.return_value.diverged = False
 
-        frame = _FakeFrameData(state=GameState.NOT_FINISHED, available_actions=[1, 2, 3, 4])
+        frame = _FakeFrameData(
+            state=GameState.NOT_FINISHED, available_actions=[1, 2, 3, 4]
+        )
 
-        with patch("agents.templates.llm_curiosity_agent.call_planner") as mock_call_planner:
+        with patch(
+            "agents.templates.llm_curiosity_agent.call_planner"
+        ) as mock_call_planner:
             mock_call_planner.return_value = None  # no new goal this time
 
             action = agent.choose_action([frame], frame)
@@ -278,9 +307,13 @@ class TestLlmCuriosityAgentLoop:
         agent.policy.context = MagicMock()
         agent.policy.status.return_value.diverged = True  # ← divergence!
 
-        frame = _FakeFrameData(state=GameState.NOT_FINISHED, available_actions=[1, 2, 3, 4])
+        frame = _FakeFrameData(
+            state=GameState.NOT_FINISHED, available_actions=[1, 2, 3, 4]
+        )
 
-        with patch("agents.templates.llm_curiosity_agent.call_planner") as mock_call_planner:
+        with patch(
+            "agents.templates.llm_curiosity_agent.call_planner"
+        ) as mock_call_planner:
             mock_call_planner.return_value = None  # no new goal
 
             agent.choose_action([frame], frame)
@@ -334,9 +367,13 @@ class TestLlmCuriosityAgentLoop:
         agent.policy.context = MagicMock()
         agent.policy.status.return_value.diverged = False
 
-        frame = _FakeFrameData(state=GameState.NOT_FINISHED, available_actions=[1, 2, 3, 4])
+        frame = _FakeFrameData(
+            state=GameState.NOT_FINISHED, available_actions=[1, 2, 3, 4]
+        )
 
-        with patch("agents.templates.llm_curiosity_agent.call_planner") as mock_call_planner:
+        with patch(
+            "agents.templates.llm_curiosity_agent.call_planner"
+        ) as mock_call_planner:
             mock_call_planner.side_effect = RuntimeError("LLM network error")
 
             action = agent.choose_action([frame], frame)
@@ -354,8 +391,8 @@ class TestLlmCuriosityAgentLoop:
 
     def test_unreachable_goal_stores_unknowns(self) -> None:
         """When BFS returns None (unreachable), failure_context includes unknowns."""
-        from planning.query import UnknownAction
         from effects.state import SceneState
+        from planning.query import UnknownAction
 
         agent = _make_agent()
         agent._phase = "llm_directed"
@@ -367,7 +404,9 @@ class TestLlmCuriosityAgentLoop:
         agent.policy.context = MagicMock()
         agent.policy.status.return_value.diverged = False
 
-        frame = _FakeFrameData(state=GameState.NOT_FINISHED, available_actions=[1, 2, 3, 4])
+        frame = _FakeFrameData(
+            state=GameState.NOT_FINISHED, available_actions=[1, 2, 3, 4]
+        )
 
         goal = ProbeGoal(
             target={"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
@@ -379,9 +418,12 @@ class TestLlmCuriosityAgentLoop:
             UnknownAction(action=3, state=SceneState(relevant=((0, ("pos", (1, 2))),))),
         ]
 
-        with patch("agents.templates.llm_curiosity_agent.call_planner") as mock_call_planner, patch(
-            "agents.templates.llm_curiosity_agent.execute_probe"
-        ) as mock_execute:
+        with (
+            patch(
+                "agents.templates.llm_curiosity_agent.call_planner"
+            ) as mock_call_planner,
+            patch("agents.templates.llm_curiosity_agent.execute_probe") as mock_execute,
+        ):
             mock_call_planner.return_value = goal
             mock_execute.return_value = (None, fake_unknowns)
 
@@ -412,7 +454,9 @@ class TestLlmCuriosityAgentLoop:
         agent.policy.context = MagicMock()
         agent.policy.status.return_value.diverged = False
 
-        frame = _FakeFrameData(state=GameState.NOT_FINISHED, available_actions=[1, 2, 3, 4])
+        frame = _FakeFrameData(
+            state=GameState.NOT_FINISHED, available_actions=[1, 2, 3, 4]
+        )
 
         goal = ProbeGoal(
             target={"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
@@ -421,9 +465,12 @@ class TestLlmCuriosityAgentLoop:
             action=2,
         )
 
-        with patch("agents.templates.llm_curiosity_agent.call_planner") as mock_call_planner, patch(
-            "agents.templates.llm_curiosity_agent.execute_probe"
-        ) as mock_execute:
+        with (
+            patch(
+                "agents.templates.llm_curiosity_agent.call_planner"
+            ) as mock_call_planner,
+            patch("agents.templates.llm_curiosity_agent.execute_probe") as mock_execute,
+        ):
             mock_call_planner.return_value = goal
             # Empty plan means "already at target"
             mock_execute.return_value = ([], [])
@@ -449,7 +496,9 @@ class TestLlmCuriosityAgentLoop:
         agent.policy.context = MagicMock()
         agent.policy.status.return_value.diverged = False
 
-        frame = _FakeFrameData(state=GameState.NOT_FINISHED, available_actions=[1, 2, 3, 4])
+        frame = _FakeFrameData(
+            state=GameState.NOT_FINISHED, available_actions=[1, 2, 3, 4]
+        )
 
         goal = ProbeGoal(
             target={"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
@@ -457,9 +506,12 @@ class TestLlmCuriosityAgentLoop:
             reason="probe entity 17",
         )
 
-        with patch("agents.templates.llm_curiosity_agent.call_planner") as mock_call_planner, patch(
-            "agents.templates.llm_curiosity_agent.execute_probe"
-        ) as mock_execute:
+        with (
+            patch(
+                "agents.templates.llm_curiosity_agent.call_planner"
+            ) as mock_call_planner,
+            patch("agents.templates.llm_curiosity_agent.execute_probe") as mock_execute,
+        ):
             mock_call_planner.return_value = goal
             mock_execute.return_value = ([], [])
 

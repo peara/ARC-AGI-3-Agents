@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from effects import learn_effect_context, frame_meta_from_steps
+from effects import frame_meta_from_steps, learn_effect_context
 from perception.session import RESET_ACTION, PerceptionSession
 from planning import ExplorationConfig, ExplorationPolicy
 from tests.perception_fixtures import load_manifest
@@ -98,14 +98,17 @@ class TestExplorationLoopSimulated:
         ctx = policy.context
         assert ctx is not None and ctx.available_actions
         # Extract delta-by-action from movement rules
-        from effects.rules import Effect
         delta_by_action: dict[int, tuple[int, int]] = {}
         for rule in ctx.movement_rules:
             # Generic rules guard on action only; positional rules guard on action+pos
             if "action" in rule.guard_spec and len(rule.guard_spec) == 1:
                 action = int(rule.guard_spec["action"])
                 for eff in rule.effects:
-                    if eff.op == "delta" and eff.dim == "pos" and isinstance(eff.value, tuple):
+                    if (
+                        eff.op == "delta"
+                        and eff.dim == "pos"
+                        and isinstance(eff.value, tuple)
+                    ):
                         delta_by_action[action] = eff.value  # type: ignore[assignment]
         for action, disp in delta_by_action.items():
             assert disp == SIM_MOTION[action]
