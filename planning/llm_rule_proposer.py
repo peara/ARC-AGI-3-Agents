@@ -188,7 +188,7 @@ def validate_proposal(proposal: dict, scene_entities: dict[int, dict]) -> Rule |
     """Validate a single proposal dict against scene entity data.
 
     Checks:
-    - ``kind`` is ``"delta"``, ``"terminal"``, or ``"movement"``
+    - ``kind`` is ``"delta"``, ``"terminal"``, ``"movement"``, or ``"collision"``
     - Guard spec parses without error via ``parse_guard_clauses``
     - All entity IDs in guard/effect exist in ``scene_entities``
     - Effect structure is valid (dim, of, op, value)
@@ -198,7 +198,7 @@ def validate_proposal(proposal: dict, scene_entities: dict[int, dict]) -> Rule |
     """
     # --- kind ---
     kind = proposal.get("kind")
-    if kind not in ("delta", "terminal", "movement"):
+    if kind not in ("delta", "terminal", "movement", "collision"):
         return None
 
     guard = proposal.get("guard")
@@ -228,6 +228,31 @@ def validate_proposal(proposal: dict, scene_entities: dict[int, dict]) -> Rule |
             for key in ("dim", "of", "op", "value"):
                 if key not in eff:
                     return None
+        referenced_ids = _extract_entity_ids(guard)
+        for eff in effects:
+            of_val = eff.get("of")
+            if isinstance(of_val, int):
+                referenced_ids.add(of_val)
+            referenced_ids |= _extract_entity_ids(eff)
+        for eid in referenced_ids:
+            if eid != 0 and eid not in scene_entities:
+                return None
+    elif kind == "collision":
+        effects = proposal.get("effects")
+        if not isinstance(effects, list):
+            return None
+        for eff in effects:
+            if not isinstance(eff, dict):
+                return None
+            for key in ("dim", "of", "op"):
+                if key not in eff:
+                    return None
+            # "value" key is optional for revert ops; default to ""
+            if eff.get("op") != "revert" and "value" not in eff:
+                return None
+        # Must have at least one revert effect
+        if not any(eff.get("op") == "revert" for eff in effects):
+            return None
         referenced_ids = _extract_entity_ids(guard)
         for eff in effects:
             of_val = eff.get("of")

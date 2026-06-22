@@ -23,7 +23,7 @@ from .probe import (
     resolve_predicate,
 )
 from .protocol import Planner, PlannerStatus
-from .query import QueryInterface
+from .query import QueryInterface, UnknownAction
 from .recording_eval import (
     build_effect_context,
     collect_observed_steps,
@@ -43,6 +43,7 @@ __all__ = [
     "PlanSpec",
     "ProbeGoal",
     "QueryInterface",
+    "UnknownAction",
     "RuleProposerFn",
     "build_effect_context",
     "call_planner",

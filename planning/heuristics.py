@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from effects import MovementModel, Pos
+from effects.rules import Rule
+from effects import Pos
 from perception.session import SceneSnapshot
 
 
@@ -29,17 +30,19 @@ def within(pos: Pos | None, target: Pos | None, radius: int) -> bool:
 
 def reach_radius(
     cfg: ExplorationConfig,
-    model: MovementModel | None,
+    movement_rules: tuple[Rule, ...] = (),
 ) -> int:
     if cfg.reach_radius is not None:
         return cfg.reach_radius
-    if model and model.motion_by_action:
-        mags = [
-            max(abs(dr), abs(dc))
-            for dr, dc in model.motion_by_action.values()
-        ]
-        if mags:
-            return max(mags)
+    mags: list[int] = []
+    for rule in movement_rules:
+        for eff in rule.effects:
+            if eff.op == "delta" and eff.dim == "pos":
+                if isinstance(eff.value, tuple):
+                    dr, dc = eff.value
+                    mags.append(max(abs(dr), abs(dc)))
+    if mags:
+        return max(mags)
     return 1
 
 
@@ -62,10 +65,10 @@ def curiosity_entity_target(
     current: Pos,
     reached_targets: set[Pos],
     cfg: ExplorationConfig,
-    model: MovementModel | None,
+    movement_rules: tuple[Rule, ...] = (),
 ) -> Pos | None:
     """Nearest unconfirmed, non-structural entity not yet reached."""
-    radius = reach_radius(cfg, model)
+    radius = reach_radius(cfg, movement_rules)
     best: Pos | None = None
     best_d = None
     for eid, ent in scene.catalog.entities.items():

@@ -128,13 +128,14 @@ def verify_plan_on_recording(
             break
 
         nxt = predict(state, action, ctx)
-        if nxt is None:
+        if nxt.unknown:
             checks.append(
                 StepCheck(i, action, pos_before, None, None, "predict_failed")
             )
             break
 
-        pred_pos = nxt.pos(entity_id)
+        nxt_state = nxt.state
+        pred_pos = nxt_state.pos(entity_id)
         obs_next = _observed_next(observed, pos_before, action)
         if obs_next is not None and pred_pos != obs_next:
             status = "diverged"
@@ -146,7 +147,7 @@ def verify_plan_on_recording(
         checks.append(
             StepCheck(i, action, pos_before, pred_pos, obs_next, status)
         )
-        state = nxt
+        state = nxt_state
 
     end = replay_predicted(start, plan, ctx)
     end_pos = end.pos(entity_id) if end else None
@@ -202,13 +203,13 @@ def plan_and_evaluate(
         step_observations=step_observations,
         non_markovian=non_markovian,
     )
-    if ctx is None or not ctx.movement.motion_by_action:
+    if ctx is None or not ctx.available_actions:
         return None
 
     plan = plan_bfs(
         start,
         goal_pos(entity_id, target),
-        sorted(ctx.movement.motion_by_action),
+        sorted(ctx.available_actions),
         ctx,
         max_nodes=max_nodes,
     )

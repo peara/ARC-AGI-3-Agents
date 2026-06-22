@@ -2,11 +2,22 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from effects.context import EffectContext
 from effects.dsl import rule_to_dsl
 from effects.residual import ResidualEntry
 from effects.rules import Rule
+from effects.state import SceneState
 from perception.session import SceneSnapshot
+
+
+@dataclass(frozen=True)
+class UnknownAction:
+    """An action whose effect on a state is not covered by learned rules."""
+
+    action: int
+    state: SceneState
 
 
 class QueryInterface:
@@ -21,6 +32,7 @@ class QueryInterface:
         available_actions: list[int] | None = None,
         residual: tuple[ResidualEntry, ...] | list[ResidualEntry] | None = None,
         pruned_rules: tuple[Rule, ...] | list[Rule] | None = None,
+        unknowns: tuple[UnknownAction, ...] | None = None,
     ) -> None:
         self._scene = scene
         self._ctx = ctx
@@ -28,6 +40,7 @@ class QueryInterface:
         self._available_actions = available_actions
         self._residual = residual
         self._pruned_rules = pruned_rules
+        self._unknowns = unknowns
 
     def bundle(
         self,
@@ -37,6 +50,7 @@ class QueryInterface:
             "action_legend",
             "engine_rules",
             "recent_actions",
+            "unknowns",
         ),
         max_recent: int = 5,
     ) -> dict[str, object]:
@@ -51,6 +65,8 @@ class QueryInterface:
                 result["engine_rules"] = self._build_engine_rules()
             elif field == "recent_actions":
                 result["recent_actions"] = self._build_recent_actions(max_recent)
+            elif field == "unknowns":
+                result["unknowns"] = self._build_unknowns()
         # Always include context_note regardless of fields filter
         result["context_note"] = "observation-only; effects rules are learned, not ground truth"
         if self._available_actions is not None:
@@ -115,3 +131,12 @@ class QueryInterface:
         if self._pruned_rules is None:
             return []
         return [rule_to_dsl(r) for r in self._pruned_rules]
+
+    def _build_unknowns(self) -> list[dict[str, object]]:
+        if self._unknowns is None:
+            return []
+        capped = self._unknowns[:5]
+        return [
+            {"action": ua.action, "state": ua.state.fingerprint()}
+            for ua in capped
+        ]

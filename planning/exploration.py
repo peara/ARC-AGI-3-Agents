@@ -24,6 +24,7 @@ from effects.rules import Rule
 from perception.session import RESET_ACTION, SceneSnapshot
 
 from .adapters import snapshot_from_scene
+from .query import UnknownAction
 from .heuristics import (
     ExplorationConfig,
     curiosity_entity_target,
@@ -70,6 +71,7 @@ class ExplorationPolicy:
         self._last_diverged = False
         self._last_residual: tuple[ResidualEntry, ...] = ()
         self._llm_proposals: tuple[Rule, ...] = ()
+        self._last_unknowns: tuple[UnknownAction, ...] = ()
         self.rng = random.Random(self.cfg.seed)
 
     def on_observed(self, scene: SceneSnapshot) -> None:
@@ -133,9 +135,9 @@ class ExplorationPolicy:
         step_label = f"f{scene.frame_idx} a{action}"
         before_ctx = self._engine_ctx
         predicted = predict(self._engine_state_before, action, before_ctx)
-        if predicted is not None:
+        if not predicted.unknown:
             self._last_residual = compute_residual(
-                predicted,
+                predicted.state,
                 observed,
                 entity_ids=tuple(spec.entities),
                 dims=spec.dims,
@@ -193,7 +195,7 @@ class ExplorationPolicy:
             grid_rows=scene.grid_rows,
             grid_cols=scene.grid_cols,
         )
-        if base is None or not base.movement.motion_by_action:
+        if base is None or not base.available_actions:
             action = self._random_action(actions, phase="explore_random")
             return self._record_step(scene, controllable_id, action)
 
@@ -235,7 +237,11 @@ class ExplorationPolicy:
             return action
         nxt = predict(verify_state, action, self._ctx)
         before = verify_state.pos(controllable_id)
-        after = nxt.pos(controllable_id) if nxt else None
+        after = nxt.state.pos(controllable_id) if not nxt.unknown else None
+        if nxt.unknown:
+            self._last_unknowns = (UnknownAction(action=action, state=verify_state),)
+        else:
+            self._last_unknowns = ()
         if before is not None and after is not None:
             self._expect = (before, action, after)
         return action
@@ -252,10 +258,9 @@ class ExplorationPolicy:
         if start is None or ctx is None:
             return
 
-        model = ctx.movement
-        model_actions = sorted(set(actions) & set(model.motion_by_action))
-        if not model_actions:
-            model_actions = sorted(model.motion_by_action)
+        legal = sorted(set(actions) & set(ctx.available_actions))
+        if not legal:
+            legal = list(actions)
 
         current = scene.controllable_pos()
         if current is not None:
@@ -265,14 +270,14 @@ class ExplorationPolicy:
                 current=current,
                 reached_targets=self.reached_targets,
                 cfg=self.cfg,
-                model=model,
+                movement_rules=ctx.movement_rules,
             )
             if entity_target is not None:
-                radius = reach_radius(self.cfg, model)
+                radius = reach_radius(self.cfg, ctx.movement_rules)
                 plan = plan_bfs(
                     start,
                     lambda s: within(s.pos(controllable_id), entity_target, radius),
-                    model_actions,
+                    legal,
                     ctx,
                     max_nodes=self.cfg.max_nodes,
                 )
@@ -287,7 +292,7 @@ class ExplorationPolicy:
         plan = plan_bfs(
             start,
             lambda s: s.pos(controllable_id) not in visited,
-            model_actions,
+            legal,
             ctx,
             max_nodes=self.cfg.max_nodes,
         )
@@ -320,16 +325,16 @@ class ExplorationPolicy:
         return list(self.action_space)
 
     @property
-    def model(self):
-        return self._ctx.movement if self._ctx else None
-
-    @property
     def context(self) -> EffectContext | None:
         return self._ctx
 
     @property
     def last_residual(self) -> tuple[ResidualEntry, ...]:
         return self._last_residual
+
+    @property
+    def last_unknowns(self) -> tuple[UnknownAction, ...]:
+        return self._last_unknowns
 
     def set_llm_proposals(self, proposals: tuple[Rule, ...]) -> None:
         self._llm_proposals = proposals

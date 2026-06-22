@@ -9,6 +9,7 @@ from typing import Callable
 from effects import (
     EffectContext,
     Pos,
+    Prediction,
     SceneState,
     Terminal,
     is_terminal_dead_end,
@@ -63,9 +64,10 @@ def plan_bfs(
     while queue and len(visited) < max_nodes:
         state, path = queue.popleft()
         for action in actions:
-            nxt = predict(state, action, ctx)
-            if nxt is None or is_terminal_dead_end(nxt):
+            pred = predict(state, action, ctx)
+            if pred.unknown or is_terminal_dead_end(pred.state):
                 continue
+            nxt = pred.state
             fp = nxt.fingerprint()
             if fp in visited:
                 continue
