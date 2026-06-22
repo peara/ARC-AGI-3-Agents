@@ -24,7 +24,6 @@ from effects.rules import Rule
 from perception.session import RESET_ACTION, SceneSnapshot
 
 from .adapters import snapshot_from_scene
-from .query import UnknownAction
 from .heuristics import (
     ExplorationConfig,
     curiosity_entity_target,
@@ -32,6 +31,7 @@ from .heuristics import (
     within,
 )
 from .protocol import PlannerStatus
+from .query import UnknownAction
 from .search import PlanSpec, plan_bfs
 
 _engine_logger = logging.getLogger("effects.engine")
@@ -109,7 +109,10 @@ class ExplorationPolicy:
         for eid in sorted(scene.catalog.entities):
             if ctrl is not None and eid == ctrl:
                 continue
-            if entity_size_at(scene.registry, scene.catalog, eid, scene.frame_idx) is None:
+            if (
+                entity_size_at(scene.registry, scene.catalog, eid, scene.frame_idx)
+                is None
+            ):
                 continue
             if eid not in entities:
                 entities.append(eid)

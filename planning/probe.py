@@ -91,9 +91,7 @@ def resolve_predicate(
 
     # Conjunction — recurse into each child
     if "all" in predicate:
-        resolved_children = [
-            resolve_predicate(c, scene) for c in predicate["all"]
-        ]
+        resolved_children = [resolve_predicate(c, scene) for c in predicate["all"]]
         return {"all": resolved_children}
 
     # Relative near reference
@@ -104,9 +102,10 @@ def resolve_predicate(
         pos = scene.entity_pos(ref_eid)
         if pos is None:
             raise ValueError(f"entity {ref_eid} has no position")
-        return {
-            k: v for k, v in predicate.items() if k != "near"
-        } | {"near": list(pos), "radius": radius}
+        return {k: v for k, v in predicate.items() if k != "near"} | {
+            "near": list(pos),
+            "radius": radius,
+        }
 
     # No relative references — return as-is (with list→tuple for eq values)
     return dict(predicate)
@@ -184,7 +183,9 @@ def execute_probe(
     if goal.action is not None and compiled_goal(start):
         return ([goal.action], [])
 
-    plan, unknowns = plan_bfs(start, compiled_goal, actions, ctx, max_nodes=goal.max_steps)
+    plan, unknowns = plan_bfs(
+        start, compiled_goal, actions, ctx, max_nodes=goal.max_steps
+    )
 
     if plan is not None and goal.action is not None:
         return (plan + [goal.action], unknowns)

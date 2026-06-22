@@ -326,7 +326,9 @@ def call_planner(
     # of dicts (each with an "id" key), not a dict keyed by ID.
     scene_entities_raw = bundle.get("scene", {})
     entities_val: object = (
-        scene_entities_raw.get("entities", []) if isinstance(scene_entities_raw, dict) else []
+        scene_entities_raw.get("entities", [])
+        if isinstance(scene_entities_raw, dict)
+        else []
     )
     if isinstance(entities_val, list):
         scene_entities: set[int] = {
@@ -355,7 +357,9 @@ def _build_rule_proposer_messages(
     user_parts: list[str] = []
 
     user_parts.append(f"## Scene bundle\n```json\n{json.dumps(bundle, indent=2)}\n```")
-    user_parts.append(f"## Observed residual (prediction mismatches)\n```json\n{json.dumps(residual, indent=2)}\n```")
+    user_parts.append(
+        f"## Observed residual (prediction mismatches)\n```json\n{json.dumps(residual, indent=2)}\n```"
+    )
 
     if failure_context is not None:
         user_parts.append(
@@ -377,9 +381,7 @@ def _extract_scene_entities(bundle: dict[str, object]) -> dict[int, dict]:
     entities_val = scene_val.get("entities", [])
     if isinstance(entities_val, list):
         return {
-            int(e["id"]): e
-            for e in entities_val
-            if isinstance(e, dict) and "id" in e
+            int(e["id"]): e for e in entities_val if isinstance(e, dict) and "id" in e
         }
     if isinstance(entities_val, dict):
         return {int(k): v for k, v in entities_val.items() if isinstance(v, dict)}

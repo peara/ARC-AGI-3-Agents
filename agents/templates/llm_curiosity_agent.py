@@ -21,7 +21,11 @@ from perception.session import RESET_ACTION, PerceptionSession, SceneSnapshot
 from planning.exploration import ExplorationPolicy
 from planning.heuristics import ExplorationConfig
 from planning.llm_planner import call_planner, call_rule_proposer
-from planning.llm_rule_proposer import NULL_RULE_PROPOSER, RuleProposerFn, make_rule_proposer
+from planning.llm_rule_proposer import (
+    NULL_RULE_PROPOSER,
+    RuleProposerFn,
+    make_rule_proposer,
+)
 from planning.probe import ProbeGoal, execute_probe
 from planning.query import QueryInterface
 
@@ -133,7 +137,10 @@ class LlmCuriosity(Agent):
         if self._probe_plan is not None and len(self._probe_plan) > 0:
             action_id = self._probe_plan.pop(0)
             if len(self._probe_plan) == 0:
-                log.info("Probe plan exhausted (goal=%s)", self._current_goal.reason if self._current_goal else "?")
+                log.info(
+                    "Probe plan exhausted (goal=%s)",
+                    self._current_goal.reason if self._current_goal else "?",
+                )
                 self._failure_context = {
                     "type": "probe_exhausted",
                     "last_action": self._last_action_id,
@@ -144,7 +151,10 @@ class LlmCuriosity(Agent):
                 self._probe_plan = None
                 self._current_goal = None
             elif action_id not in actions:
-                log.info("Probe action %d not in available actions, discarding plan", action_id)
+                log.info(
+                    "Probe action %d not in available actions, discarding plan",
+                    action_id,
+                )
                 self._probe_plan = None
             else:
                 return self._record_and_return(action_id, scene)
@@ -175,12 +185,19 @@ class LlmCuriosity(Agent):
                 available_actions=actions,
             ).bundle()
             goal = call_planner(
-                bundle, actions, self.llm_call,
+                bundle,
+                actions,
+                self.llm_call,
                 failure_context=self._failure_context,
             )
             self._failure_context = None
             if goal is not None:
-                log.info("LLM goal: target=%s max_steps=%s reason=%s", goal.target, goal.max_steps, goal.reason)
+                log.info(
+                    "LLM goal: target=%s max_steps=%s reason=%s",
+                    goal.target,
+                    goal.max_steps,
+                    goal.reason,
+                )
             else:
                 log.info("LLM returned no valid goal")
         except Exception:
@@ -215,7 +232,10 @@ class LlmCuriosity(Agent):
                 log.info("No path found for goal: %s", goal.reason)
                 self._failure_context = {
                     "type": "unreachable",
-                    "unknowns": [{"action": ua.action, "state": ua.state.fingerprint()} for ua in unknowns],
+                    "unknowns": [
+                        {"action": ua.action, "state": ua.state.fingerprint()}
+                        for ua in unknowns
+                    ],
                     "last_action": self._last_action_id,
                     "previous_probe_reason": goal.reason if goal else None,
                 }
@@ -245,7 +265,12 @@ class LlmCuriosity(Agent):
             unknowns=self.policy.last_unknowns,
         ).bundle()
         residual_dicts = [
-            {"dim": r.dim, "entity_id": r.entity_id, "predicted": r.predicted, "observed": r.observed}
+            {
+                "dim": r.dim,
+                "entity_id": r.entity_id,
+                "predicted": r.predicted,
+                "observed": r.observed,
+            }
             for r in residual
         ]
         try:

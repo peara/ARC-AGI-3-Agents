@@ -9,7 +9,6 @@ from typing import Callable
 from effects import (
     EffectContext,
     Pos,
-    Prediction,
     SceneState,
     Terminal,
     is_terminal_dead_end,
