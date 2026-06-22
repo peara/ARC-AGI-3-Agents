@@ -238,6 +238,7 @@ class LlmCuriosity(Agent):
             scene,
             ctx,
             residual=residual,
+            unknowns=self.policy.last_unknowns,
         ).bundle()
         residual_dicts = [
             {"dim": r.dim, "entity_id": r.entity_id, "predicted": r.predicted, "observed": r.observed}
