@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from effects import entity_pos_at, learn_movement_model
+from effects import entity_pos_at, frame_meta_from_steps, learn_effect_context
 from planning.recording_eval import collect_observed_steps, plan_and_evaluate
 from tests.perception_fixtures import (
     MANIFEST_PATH,
@@ -53,14 +53,15 @@ class TestPlanningOnRecordings:
         assert ent.affordances.get("controllable") is True
 
     def test_movement_model_from_recording(self, stack, plan_case: PlanCase):
-        model = learn_movement_model(
+        ctx = learn_effect_context(
             stack.registry,
             stack.catalog,
             stack.action_ids,
+            frame_meta_from_steps(stack.session.step_observations),
             plan_case.entity_id,
         )
-        assert model is not None
-        assert model.motion_by_action
+        assert ctx is not None
+        assert ctx.available_actions
 
     def test_observed_steps_collected(self, stack, plan_case: PlanCase):
         steps = collect_observed_steps(

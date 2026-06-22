@@ -8,7 +8,6 @@ from unittest.mock import MagicMock
 import pytest
 
 from effects import Effect, EffectContext, Rule
-from effects.kinematics import MovementModel
 from effects.residual import ResidualEntry
 from planning.query import QueryInterface
 
@@ -50,15 +49,8 @@ def _make_ctx(
     proposed_rules: tuple[Rule, ...] = (),
     confirm_threshold: int = 2,
 ) -> EffectContext:
-    """Build a minimal EffectContext with a stub MovementModel."""
-    model = MovementModel(
-        entity_id=0,
-        motion_by_action={},
-        known_transitions={},
-        known_blocks=frozenset(),
-    )
+    """Build a minimal EffectContext."""
     return EffectContext(
-        movement=model,
         terminal_rules=terminal_rules,
         relational_rules=relational_rules,
         proposed_rules=proposed_rules,
@@ -87,7 +79,7 @@ class TestQueryInterface:
         scene = _make_scene()
         qi = QueryInterface(scene)
         bundle = qi.bundle()
-        expected_keys = {"scene", "action_legend", "engine_rules", "recent_actions", "context_note", "residual", "pruned_rules"}
+        expected_keys = {"scene", "action_legend", "engine_rules", "recent_actions", "unknowns", "context_note", "residual", "pruned_rules"}
         assert set(bundle.keys()) == expected_keys
 
     def test_bundle_with_effect_context(self):
