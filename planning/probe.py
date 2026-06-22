@@ -23,6 +23,7 @@ class ProbeGoal:
     dims: tuple[str, ...] | None = None  # auto-derived if None
     max_steps: int = 20  # BFS node limit
     reason: str = ""  # logging only
+    action: int | None = None  # unknown action to try at target
 
 
 def compile_goal(predicate: dict[str, Any]) -> Callable[[SceneState], bool]:
@@ -179,4 +180,14 @@ def execute_probe(
     if start is None:
         return (None, [])
 
-    return plan_bfs(start, compiled_goal, actions, ctx, max_nodes=goal.max_steps)
+    # Already at target — just return the action to try
+    if goal.action is not None and compiled_goal(start):
+        return ([goal.action], [])
+
+    plan, unknowns = plan_bfs(start, compiled_goal, actions, ctx, max_nodes=goal.max_steps)
+
+    if plan is not None and goal.action is not None:
+        return (plan + [goal.action], unknowns)
+    if plan is None:
+        return (None, unknowns)
+    return (plan, unknowns)

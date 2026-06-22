@@ -275,6 +275,7 @@ def _validate_goal(
     try:
         return ProbeGoal(
             target=target_dict,
+            action=action_val,
             max_steps=int(goal_dict["max_steps"]),  # type: ignore[call-overload]
             reason=str(goal_dict["reason"]),
         )
