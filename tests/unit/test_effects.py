@@ -7,6 +7,7 @@ import pytest
 from effects import (
     Effect,
     EffectContext,
+    Prediction,
     Rule,
     SceneState,
     learn_effect_context,
@@ -16,7 +17,6 @@ from effects import (
 )
 from effects.dsl import dsl_to_rule, rule_to_dsl
 from effects.guard_parse import evaluate_guard, parse_guard_clauses
-from effects.kinematics import MovementModel
 from effects.state import TERMINAL_GAME_OVER
 from perception.session import PerceptionSession
 from planning.search import plan_bfs
@@ -105,12 +105,6 @@ class TestLearnEffectContext:
 @pytest.mark.unit
 class TestPredictPipeline:
     def test_terminal_rule_sets_game_over(self):
-        model = MovementModel(
-            entity_id=0,
-            motion_by_action={1: (0, 1)},
-            known_transitions={},
-            known_blocks=frozenset(),
-        )
         rule = Rule(
             guard_spec={
                 "all": [
@@ -121,26 +115,32 @@ class TestPredictPipeline:
             effects=(Effect("terminal", 0, "set", TERMINAL_GAME_OVER),),
             support=1,
         )
-        ctx = EffectContext(movement=model, terminal_rules=(rule,))
+        movement_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (0, 1)),),
+            support=1,
+            kind="movement",
+        )
+        ctx = EffectContext(movement_rules=(movement_rule,), available_actions=(1,), terminal_rules=(rule,))
         start = SceneState(relevant=((0, ("pos", (5, 5))),))
         nxt = predict(start, 1, ctx)
-        assert nxt is not None
-        assert nxt.terminal == TERMINAL_GAME_OVER
-        assert nxt.pos(0) == (5, 6)
+        assert not nxt.unknown
+        assert nxt.state.terminal == TERMINAL_GAME_OVER
+        assert nxt.state.pos(0) == (5, 6)
 
     def test_counter_rule_updates_size(self):
-        model = MovementModel(
-            entity_id=0,
-            motion_by_action={2: (0, 0)},
-            known_transitions={((1, 1), 2): (1, 1)},
-            known_blocks=frozenset(),
+        movement_rule = Rule(
+            guard_spec={"action": 2},
+            effects=(Effect("pos", 0, "delta", (0, 0)),),
+            support=1,
+            kind="movement",
         )
         rule = Rule(
             guard_spec={"action": 2},
             effects=(Effect("size", 3, "delta", 1),),
             support=3,
         )
-        ctx = EffectContext(movement=model, relational_rules=(rule,))
+        ctx = EffectContext(movement_rules=(movement_rule,), available_actions=(2,), relational_rules=(rule,))
         start = SceneState(
             relevant=(
                 (0, ("pos", (1, 1))),
@@ -148,22 +148,25 @@ class TestPredictPipeline:
             )
         )
         nxt = predict(start, 2, ctx)
-        assert nxt is not None
-        assert nxt.get(3, "size") == 11
-        assert nxt.pos(0) == (1, 1)
+        assert not nxt.unknown
+        assert nxt.state.get(3, "size") == 11
+        assert nxt.state.pos(0) == (1, 1)
 
 
 @pytest.mark.unit
 class TestBFSPrunesGameOver:
     def test_game_over_branch_not_expanded(self):
-        model = MovementModel(
-            entity_id=0,
-            motion_by_action={1: (0, 0), 2: (1, 0)},
-            known_transitions={
-                ((0, 0), 1): (0, 0),
-                ((0, 0), 2): (1, 0),
-            },
-            known_blocks=frozenset(),
+        movement_rule_1 = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (0, 0)),),
+            support=1,
+            kind="movement",
+        )
+        movement_rule_2 = Rule(
+            guard_spec={"action": 2},
+            effects=(Effect("pos", 0, "delta", (1, 0)),),
+            support=1,
+            kind="movement",
         )
         dead = Rule(
             guard_spec={
@@ -175,7 +178,7 @@ class TestBFSPrunesGameOver:
             effects=(Effect("terminal", 0, "set", TERMINAL_GAME_OVER),),
             support=1,
         )
-        ctx = EffectContext(movement=model, terminal_rules=(dead,))
+        ctx = EffectContext(movement_rules=(movement_rule_1, movement_rule_2), available_actions=(1, 2), terminal_rules=(dead,))
         start = SceneState(relevant=((0, ("pos", (0, 0))),))
         plan = plan_bfs(
             start,
@@ -220,15 +223,6 @@ class TestEffectsManifest:
         assert ctx.non_markovian == expect.expect_non_markovian
 
 
-def _make_model():
-    return MovementModel(
-        entity_id=0,
-        motion_by_action={1: (0, 1)},
-        known_transitions={},
-        known_blocks=frozenset(),
-    )
-
-
 def _make_rule(**overrides):
     defaults = dict(
         guard_spec={"action": 1},
@@ -242,61 +236,54 @@ def _make_rule(**overrides):
 @pytest.mark.unit
 class TestEffectContextMovementRules:
     def test_construction_with_explicit_movement_rules(self):
-        model = _make_model()
         rule = _make_rule()
-        ctx = EffectContext(movement=model, movement_rules=(rule,))
+        ctx = EffectContext(movement_rules=(rule,))
         assert ctx.movement_rules == (rule,)
 
     def test_construction_default_movement_rules(self):
-        model = _make_model()
-        ctx = EffectContext(movement=model)
+        ctx = EffectContext()
         assert ctx.movement_rules == ()
 
     def test_to_dict_serializes_movement_rules(self):
-        model = _make_model()
         rule = _make_rule()
-        ctx = EffectContext(movement=model, movement_rules=(rule,))
+        ctx = EffectContext(movement_rules=(rule,))
         d = ctx.to_dict()
         assert "movement_rules" in d
         assert d["movement_rules"] == [rule_to_dsl(rule)]
 
     def test_to_dict_empty_movement_rules(self):
-        model = _make_model()
-        ctx = EffectContext(movement=model)
+        ctx = EffectContext()
         d = ctx.to_dict()
         assert d["movement_rules"] == []
 
     def test_merge_movement_rules_base_and_override(self):
-        model = _make_model()
         base_rule = _make_rule(support=1)
         override_rule = _make_rule(
             guard_spec={"action": 2},
             effects=(Effect("size", 3, "delta", 2),),
             support=3,
         )
-        base = EffectContext(movement=model, movement_rules=(base_rule,))
-        engine = EffectContext(movement=model, movement_rules=(override_rule,))
+        base = EffectContext(movement_rules=(base_rule,))
+        engine = EffectContext(movement_rules=(override_rule,))
         merged = merge_effect_context(base, engine)
         assert merged.movement_rules == (base_rule, override_rule)
 
     def test_merge_movement_rules_dedupes(self):
-        model = _make_model()
         rule = _make_rule()
-        base = EffectContext(movement=model, movement_rules=(rule,))
-        engine = EffectContext(movement=model, movement_rules=(rule,))
+        base = EffectContext(movement_rules=(rule,))
+        engine = EffectContext(movement_rules=(rule,))
         merged = merge_effect_context(base, engine)
         assert merged.movement_rules == (rule,)
 
     def test_merge_movement_rules_base_first(self):
-        model = _make_model()
         rule_a = _make_rule(support=1)
         rule_b = _make_rule(
             guard_spec={"action": 2},
             effects=(Effect("size", 3, "delta", 2),),
             support=2,
         )
-        base = EffectContext(movement=model, movement_rules=(rule_a,))
-        engine = EffectContext(movement=model, movement_rules=(rule_b,))
+        base = EffectContext(movement_rules=(rule_a,))
+        engine = EffectContext(movement_rules=(rule_b,))
         merged = merge_effect_context(base, engine)
         assert merged.movement_rules == (rule_a, rule_b)
 
@@ -429,25 +416,143 @@ class TestOverlapsGuard:
         assert clauses[0]["has_overlaps"] is False
 
 
+# ---------------------------------------------------------------------------
+# New tests for collision_rules, available_actions, and has_confirmed (D3)
+# ---------------------------------------------------------------------------
+
+
+
+def _make_rule(**overrides):
+    defaults = dict(
+        guard_spec={"action": 1},
+        effects=(Effect("size", 3, "delta", 1),),
+        support=1,
+    )
+    defaults.update(overrides)
+    return Rule(**defaults)
+
+
+def _positional_rule(action: int = 1, entity_id: int = 0, pos: tuple[int, int] = (5, 5), **overrides):
+    """Build a Rule whose guard includes a positional check (is_positional_guard=True)."""
+    defaults = dict(
+        guard_spec={
+            "all": [
+                {"action": action},
+                {"dim": "pos", "of": entity_id, "eq": list(pos)},
+            ]
+        },
+        effects=(Effect("size", entity_id, "delta", 1),),
+        support=1,
+    )
+    defaults.update(overrides)
+    return Rule(**defaults)
+
+
+def _action_only_rule(action: int = 1, **overrides):
+    """Build a Rule whose guard is action-only (is_positional_guard=False)."""
+    defaults = dict(
+        guard_spec={"action": action},
+        effects=(Effect("size", 3, "delta", 1),),
+        support=1,
+    )
+    defaults.update(overrides)
+    return Rule(**defaults)
+
+
 @pytest.mark.unit
-class TestDualPathPredict:
-    """Dual-path predict: movement_rules path vs fallback to predict_move."""
+class TestEffectContextNewFields:
+    """Test collision_rules and available_actions fields on EffectContext."""
 
-    @staticmethod
-    def _make_model(**overrides):
-        defaults = dict(
-            entity_id=0,
-            motion_by_action={1: (0, 1)},
-            known_transitions={},
-            known_blocks=frozenset(),
+    def test_collision_rules_default_empty(self):
+        ctx = EffectContext()
+        assert ctx.collision_rules == ()
+
+    def test_available_actions_default_empty(self):
+        ctx = EffectContext()
+        assert ctx.available_actions == ()
+
+    def test_collision_rules_construction(self):
+        rule = _positional_rule()
+        ctx = EffectContext(collision_rules=(rule,))
+        assert ctx.collision_rules == (rule,)
+
+    def test_available_actions_construction(self):
+        ctx = EffectContext(available_actions=(1, 2, 3))
+        assert ctx.available_actions == (1, 2, 3)
+
+    def test_to_dict_includes_collision_rules(self):
+        rule = _positional_rule()
+        ctx = EffectContext(collision_rules=(rule,))
+        d = ctx.to_dict()
+        assert "collision_rules" in d
+        assert d["collision_rules"] == [rule_to_dsl(rule)]
+
+    def test_to_dict_includes_available_actions(self):
+        ctx = EffectContext(available_actions=(1, 3, 5))
+        d = ctx.to_dict()
+        assert d["available_actions"] == [1, 3, 5]
+
+    def test_to_dict_empty_collision_rules(self):
+        ctx = EffectContext()
+        d = ctx.to_dict()
+        assert d["collision_rules"] == []
+        assert d["available_actions"] == []
+
+
+@pytest.mark.unit
+class TestHasConfirmedPositionalGuards:
+    """Test has_confirmed per D3: only positional guards confirm."""
+
+    def test_non_markovian_false_always_returns_true(self):
+        """When non_markovian=False, has_confirmed always returns True."""
+        ctx = EffectContext(non_markovian=False)
+        state = SceneState(relevant=((0, ("pos", (5, 5))),))
+        assert ctx.has_confirmed(state, 1) is True
+
+    def test_movement_rule_with_positional_guard_confirms(self):
+        """A movement rule with a positional guard confirms the transition."""
+        rule = _positional_rule(action=1, entity_id=0, pos=(5, 5))
+        ctx = EffectContext(
+            movement_rules=(rule,),
+            non_markovian=True,
         )
-        defaults.update(overrides)
-        return MovementModel(**defaults)
+        state = SceneState(relevant=((0, ("pos", (5, 5))),))
+        assert ctx.has_confirmed(state, 1) is True
 
-    def test_empty_movement_rules_identical_to_no_movement_rules(self):
-        """predict with empty movement_rules tuple == predict without it."""
-        model = self._make_model()
-        terminal_rule = Rule(
+    def test_movement_rule_action_only_does_not_confirm(self):
+        """A movement rule with action-only guard (no positional) does NOT confirm."""
+        rule = _action_only_rule(action=1)
+        assert not rule.is_positional_guard
+        ctx = EffectContext(
+            movement_rules=(rule,),
+            non_markovian=True,
+        )
+        state = SceneState(relevant=((0, ("pos", (5, 5))),))
+        assert ctx.has_confirmed(state, 1) is False
+
+    def test_collision_rule_with_positional_guard_confirms(self):
+        """A collision rule with a positional guard confirms the transition."""
+        rule = _positional_rule(action=1, entity_id=0, pos=(5, 5))
+        ctx = EffectContext(
+            collision_rules=(rule,),
+            non_markovian=True,
+        )
+        state = SceneState(relevant=((0, ("pos", (5, 5))),))
+        assert ctx.has_confirmed(state, 1) is True
+
+    def test_collision_rule_action_only_does_not_confirm(self):
+        """A collision rule with action-only guard does NOT confirm."""
+        rule = _action_only_rule(action=1)
+        ctx = EffectContext(
+            collision_rules=(rule,),
+            non_markovian=True,
+        )
+        state = SceneState(relevant=((0, ("pos", (5, 5))),))
+        assert ctx.has_confirmed(state, 1) is False
+
+    def test_terminal_rule_positional_guard_confirms(self):
+        """A terminal rule with a positional guard confirms."""
+        rule = Rule(
             guard_spec={
                 "all": [
                     {"action": 1},
@@ -457,327 +562,242 @@ class TestDualPathPredict:
             effects=(Effect("terminal", 0, "set", TERMINAL_GAME_OVER),),
             support=1,
         )
-        ctx_no_mr = EffectContext(movement=model, terminal_rules=(terminal_rule,))
-        ctx_empty_mr = EffectContext(
-            movement=model, terminal_rules=(terminal_rule,), movement_rules=()
+        ctx = EffectContext(
+            terminal_rules=(rule,),
+            non_markovian=True,
         )
-        start = SceneState(relevant=((0, ("pos", (5, 5))),))
-        result_no_mr = predict(start, 1, ctx_no_mr)
-        result_empty_mr = predict(start, 1, ctx_empty_mr)
-        assert result_no_mr is not None
-        assert result_empty_mr is not None
-        assert result_no_mr.pos(0) == result_empty_mr.pos(0)
-        assert result_no_mr.terminal == result_empty_mr.terminal
+        state = SceneState(relevant=((0, ("pos", (5, 5))),))
+        assert ctx.has_confirmed(state, 1) is True
 
-    def test_movement_rule_path_applies_movement_rule(self):
-        """When movement_rules exist and guard matches, use rule instead of predict_move."""
-        model = self._make_model()
+    def test_relational_rule_positional_guard_confirms(self):
+        """A relational rule with a positional guard confirms."""
+        rule = Rule(
+            guard_spec={
+                "all": [
+                    {"action": 1},
+                    {"dim": "pos", "of": 0, "eq": [5, 5]},
+                ]
+            },
+            effects=(Effect("size", 3, "delta", 1),),
+            support=1,
+        )
+        ctx = EffectContext(
+            relational_rules=(rule,),
+            non_markovian=True,
+        )
+        state = SceneState(relevant=((0, ("pos", (5, 5))),))
+        assert ctx.has_confirmed(state, 1) is True
+
+    def test_no_matching_rules_returns_false(self):
+        """When non_markovian=True and no positional-guard rules match, returns False."""
+        ctx = EffectContext(non_markovian=True)
+        state = SceneState(relevant=((0, ("pos", (5, 5))),))
+        assert ctx.has_confirmed(state, 1) is False
+
+    def test_positional_guard_wrong_pos_no_match(self):
+        """A positional guard that doesn't match the state position returns False."""
+        rule = _positional_rule(action=1, entity_id=0, pos=(9, 9))
+        ctx = EffectContext(
+            collision_rules=(rule,),
+            non_markovian=True,
+        )
+        state = SceneState(relevant=((0, ("pos", (5, 5))),))
+        assert ctx.has_confirmed(state, 1) is False
+
+    def test_support_zero_does_not_confirm(self):
+        """A rule with support=0 does not confirm even if guard matches."""
+        rule = _positional_rule(action=1, entity_id=0, pos=(5, 5), support=0)
+        ctx = EffectContext(
+            movement_rules=(rule,),
+            non_markovian=True,
+        )
+        state = SceneState(relevant=((0, ("pos", (5, 5))),))
+        assert ctx.has_confirmed(state, 1) is False
+
+
+@pytest.mark.unit
+class TestMergeCollisionRulesAndActions:
+    """Test merge_effect_context for collision_rules and available_actions."""
+
+    def test_merge_collision_rules_base_and_engine(self):
+        base_rule = _positional_rule(action=1, pos=(5, 5))
+        engine_rule = _positional_rule(action=2, pos=(6, 6))
+        base = EffectContext(collision_rules=(base_rule,))
+        engine = EffectContext(collision_rules=(engine_rule,))
+        merged = merge_effect_context(base, engine)
+        assert merged.collision_rules == (base_rule, engine_rule)
+
+    def test_merge_collision_rules_dedupes(self):
+        rule = _positional_rule()
+        base = EffectContext(collision_rules=(rule,))
+        engine = EffectContext(collision_rules=(rule,))
+        merged = merge_effect_context(base, engine)
+        assert merged.collision_rules == (rule,)
+
+    def test_merge_collision_rules_base_first(self):
+        rule_a = _positional_rule(action=1, pos=(5, 5))
+        rule_b = _positional_rule(action=2, pos=(6, 6))
+        base = EffectContext(collision_rules=(rule_a,))
+        engine = EffectContext(collision_rules=(rule_b,))
+        merged = merge_effect_context(base, engine)
+        assert merged.collision_rules == (rule_a, rule_b)
+
+    def test_merge_available_actions_union_sorted(self):
+        base = EffectContext(available_actions=(1, 3, 5))
+        engine = EffectContext(available_actions=(2, 3, 6))
+        merged = merge_effect_context(base, engine)
+        assert merged.available_actions == (1, 2, 3, 5, 6)
+
+    def test_merge_available_actions_dedupes(self):
+        base = EffectContext(available_actions=(1, 2, 3))
+        engine = EffectContext(available_actions=(1, 2, 3))
+        merged = merge_effect_context(base, engine)
+        assert merged.available_actions == (1, 2, 3)
+
+    def test_merge_available_actions_empty_both(self):
+        base = EffectContext()
+        engine = EffectContext()
+        merged = merge_effect_context(base, engine)
+        assert merged.available_actions == ()
+
+    def test_merge_collision_rules_empty_both(self):
+        base = EffectContext()
+        engine = EffectContext()
+        merged = merge_effect_context(base, engine)
+        assert merged.collision_rules == ()
+
+
+@pytest.mark.unit
+class TestPrediction:
+    """Tests for the Prediction dataclass and collision rule bucket."""
+
+    def test_prediction_unknown_true(self):
+        """Prediction(state, unknown=True) construction."""
+        state = SceneState(relevant=((0, ("pos", (3, 4))),))
+        pred = Prediction(state, unknown=True)
+        assert pred.state == state
+        assert pred.unknown is True
+
+    def test_prediction_unknown_false(self):
+        """Prediction(state, unknown=False) construction."""
+        state = SceneState(relevant=((0, ("pos", (3, 4))),))
+        pred = Prediction(state, unknown=False)
+        assert pred.state == state
+        assert pred.unknown is False
+
+    def test_prediction_default_unknown_false(self):
+        """Prediction default unknown is False."""
+        state = SceneState(relevant=((0, ("pos", (3, 4))),))
+        pred = Prediction(state)
+        assert pred.unknown is False
+
+    def test_collision_rule_revert_position(self):
+        """Collision rule with op='revert' reverts entity's position to state_before."""
         movement_rule = Rule(
             guard_spec={"action": 1},
-            effects=(Effect("pos", 0, "set", (9, 9)),),
+            effects=(Effect("pos", 0, "delta", (0, 1)),),
             support=1,
             kind="movement",
         )
-        ctx = EffectContext(movement=model, movement_rules=(movement_rule,))
+        collision_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "revert", "before"),),
+            support=1,
+        )
+        ctx = EffectContext(
+            movement_rules=(movement_rule,),
+            collision_rules=(collision_rule,),
+            available_actions=(1,),
+        )
+        # Entity 0 starts at (5, 5), movement rule moves to (5, 6)
         start = SceneState(relevant=((0, ("pos", (5, 5))),))
         result = predict(start, 1, ctx)
-        assert result is not None
-        assert result.pos(0) == (9, 9)
+        assert not result.unknown
+        # Collision revert should restore to (5, 5)
+        assert result.state.pos(0) == (5, 5)
 
-    def test_movement_rule_no_match_falls_back_to_predict_move(self):
-        """When movement_rules exist but no guard matches, fall back to predict_move."""
-        model = self._make_model()
+    def test_predict_returns_unknown_when_no_delta_fallback(self):
+        """predict() returns Prediction(state, unknown=True) when no movement
+        rule matches the action (no delta fallback)."""
+        # Only action 1 has a movement rule; action 2 has none
+        movement_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (0, 1)),),
+            support=1,
+            kind="movement",
+        )
+        ctx = EffectContext(movement_rules=(movement_rule,), available_actions=(1,))
+        start = SceneState(relevant=((0, ("pos", (5, 5))),))
+        result = predict(start, 2, ctx)
+        assert result.unknown is True
+        assert result.state == start
+
+    def test_predict_returns_unknown_when_no_delta_movement_rules_path(self):
+        """predict() returns Prediction(state, unknown=True) when no movement
+        rule matches and there are no fallback deltas."""
+        # A movement rule for action 2 (not action 1)
         movement_rule = Rule(
             guard_spec={"action": 2},
             effects=(Effect("pos", 0, "set", (9, 9)),),
             support=1,
             kind="movement",
         )
-        ctx = EffectContext(movement=model, movement_rules=(movement_rule,))
+        ctx = EffectContext(movement_rules=(movement_rule,))
         start = SceneState(relevant=((0, ("pos", (5, 5))),))
+        # Action 1: no movement rule matches
         result = predict(start, 1, ctx)
-        assert result is not None
-        assert result.pos(0) == (5, 6)
+        assert result.unknown is True
+        assert result.state == start
 
-    def test_entity_cells_passthrough_to_rule_apply(self):
-        """entity_cells kwarg is forwarded to Rule.apply via state_before/entity_cells.
-
-        Uses a movement rule (so we stay in the movement_rules path) and a
-        revert effect to verify state_before is passed correctly.  The revert
-        should restore entity 0's position to state_before=(5,5), undoing the
-        movement rule's set to (10,10).
-        """
-        model = self._make_model()
+    def test_predict_returns_known_when_movement_rule_fires(self):
+        """predict() returns Prediction(nxt, unknown=False) when a movement
+        rule fires."""
         movement_rule = Rule(
             guard_spec={"action": 1},
-            effects=(Effect("pos", 0, "set", (10, 10)),),
+            effects=(Effect("pos", 0, "set", (9, 9)),),
             support=1,
             kind="movement",
         )
-        revert_rule = Rule(
+        ctx = EffectContext(movement_rules=(movement_rule,))
+        start = SceneState(relevant=((0, ("pos", (5, 5))),))
+        result = predict(start, 1, ctx)
+        assert result.unknown is False
+        assert result.state.pos(0) == (9, 9)
+
+    def test_predict_collision_rule_with_overlaps_guard(self):
+        """Collision rule with overlaps guard evaluated against post-movement state."""
+        movement_rule = Rule(
             guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (0, 1)),),
+            support=1,
+            kind="movement",
+        )
+        collision_rule = Rule(
+            guard_spec={"overlaps": {"entity_a": 0, "entity_b": 5}},
             effects=(Effect("pos", 0, "revert", "before"),),
             support=1,
         )
         ctx = EffectContext(
-            movement=model,
             movement_rules=(movement_rule,),
-            relational_rules=(revert_rule,),
+            collision_rules=(collision_rule,),
+            available_actions=(1,),
         )
         start = SceneState(relevant=((0, ("pos", (5, 5))),))
-        cells = {0: frozenset({(5, 5)}), 3: frozenset({(1, 1)})}
+        # Entity 0 cells include (5,6) (overlap with entity 5)
+        cells = {
+            0: frozenset({(5, 5), (5, 6)}),
+            5: frozenset({(5, 6)}),
+        }
         result = predict(start, 1, ctx, entity_cells=cells)
-        assert result is not None
-        assert result.pos(0) == (5, 5)
+        assert not result.unknown
+        # Revert should restore entity 0 to (5,5)
+        assert result.state.pos(0) == (5, 5)
 
-    def test_backward_compat_predict_without_entity_cells(self):
-        """predict(state, action, ctx) still works without entity_cells kwarg."""
-        model = self._make_model()
-        ctx = EffectContext(movement=model)
+    def test_predict_non_markovian_returns_unknown(self):
+        """predict() returns Prediction(state, unknown=True) when non-Markovian
+        and has_confirmed returns False."""
+        ctx = EffectContext(non_markovian=True)
         start = SceneState(relevant=((0, ("pos", (5, 5))),))
         result = predict(start, 1, ctx)
-        assert result is not None
-        assert result.pos(0) == (5, 6)
-
-    def test_rule_apply_backward_compat_without_state_before(self):
-        """Rule.apply(state_after, action) still works without kwargs."""
-        rule = Rule(
-            guard_spec={"action": 1},
-            effects=(Effect("pos", 0, "set", (7, 7)),),
-            support=1,
-        )
-        state = SceneState(relevant=((0, ("pos", (5, 5))),))
-        result = rule.apply(state, 1)
-        assert result.pos(0) == (7, 7)
-
-    def test_movement_rules_then_terminal_then_relational(self):
-        """Movement rules, then terminal, then relational all apply in order."""
-        model = self._make_model()
-        movement_rule = Rule(
-            guard_spec={"action": 1},
-            effects=(Effect("pos", 0, "set", (10, 10)),),
-            support=1,
-            kind="movement",
-        )
-        terminal_rule = Rule(
-            guard_spec={"action": 1},
-            effects=(Effect("terminal", 0, "set", TERMINAL_GAME_OVER),),
-            support=1,
-        )
-        counter_rule = Rule(
-            guard_spec={"action": 1},
-            effects=(Effect("size", 3, "delta", 5),),
-            support=1,
-        )
-        ctx = EffectContext(
-            movement=model,
-            movement_rules=(movement_rule,),
-            terminal_rules=(terminal_rule,),
-            relational_rules=(counter_rule,),
-        )
-        start = SceneState(
-            relevant=(
-                (0, ("pos", (5, 5))),
-                (3, ("size", 10)),
-            )
-        )
-        result = predict(start, 1, ctx)
-        assert result is not None
-        assert result.pos(0) == (10, 10)
-        assert result.terminal == TERMINAL_GAME_OVER
-        assert result.get(3, "size") == 15
-
-
-@pytest.mark.unit
-class TestIntegrationDualPath:
-    """Integration tests for the full dual-path predict pipeline.
-
-    Covers: movement rule application, fallback, revert effects, overlaps
-    guards, engine promotion lifecycle, DSL round-trip, and predict
-    ordering.
-    """
-
-    @staticmethod
-    def _make_model(**overrides):
-        defaults = dict(
-            entity_id=0,
-            motion_by_action={1: (0, 1), 2: (1, 0)},
-            known_transitions={},
-            known_blocks=frozenset(),
-        )
-        defaults.update(overrides)
-        return MovementModel(**defaults)
-
-    def test_movement_rule_moves_entity_correctly(self):
-        """A movement rule with op='set' moves the entity to the given pos."""
-        model = self._make_model()
-        rule = Rule(
-            guard_spec={"action": 0},
-            effects=(Effect("pos", 0, "set", (4, 5)),),
-            support=1,
-            kind="movement",
-        )
-        ctx = EffectContext(movement=model, movement_rules=(rule,))
-        state = SceneState(relevant=((0, ("pos", (5, 5))),))
-        result = predict(state, 0, ctx)
-        assert result is not None
-        assert result.pos(0) == (4, 5)
-
-    def test_empty_movement_rules_identical_to_no_movement_rules(self):
-        """predict() with movement_rules=() produces the same output as
-        predict() with no movement_rules at all (fallback path)."""
-        model = self._make_model()
-        ctx_no_mr = EffectContext(movement=model)
-        ctx_empty_mr = EffectContext(movement=model, movement_rules=())
-        state = SceneState(relevant=((0, ("pos", (5, 5))),))
-        result_no_mr = predict(state, 1, ctx_no_mr)
-        result_empty_mr = predict(state, 1, ctx_empty_mr)
-        assert result_no_mr is not None
-        assert result_empty_mr is not None
-        # Compare fingerprints since SceneState is a frozen dataclass
-        assert result_no_mr.fingerprint() == result_empty_mr.fingerprint()
-        assert result_no_mr.pos(0) == result_empty_mr.pos(0)
-
-    def test_revert_effect_with_state_before(self):
-        """Rule.apply with state_before restores entity position on revert."""
-        rule = Rule(
-            guard_spec={"action": 1},
-            effects=(Effect("pos", 0, "revert", "before"),),
-            support=0,
-        )
-        state_before = SceneState(relevant=((0, ("pos", (1, 1))),))
-        state_after = SceneState(relevant=((0, ("pos", (3, 4))),))
-        result = rule.apply(state_after, 1, state_before=state_before)
-        assert result.pos(0) == (1, 1)
-
-    def test_revert_effect_without_state_before_is_noop(self):
-        """Rule.apply with revert but no state_before leaves state unchanged."""
-        rule = Rule(
-            guard_spec={"action": 1},
-            effects=(Effect("pos", 0, "revert", "before"),),
-            support=0,
-        )
-        state_after = SceneState(relevant=((0, ("pos", (3, 4))),))
-        result = rule.apply(state_after, 1)
-        assert result.pos(0) == (3, 4)
-
-    def test_overlaps_guard_detects_overlap(self):
-        """evaluate_guard returns True when entity cells overlap."""
-        guard = {"overlaps": {"entity_a": 0, "entity_b": 5}}
-        state = SceneState(relevant=())
-        cells_overlapping = {
-            0: frozenset({(1, 1)}),
-            5: frozenset({(1, 1)}),
-        }
-        assert evaluate_guard(guard, state, 0, entity_cells=cells_overlapping) is True
-
-    def test_overlaps_guard_no_overlap(self):
-        guard = {"overlaps": {"entity_a": 0, "entity_b": 5}}
-        state = SceneState(relevant=())
-        cells_disjoint = {
-            0: frozenset({(1, 1)}),
-            5: frozenset({(2, 2)}),
-        }
-        assert evaluate_guard(guard, state, 0, entity_cells=cells_disjoint) is False
-
-    def test_overlaps_guard_without_entity_cells_raises(self):
-        """evaluate_guard raises ValueError when overlaps guard lacks entity_cells."""
-        guard = {"overlaps": {"entity_a": 0, "entity_b": 5}}
-        state = SceneState(relevant=())
-        with pytest.raises(ValueError, match="overlaps guard requires entity_cells"):
-            evaluate_guard(guard, state, 0)
-
-    def test_engine_promotion_lifecycle_movement(self):
-        """propose → confirm → promote lifecycle for movement rules."""
-        from dataclasses import replace
-
-        from effects.engine import _promote_rules, confirm_rules
-        from effects.residual import compute_residual
-
-        model = self._make_model()
-        proposed_rule = Rule(
-            guard_spec={"action": 1},
-            effects=(Effect("pos", 0, "set", (1, 1)),),
-            support=0,
-            kind="movement",
-        )
-        ctx = EffectContext(
-            movement=model,
-            proposed_rules=(proposed_rule,),
-            confirm_threshold=2,
-        )
-        assert len(ctx.movement_rules) == 0
-        assert len(ctx.proposed_rules) == 1
-
-        before = SceneState(relevant=((0, ("pos", (1, 1))),))
-        observed = SceneState(relevant=((0, ("pos", (1, 1))),))
-        ctx = confirm_rules(ctx, before, 1, observed)
-        assert len(ctx.proposed_rules) == 1
-        assert ctx.proposed_rules[0].support == 1
-        assert len(ctx.movement_rules) == 0
-
-        ctx = confirm_rules(ctx, before, 1, observed)
-        assert len(ctx.proposed_rules) == 0
-        assert len(ctx.movement_rules) == 1
-        assert ctx.movement_rules[0].support == 2
-        assert ctx.movement_rules[0].kind == "movement"
-
-    def test_dsl_round_trip_movement_with_revert(self):
-        """rule_to_dsl → dsl_to_rule preserves kind='movement' and revert effects."""
-        rule = Rule(
-            guard_spec={"action": 1},
-            effects=(
-                Effect("pos", 0, "set", (5, 6)),
-                Effect("pos", 0, "revert", "before"),
-            ),
-            support=3,
-            kind="movement",
-        )
-        dsl = rule_to_dsl(rule)
-        assert dsl["kind"] == "movement"
-        assert len(dsl["effects"]) == 2
-        assert dsl["effects"][1]["op"] == "revert"
-
-        round_tripped = dsl_to_rule(dsl)
-        assert round_tripped.kind == "movement"
-        assert len(round_tripped.effects) == 2
-        assert round_tripped.effects[0] == Effect("pos", 0, "set", (5, 6))
-        assert round_tripped.effects[1] == Effect("pos", 0, "revert", "before")
-        assert round_tripped == rule
-
-    def test_predict_ordering_movement_terminal_relational(self):
-        """predict applies movement rules, then terminal, then relational."""
-        model = self._make_model()
-        movement_rule = Rule(
-            guard_spec={"action": 1},
-            effects=(Effect("pos", 0, "set", (10, 10)),),
-            support=1,
-            kind="movement",
-        )
-        terminal_rule = Rule(
-            guard_spec={"action": 1},
-            effects=(Effect("terminal", 0, "set", TERMINAL_GAME_OVER),),
-            support=1,
-        )
-        relational_rule = Rule(
-            guard_spec={"action": 1},
-            effects=(Effect("size", 3, "delta", 5),),
-            support=1,
-        )
-        ctx = EffectContext(
-            movement=model,
-            movement_rules=(movement_rule,),
-            terminal_rules=(terminal_rule,),
-            relational_rules=(relational_rule,),
-        )
-        start = SceneState(
-            relevant=(
-                (0, ("pos", (5, 5))),
-                (3, ("size", 10)),
-            )
-        )
-        result = predict(start, 1, ctx)
-        assert result is not None
-        assert result.pos(0) == (10, 10)  # movement rule overrides model
-        assert result.terminal == TERMINAL_GAME_OVER
-        assert result.get(3, "size") == 15  # 10 + 5 from delta
+        assert result.unknown is True
+        assert result.state == start
