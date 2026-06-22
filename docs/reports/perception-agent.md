@@ -307,8 +307,7 @@ uv run python scripts/track_recording.py \
 
 ### Rung 5 — partial-state planning (done, v1 movement)
 
-Code: `effects/` (`SceneState`, `MovementModel`, `learn_movement_model`, `predict`,
-`predict_move`), `planning/` (`PlanSpec`, `snapshot`, `plan_bfs`, `recording_eval`),
+Code: `effects/` (`SceneState`, `Prediction`, `learn_movement_rules`, `learn_collision_rules`, `predict`), `planning/` (`PlanSpec`, `snapshot`, `plan_bfs`, `recording_eval`),
 `scripts/plan_recording.py`, `tests/reference_recordings.json`,
 `tests/unit/test_planning.py`.
 
