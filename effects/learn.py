@@ -8,7 +8,7 @@ from perception.entities import EntityCatalog
 from perception.registry import ObjectRegistry
 
 from .context import EffectContext, FrameMeta
-from .kinematics import entity_pos_at, entity_size_at, learn_movement_model
+from .kinematics import entity_pos_at, entity_size_at
 from .rules import Effect, Rule
 from .state import Terminal, terminal_from_state_name
 
@@ -131,6 +131,121 @@ def learn_counter_rules(
     return tuple(rules)
 
 
+def learn_movement_rules(
+    reg: ObjectRegistry,
+    catalog: EntityCatalog,
+    action_ids: list[int],
+    entity_id: int,
+    *,
+    grid_rows: int = 64,
+    grid_cols: int = 64,
+) -> tuple[tuple[Rule, ...], tuple[Rule, ...], tuple[int, ...]]:
+    """Learn positional movement rules, collision rules, and available actions.
+
+    Returns ``(movement_rules, collision_rules, available_actions)``.
+
+    Positional rules are more specific (guard on action + position); generic
+    rules (guard on action only, using delta) serve as fallback.
+    """
+    ent = catalog.entities.get(entity_id)
+    available_actions = tuple(sorted(set(action_ids)))
+
+    if ent is None:
+        return ((), (), available_actions)
+
+    known_transitions: dict[tuple[tuple[int, int], int], tuple[int, int]] = {}
+    movement_rules: list[Rule] = []
+    collision_rules: list[Rule] = []
+
+    for fidx in range(1, len(action_ids)):
+        pos_before = entity_pos_at(reg, catalog, entity_id, fidx - 1)
+        pos_after = entity_pos_at(reg, catalog, entity_id, fidx)
+        if pos_before is None or pos_after is None:
+            continue
+        action = int(action_ids[fidx])
+
+        if pos_before == pos_after:
+            collision_rules.append(
+                Rule(
+                    guard_spec={
+                        "all": [
+                            {"action": action},
+                            {"dim": "pos", "of": entity_id, "eq": list(pos_before)},
+                        ]
+                    },
+                    effects=(Effect("pos", entity_id, "revert", ""),),
+                    support=1,
+                    kind="collision",
+                )
+            )
+        else:
+            known_transitions[(pos_before, action)] = pos_after
+            movement_rules.append(
+                Rule(
+                    guard_spec={
+                        "all": [
+                            {"action": action},
+                            {"dim": "pos", "of": entity_id, "eq": list(pos_before)},
+                        ]
+                    },
+                    effects=(Effect("pos", entity_id, "set", pos_after),),
+                    support=1,
+                    kind="movement",
+                )
+            )
+
+    # Derive generic movement rules (mode of deltas per action).
+    controllable = ent.affordances.get("controllable") is True
+    motion_by_action: dict[int, tuple[int, int]] = {}
+    if controllable:
+        raw = ent.meta.get("motion_by_action")
+        if isinstance(raw, dict):
+            motion_by_action = {
+                int(k): (int(v[0]), int(v[1])) for k, v in raw.items()
+            }
+    if not motion_by_action:
+        by_action: dict[int, list[tuple[int, int]]] = {}
+        for (pos, action), nxt in known_transitions.items():
+            by_action.setdefault(action, []).append(
+                (nxt[0] - pos[0], nxt[1] - pos[1])
+            )
+        for action, deltas in by_action.items():
+            motion_by_action[action] = max(set(deltas), key=deltas.count)
+
+    for action, delta in motion_by_action.items():
+        movement_rules.append(
+            Rule(
+                guard_spec={"action": action},
+                effects=(Effect("pos", entity_id, "delta", delta),),
+                support=1,
+                kind="movement",
+            )
+        )
+
+    return (tuple(movement_rules), tuple(collision_rules), available_actions)
+
+
+def learn_collision_rules(
+    reg: ObjectRegistry,
+    catalog: EntityCatalog,
+    action_ids: list[int],
+    entity_id: int,
+    *,
+    grid_rows: int = 64,
+    grid_cols: int = 64,
+) -> tuple[Rule, ...]:
+    """Thin wrapper: return only the collision rules for *entity_id*."""
+    _, collision_rules, _ = learn_movement_rules(
+        reg,
+        catalog,
+        action_ids,
+        entity_id,
+        grid_rows=grid_rows,
+        grid_cols=grid_cols,
+    )
+    return collision_rules
+
+
 def learn_effect_context(
     reg: ObjectRegistry,
     catalog: EntityCatalog,
@@ -142,7 +257,7 @@ def learn_effect_context(
     grid_rows: int = 64,
     grid_cols: int = 64,
 ) -> EffectContext | None:
-    movement = learn_movement_model(
+    movement_rules, collision_rules, available_actions = learn_movement_rules(
         reg,
         catalog,
         action_ids,
@@ -150,7 +265,7 @@ def learn_effect_context(
         grid_rows=grid_rows,
         grid_cols=grid_cols,
     )
-    if movement is None:
+    if not available_actions:
         return None
     terminal_rules = learn_terminal_rules(
         reg, catalog, action_ids, frame_meta, controllable_id
@@ -159,7 +274,9 @@ def learn_effect_context(
         reg, catalog, action_ids, controllable_id
     )
     return EffectContext(
-        movement=movement,
+        movement_rules=movement_rules,
+        collision_rules=collision_rules,
+        available_actions=available_actions,
         terminal_rules=terminal_rules,
         relational_rules=relational_rules,
         non_markovian=non_markovian,
