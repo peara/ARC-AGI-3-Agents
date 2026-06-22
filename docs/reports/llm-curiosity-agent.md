@@ -309,9 +309,9 @@ Now BFS can plan through action 3 → reaches the original target
 
 ---
 
-## 8. Planned changes
+## 8. Implemented changes
 
-### 8.1 ProbeGoal: `predicate` → `target` + `action`
+### 8.1 ProbeGoal: `predicate` → `target` + `action` ✅ Implemented
 
 The field rename disambiguates the role:
 
@@ -337,7 +337,7 @@ Two cases:
 If the bot is already at the target (trivially satisfied), only `action` matters
 — just execute it directly.
 
-### 8.2 Unknowns surfacing from BFS
+### 8.2 Unknowns surfacing from BFS ✅ Implemented
 
 `plan_bfs` currently returns `list[int] | None`. It should also return the
 unknown frontier — the set of `(state, action)` pairs where prediction was
@@ -358,20 +358,26 @@ def plan_bfs(...) -> tuple[list[int] | None, list[UnknownAction]]:
 This propagates through `execute_probe` to the agent, which stores unknowns in
 `failure_context` for the next LLM planner call.
 
-### 8.3 Loop-back to LLM planner
+### 8.3 Loop-back to LLM planner ✅ Implemented
 
-When BFS fails (no path found), instead of falling back to the broken classical
-`policy.decide()`, the agent loops back to the LLM planner with the unknowns:
+When BFS fails (no path found), the agent loops back to the LLM planner with the unknowns. The control flow is LLM-first:
+
+- **LLM-directed phase** (after controllable object detected): The LLM is always the driver. `policy.decide()` is NOT called. When BFS fails or the LLM fails, `random.choice(actions)` is used directly as an emergency fallback.
+- **Random phase** (before controllable detected): `ExplorationPolicy.decide()` is still used for exploration.
 
 ```
-BFS fails → store unknowns in failure_context
+BFS fails → store UnknownAction in failure_context
          → {"type": "unreachable", "unknowns": [...]}
          → next frame: LLM planner sees unknowns
          → LLM picks an unknown → ProbeGoal(target=reach_state, action=unknown_action)
          → agent navigates + probes → observes effect → engine learns rule
+
+LLM fails or returns invalid → random.choice(actions)
 ```
 
-### 8.4 LLM planner prompt update
+This means `ExplorationPolicy.decide()` is only invoked during cold start (before any controllable object is detected). Once the LLM takes over, the classical planner is fully demoted.
+
+### 8.4 LLM planner prompt update ✅ Implemented
 
 The system prompt needs to teach the LLM about the `action` field and the
 unknowns:
@@ -381,7 +387,7 @@ unknowns:
 - The LLM should explain *why* it picked that unknown (e.g., "action 3 hasn't
   been tried yet, let's see if it moves left").
 
-### 8.5 Affected files
+### 8.5 Affected files ✅ Implemented
 
 | File | Change |
 |------|--------|
@@ -395,6 +401,8 @@ unknowns:
 | `tests/unit/test_llm_planner.py` | Rename + action field tests |
 | `tests/unit/test_llm_agent_loop.py` | Rename + action field tests |
 | `scripts/probe_recording.py` | Rename |
+
+**Design decision: LLM-first control flow.** In the LLM-directed phase (after a controllable object is detected), `policy.decide()` is NOT called. The LLM is always the driver. When BFS fails to find a path or the LLM returns an invalid goal, the agent uses `random.choice(actions)` directly as an emergency fallback. `ExplorationPolicy.decide()` is only used during cold start (before any controllable object is detected). This demotes the classical planner to a cold-start-only role and keeps the LLM in the loop at all times during the main exploration phase.
 
 ---
 
