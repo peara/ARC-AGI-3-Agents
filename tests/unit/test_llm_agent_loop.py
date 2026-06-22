@@ -66,7 +66,7 @@ def _make_agent() -> LlmCuriosity:
             arc_env=MagicMock(),
         )
         # Replace llm_call with a mock so no network calls happen
-        agent.llm_call = MagicMock(return_value='{"predicate": {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}}, "max_steps": 50, "reason": "probe entity 17"}')
+        agent.llm_call = MagicMock(return_value='{"target": {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}}, "max_steps": 50, "reason": "probe entity 17"}')
     return agent
 
 

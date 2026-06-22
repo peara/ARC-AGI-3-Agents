@@ -24,9 +24,9 @@ You are an exploration planner for a grid-based game. Your job is to choose the
 next probe goal given the current scene and any failure context from previous
 attempts.
 
-## Predicate schema
+## Target (predicate) schema
 
-Goals are expressed as predicate dicts with these forms:
+Goals are expressed as target dicts with these forms:
 
 1. **near** — navigate the player entity to a position or near another entity:
    {"dim": "pos", "of": <player_eid>, "near": {"of": <target_eid>, "radius": N}}
@@ -41,15 +41,38 @@ Goals are expressed as predicate dicts with these forms:
 4. **action** — action guard (ignored for goal satisfaction):
    {"action": <action_id>}
 
-**Prefer `near` predicates** — navigation goals are the primary exploration
+**Prefer `near` targets** — navigation goals are the primary exploration
 pattern. Use `eq` only when you have a specific property hypothesis to test.
+
+## Action field
+
+Optionally, you may specify an `"action"` field (integer) in your goal. This is
+the unknown action to try at the target. Use it when the failure context
+includes `unknowns` — pick one unknown action to explore and set `action` to
+that action ID.
+
+## Unknowns
+
+When the scene bundle includes an `unknowns` list (actions whose effects are
+not yet learned), choose one unknown action to probe. Set `"action"` to that
+action ID and navigate to a position where the action's effect can be observed.
+
+Example — probe an unknown action near an entity:
+```json
+{
+  "target": {"dim": "pos", "of": 0, "near": [5, 10], "radius": 2},
+  "action": 3,
+  "max_steps": 50,
+  "reason": "Action 3 is unknown — let's probe it near entity 5"
+}
+```
 
 ## Examples
 
 Example 1 — Go probe an entity (near with relative entity ref):
 ```json
 {
-  "predicate": {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
+  "target": {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
   "max_steps": 50,
   "reason": "Entity 17 at row 12 is unexplored — navigate close to discover its properties"
 }
@@ -58,7 +81,7 @@ Example 1 — Go probe an entity (near with relative entity ref):
 Example 2 — Explore an area (near with coordinate list):
 ```json
 {
-  "predicate": {"dim": "pos", "of": 0, "near": [5, 32], "radius": 5},
+  "target": {"dim": "pos", "of": 0, "near": [5, 32], "radius": 5},
   "max_steps": 100,
   "reason": "Top of map is undiscovered — check for entities or interactions in that area"
 }
@@ -67,7 +90,7 @@ Example 2 — Explore an area (near with coordinate list):
 Example 3 — Test if an object is solid (near with small radius):
 ```json
 {
-  "predicate": {"dim": "pos", "of": 0, "near": {"of": 8, "radius": 1}},
+  "target": {"dim": "pos", "of": 0, "near": {"of": 8, "radius": 1}},
   "max_steps": 50,
   "reason": "Navigate adjacent to entity 8 at (58,6) — next turn, move into it to test if it's solid or walkable"
 }
@@ -78,13 +101,15 @@ Example 3 — Test if an object is solid (near with small radius):
 - Always have an opinion. If unsure, pick an unexplored entity to navigate toward.
 - Your `reason` should explain what you're doing AND what you'll do next — it helps you continue your plan across turns.
 - If the failure context says `"type": "unreachable"`, the target entity cannot be reached from the player's current position (no valid path exists). Do NOT retry the same target — pick a different entity or area to explore.
+- If the failure context includes `unknowns`, pick one unknown action to explore and include `"action"` in your goal.
 
 ## Output format
 
 Respond with a single JSON object:
 ```json
 {
-  "predicate": { ... },
+  "target": { ... },
+  "action": <int or null>,
   "max_steps": <int>,
   "reason": "<string>"
 }
@@ -119,6 +144,15 @@ def _build_messages(
             f"## Failure context (previous attempt failed)\n```json\n"
             f"{json.dumps(failure_context, indent=2)}\n```"
         )
+
+    # Unknowns from scene bundle (if present)
+    if isinstance(bundle, dict):
+        unknowns = bundle.get("unknowns")
+        if unknowns and isinstance(unknowns, list) and len(unknowns) > 0:
+            user_parts.append(
+                f"## Unknown actions (effects not yet learned)\n```json\n"
+                f"{json.dumps(unknowns, indent=2)}\n```"
+            )
 
     user_content = "\n\n".join(user_parts)
 
@@ -200,19 +234,37 @@ def _validate_goal(
     """Validate a parsed goal dict and construct a ProbeGoal, or None.
 
     Checks that required keys exist and that all entity IDs referenced in
-    the predicate are present in ``scene_entities``.
+    the target are present in ``scene_entities``.
+
+    The JSON wire format uses ``"target"`` (not ``"predicate"``). An optional
+    ``"action"`` field may be present: if so, it must be an ``int`` (the
+    unknown action to try at the target).  If absent, the goal has no
+    specific action constraint.
     """
-    required_keys = {"predicate", "max_steps", "reason"}
+    required_keys = {"target", "max_steps", "reason"}
     if not required_keys.issubset(goal_dict.keys()):
         return None
 
-    predicate = goal_dict["predicate"]
-    if not isinstance(predicate, dict):
+    target_dict = goal_dict["target"]
+    if not isinstance(target_dict, dict):
         return None
 
-    # Collect entity IDs referenced in the predicate
+    # Validate optional "action" field
+    action_val: int | None
+    if "action" in goal_dict:
+        action_raw = goal_dict["action"]
+        if action_raw is None:
+            action_val = None
+        elif isinstance(action_raw, int) and not isinstance(action_raw, bool):
+            action_val = action_raw
+        else:
+            return None
+    else:
+        action_val = None
+
+    # Collect entity IDs referenced in the target predicate
     try:
-        referenced_ids = _walk_predicate_ids(predicate)
+        referenced_ids = _walk_predicate_ids(target_dict)
     except Exception:
         return None
 
@@ -222,7 +274,7 @@ def _validate_goal(
 
     try:
         return ProbeGoal(
-            target=predicate,
+            target=target_dict,
             max_steps=int(goal_dict["max_steps"]),  # type: ignore[call-overload]
             reason=str(goal_dict["reason"]),
         )

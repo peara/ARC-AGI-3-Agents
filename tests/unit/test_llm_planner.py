@@ -32,6 +32,7 @@ def _bundle(
     entities: dict[str, dict[str, object]] | list[dict[str, object]] | None = None,
     *,
     entities_format: str = "dict",
+    unknowns: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Build a realistic scene bundle.
 
@@ -50,7 +51,10 @@ def _bundle(
                 "17": {"role": "counter", "pos": [12, 36]},
             }
         )
-    return {"scene": {"entities": entities}}
+    bundle: dict[str, object] = {"scene": {"entities": entities}}
+    if unknowns is not None:
+        bundle["unknowns"] = unknowns
+    return bundle
 
 
 # ===========================================================================
@@ -74,10 +78,10 @@ class TestLLMPlanner:
         assert messages[1]["role"] == "user"
 
     def test_build_messages_system_has_schema(self) -> None:
-        """System message contains 'Predicate schema' and 'near'."""
+        """System message contains target schema and 'near'."""
         messages = _build_messages(_bundle(), [0, 1, 2, 3])
         content = messages[0]["content"]
-        assert "Predicate schema" in content
+        assert "target" in content
         assert "near" in content
 
     def test_build_messages_system_has_examples(self) -> None:
@@ -97,6 +101,20 @@ class TestLLMPlanner:
         content = messages[0]["content"]
         assert "Always have an opinion" in content
         assert "reason" in content
+
+    def test_build_messages_system_has_action_field(self) -> None:
+        """System message describes the optional action field."""
+        messages = _build_messages(_bundle(), [0, 1, 2, 3])
+        content = messages[0]["content"]
+        assert "action" in content
+        assert "unknown" in content.lower() or "Unknown" in content
+
+    def test_build_messages_system_has_unknowns_example(self) -> None:
+        """System message contains the unknowns example with action field."""
+        messages = _build_messages(_bundle(), [0, 1, 2, 3])
+        content = messages[0]["content"]
+        assert '"action": 3' in content
+        assert "unknown" in content.lower()
 
     def test_build_messages_user_has_bundle(self) -> None:
         """User message contains the bundle JSON."""
@@ -127,24 +145,50 @@ class TestLLMPlanner:
         user_content = messages[1]["content"]
         assert "Failure context" not in user_content
 
+    def test_build_messages_with_unknowns_in_bundle(self) -> None:
+        """Unknown actions in bundle appear in user message."""
+        unknowns = [
+            {"action": 3, "state": "fingerprint_abc"},
+            {"action": 5, "state": "fingerprint_def"},
+        ]
+        bundle = _bundle(unknowns=unknowns)
+        messages = _build_messages(bundle, [0, 1, 2, 3])
+        user_content = messages[1]["content"]
+        assert "Unknown actions" in user_content
+        assert "fingerprint_abc" in user_content
+
+    def test_build_messages_without_unknowns(self) -> None:
+        """No 'Unknown actions' section when bundle has no unknowns."""
+        bundle = _bundle()  # no unknowns key
+        messages = _build_messages(bundle, [0, 1, 2, 3])
+        user_content = messages[1]["content"]
+        assert "Unknown actions" not in user_content
+
+    def test_build_messages_empty_unknowns_list(self) -> None:
+        """No 'Unknown actions' section when unknowns is an empty list."""
+        bundle = _bundle(unknowns=[])
+        messages = _build_messages(bundle, [0, 1, 2, 3])
+        user_content = messages[1]["content"]
+        assert "Unknown actions" not in user_content
+
     # -----------------------------------------------------------------------
     # _parse_response
     # -----------------------------------------------------------------------
 
     def test_parse_markdown_json_block(self) -> None:
         """Extracts JSON from ```json ... ``` block."""
-        raw = 'Here is the plan:\n```json\n{"predicate": {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}}, "max_steps": 50, "reason": "test"}\n```'
+        raw = 'Here is the plan:\n```json\n{"target": {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}}, "max_steps": 50, "reason": "test"}\n```'
         result = _parse_response(raw)
         assert result is not None
-        assert result["predicate"]["of"] == 0
+        assert result["target"]["of"] == 0
         assert result["max_steps"] == 50
 
     def test_parse_raw_json(self) -> None:
         """Extracts raw JSON string (no markdown wrapper)."""
-        raw = '{"predicate": {"dim": "pos", "of": 0, "eq": [5, 10]}, "max_steps": 30, "reason": "raw test"}'
+        raw = '{"target": {"dim": "pos", "of": 0, "eq": [5, 10]}, "max_steps": 30, "reason": "raw test"}'
         result = _parse_response(raw)
         assert result is not None
-        assert result["predicate"]["dim"] == "pos"
+        assert result["target"]["dim"] == "pos"
         assert result["max_steps"] == 30
 
     def test_parse_garbage_returns_none(self) -> None:
@@ -178,7 +222,7 @@ class TestLLMPlanner:
     def test_validate_valid_goal(self) -> None:
         """Valid entity IDs → returns ProbeGoal with correct fields."""
         goal_dict = {
-            "predicate": {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
+            "target": {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
             "max_steps": 50,
             "reason": "Entity 17 is unexplored",
         }
@@ -186,14 +230,25 @@ class TestLLMPlanner:
         result = _validate_goal(goal_dict, scene_entities)
         assert result is not None
         assert isinstance(result, ProbeGoal)
-        assert result.target == goal_dict["predicate"]
+        assert result.target == goal_dict["target"]
         assert result.max_steps == 50
         assert result.reason == "Entity 17 is unexplored"
+
+    def test_validate_rejects_old_predicate_key(self) -> None:
+        """Goals using old 'predicate' key (instead of 'target') → None."""
+        goal_dict = {
+            "predicate": {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
+            "max_steps": 50,
+            "reason": "Entity 17 is unexplored",
+        }
+        scene_entities = {0, 17, 5}
+        result = _validate_goal(goal_dict, scene_entities)
+        assert result is None
 
     def test_validate_invalid_entity_in_of(self) -> None:
         """Invalid entity ID in 'of' → None."""
         goal_dict = {
-            "predicate": {"dim": "pos", "of": 99, "eq": [5, 10]},
+            "target": {"dim": "pos", "of": 99, "eq": [5, 10]},
             "max_steps": 50,
             "reason": "navigate",
         }
@@ -204,7 +259,7 @@ class TestLLMPlanner:
     def test_validate_invalid_entity_in_near(self) -> None:
         """Invalid entity ID in 'near' dict → None."""
         goal_dict = {
-            "predicate": {"dim": "pos", "of": 0, "near": {"of": 99, "radius": 3}},
+            "target": {"dim": "pos", "of": 0, "near": {"of": 99, "radius": 3}},
             "max_steps": 50,
             "reason": "navigate",
         }
@@ -217,22 +272,22 @@ class TestLLMPlanner:
         scene_entities = {0, 17}
         # Missing "reason"
         goal_no_reason = {
-            "predicate": {"dim": "pos", "of": 0, "eq": [5, 10]},
+            "target": {"dim": "pos", "of": 0, "eq": [5, 10]},
             "max_steps": 50,
         }
         assert _validate_goal(goal_no_reason, scene_entities) is None
 
         # Missing "max_steps"
         goal_no_steps = {
-            "predicate": {"dim": "pos", "of": 0, "eq": [5, 10]},
+            "target": {"dim": "pos", "of": 0, "eq": [5, 10]},
             "reason": "navigate",
         }
         assert _validate_goal(goal_no_steps, scene_entities) is None
 
-    def test_validate_predicate_not_dict(self) -> None:
-        """Predicate is not a dict → None."""
+    def test_validate_target_not_dict(self) -> None:
+        """Target is not a dict → None."""
         goal_dict = {
-            "predicate": "not a dict",
+            "target": "not a dict",
             "max_steps": 50,
             "reason": "navigate",
         }
@@ -243,7 +298,7 @@ class TestLLMPlanner:
     def test_validate_all_conjunction(self) -> None:
         """'all' conjunction with valid entity IDs → ProbeGoal."""
         goal_dict = {
-            "predicate": {
+            "target": {
                 "all": [
                     {"dim": "pos", "of": 0, "eq": [5, 10]},
                     {"dim": "size", "of": 17, "eq": 8},
@@ -256,9 +311,74 @@ class TestLLMPlanner:
         result = _validate_goal(goal_dict, scene_entities)
         assert result is not None
         assert isinstance(result, ProbeGoal)
-        assert result.target == goal_dict["predicate"]
+        assert result.target == goal_dict["target"]
         assert result.max_steps == 100
         assert result.reason == "navigate and check size"
+
+    def test_validate_with_valid_action(self) -> None:
+        """Valid 'action' field (integer) → ProbeGoal (action validated but not stored yet)."""
+        goal_dict = {
+            "target": {"dim": "pos", "of": 0, "near": [5, 10], "radius": 2},
+            "action": 3,
+            "max_steps": 50,
+            "reason": "probe action 3 near entity",
+        }
+        scene_entities = {0, 17}
+        result = _validate_goal(goal_dict, scene_entities)
+        assert result is not None
+        assert isinstance(result, ProbeGoal)
+        assert result.target == goal_dict["target"]
+        assert result.max_steps == 50
+
+    def test_validate_without_action(self) -> None:
+        """No 'action' field → ProbeGoal returned (action is optional)."""
+        goal_dict = {
+            "target": {"dim": "pos", "of": 0, "near": [5, 10], "radius": 2},
+            "max_steps": 50,
+            "reason": "navigate to area",
+        }
+        scene_entities = {0, 17}
+        result = _validate_goal(goal_dict, scene_entities)
+        assert result is not None
+        assert isinstance(result, ProbeGoal)
+        assert result.target == goal_dict["target"]
+
+    def test_validate_action_null(self) -> None:
+        """'action': null → ProbeGoal returned (action=None)."""
+        goal_dict = {
+            "target": {"dim": "pos", "of": 0, "near": [5, 10], "radius": 2},
+            "action": None,
+            "max_steps": 50,
+            "reason": "navigate to area",
+        }
+        scene_entities = {0, 17}
+        result = _validate_goal(goal_dict, scene_entities)
+        assert result is not None
+        assert isinstance(result, ProbeGoal)
+
+    def test_validate_rejects_string_action(self) -> None:
+        """'action' as string → None (invalid type)."""
+        goal_dict = {
+            "target": {"dim": "pos", "of": 0, "near": [5, 10], "radius": 2},
+            "action": "three",
+            "max_steps": 50,
+            "reason": "navigate to area",
+        }
+        scene_entities = {0, 17}
+        result = _validate_goal(goal_dict, scene_entities)
+        assert result is None
+
+    def test_validate_rejects_float_action(self) -> None:
+        """'action' as float → None (invalid type)."""
+        goal_dict = {
+            "target": {"dim": "pos", "of": 0, "near": [5, 10], "radius": 2},
+            "action": 3.5,
+            "max_steps": 50,
+            "reason": "navigate to area",
+        }
+        scene_entities = {0, 17}
+        result = _validate_goal(goal_dict, scene_entities)
+        assert result is None
 
     # -----------------------------------------------------------------------
     # call_planner (end-to-end with mock llm_call)
@@ -267,7 +387,7 @@ class TestLLMPlanner:
     def test_call_planner_valid_response(self) -> None:
         """Mock returns valid JSON → ProbeGoal."""
         response_json = json.dumps({
-            "predicate": {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
+            "target": {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
             "max_steps": 50,
             "reason": "Entity 17 is unexplored — navigate close to observe",
         })
@@ -283,7 +403,7 @@ class TestLLMPlanner:
     def test_call_planner_list_entities_format(self) -> None:
         """Entity list format (actual scene.summary() output) validates correctly."""
         response_json = json.dumps({
-            "predicate": {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
+            "target": {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
             "max_steps": 50,
             "reason": "Entity 17 is unexplored — navigate close to observe",
         })
@@ -297,7 +417,7 @@ class TestLLMPlanner:
     def test_call_planner_list_entities_rejects_invalid(self) -> None:
         """List entity format rejects goals referencing nonexistent entities."""
         response_json = json.dumps({
-            "predicate": {"dim": "pos", "of": 99, "near": {"of": 17, "radius": 3}},
+            "target": {"dim": "pos", "of": 99, "near": {"of": 17, "radius": 3}},
             "max_steps": 50,
             "reason": "navigate to nonexistent entity 99",
         })
@@ -314,7 +434,7 @@ class TestLLMPlanner:
     def test_call_planner_invalid_entity(self) -> None:
         """Mock returns JSON with invalid entity → None."""
         response_json = json.dumps({
-            "predicate": {"dim": "pos", "of": 99, "eq": [5, 10]},
+            "target": {"dim": "pos", "of": 99, "eq": [5, 10]},
             "max_steps": 50,
             "reason": "navigate to nonexistent",
         })
@@ -327,7 +447,7 @@ class TestLLMPlanner:
         failure = {"type": "prediction_failure", "detail": "no path found"}
         bundle = _bundle()
         llm_call = _mock_llm_call(json.dumps({
-            "predicate": {"dim": "pos", "of": 0, "eq": [5, 10]},
+            "target": {"dim": "pos", "of": 0, "eq": [5, 10]},
             "max_steps": 30,
             "reason": "retry",
         }))
@@ -345,9 +465,23 @@ class TestLLMPlanner:
     def test_call_planner_missing_keys(self) -> None:
         """Mock returns JSON missing 'reason' → None."""
         response_json = json.dumps({
-            "predicate": {"dim": "pos", "of": 0, "eq": [5, 10]},
+            "target": {"dim": "pos", "of": 0, "eq": [5, 10]},
             "max_steps": 50,
         })
         bundle = _bundle()
         result = call_planner(bundle, [0, 1, 2, 3], _mock_llm_call(response_json))
         assert result is None
+
+    def test_call_planner_with_action(self) -> None:
+        """Mock returns valid JSON with action field → ProbeGoal."""
+        response_json = json.dumps({
+            "target": {"dim": "pos", "of": 0, "near": [5, 10], "radius": 2},
+            "action": 3,
+            "max_steps": 50,
+            "reason": "probe action 3",
+        })
+        bundle = _bundle()
+        result = call_planner(bundle, [0, 1, 2, 3], _mock_llm_call(response_json))
+        assert result is not None
+        assert isinstance(result, ProbeGoal)
+        assert result.target["of"] == 0
