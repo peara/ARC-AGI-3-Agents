@@ -140,7 +140,7 @@ class TestLlmCuriosityAgentLoop:
                 max_steps=50,
                 reason="probe entity 17",
             )
-            mock_execute.return_value = [3, 1, 1, 4]
+            mock_execute.return_value = ([3, 1, 1, 4], [])
 
             agent.choose_action([frame], frame)
 
@@ -152,7 +152,7 @@ class TestLlmCuriosityAgentLoop:
     # -----------------------------------------------------------------------
 
     def test_llm_parse_failure_fallback(self) -> None:
-        """When LLM returns unparseable text, agent falls back to policy.decide() without crashing."""
+        """When LLM returns unparseable text, agent falls back to random.choice(actions) without crashing."""
         agent = _make_agent()
         agent._phase = "llm_directed"
         agent._probe_plan = None
@@ -173,8 +173,8 @@ class TestLlmCuriosityAgentLoop:
 
         # No exception propagated
         assert isinstance(action, GameAction)
-        # policy.decide was used as fallback
-        agent.policy.decide.assert_called()
+        # Action must be one of the available actions (random.choice)
+        assert action.value in [1, 2, 3, 4]
 
     # -----------------------------------------------------------------------
     # 4. Probe execution — plan found
@@ -201,7 +201,7 @@ class TestLlmCuriosityAgentLoop:
         )
 
         with patch("agents.templates.llm_curiosity_agent.call_planner") as mock_call_planner, patch(
-            "agents.templates.llm_curiosity_agent.execute_probe", return_value=[3, 1, 1, 4]
+            "agents.templates.llm_curiosity_agent.execute_probe", return_value=([3, 1, 1, 4], [])
         ):
             mock_call_planner.return_value = goal
 
@@ -242,14 +242,14 @@ class TestLlmCuriosityAgentLoop:
 
             action = agent.choose_action([frame], frame)
 
-        # The last probe action (1) was popped and returned
-        assert action.value == 1
+        # After exhaustion + LLM returning None, action is random.choice(actions)
+        assert isinstance(action, GameAction)
+        assert action.value in [1, 2, 3, 4]
         # Probe plan is now empty / None
         assert agent._probe_plan is None
         # The failure context "probe_exhausted" was passed to call_planner as failure_context
         call_args = mock_call_planner.call_args
         assert call_args is not None
-        call_args.kwargs.get("failure_context") or call_args[1] if len(call_args) > 1 else None
         # Check keyword argument
         kw_failure = call_args.kwargs.get("failure_context")
         assert kw_failure is not None
@@ -323,7 +323,7 @@ class TestLlmCuriosityAgentLoop:
     # -----------------------------------------------------------------------
 
     def test_llm_exception_fallback_with_cooldown(self) -> None:
-        """When LLM call raises an exception, agent falls back to policy.decide() and sets _llm_cooldown to 3."""
+        """When LLM call raises an exception, agent falls back to random.choice(actions) and sets _llm_cooldown to 3."""
         agent = _make_agent()
         agent._phase = "llm_directed"
         agent._probe_plan = None
@@ -337,7 +337,6 @@ class TestLlmCuriosityAgentLoop:
         frame = _FakeFrameData(state=GameState.NOT_FINISHED, available_actions=[1, 2, 3, 4])
 
         with patch("agents.templates.llm_curiosity_agent.call_planner") as mock_call_planner:
-            # Simulate LLM call raising an exception inside call_planner
             mock_call_planner.side_effect = RuntimeError("LLM network error")
 
             action = agent.choose_action([frame], frame)
@@ -346,5 +345,125 @@ class TestLlmCuriosityAgentLoop:
         assert isinstance(action, GameAction)
         # Cooldown set to 3
         assert agent._llm_cooldown == 3
-        # Fallback to policy.decide
-        agent.policy.decide.assert_called()
+        # Action must be one of the available actions (random.choice)
+        assert action.value in [1, 2, 3, 4]
+
+    # -----------------------------------------------------------------------
+    # 9. Unreachable goal stores unknowns in failure_context
+    # -----------------------------------------------------------------------
+
+    def test_unreachable_goal_stores_unknowns(self) -> None:
+        """When BFS returns None (unreachable), failure_context includes unknowns."""
+        from planning.query import UnknownAction
+        from effects.state import SceneState
+
+        agent = _make_agent()
+        agent._phase = "llm_directed"
+        agent._probe_plan = None
+        agent._llm_cooldown = 0
+
+        scene = _make_scene_with_controllable()
+        agent._scene = scene
+        agent.policy.context = MagicMock()
+        agent.policy.status.return_value.diverged = False
+
+        frame = _FakeFrameData(state=GameState.NOT_FINISHED, available_actions=[1, 2, 3, 4])
+
+        goal = ProbeGoal(
+            target={"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
+            max_steps=50,
+            reason="probe entity 17",
+        )
+
+        fake_unknowns = [
+            UnknownAction(action=3, state=SceneState(relevant=((0, ("pos", (1, 2))),))),
+        ]
+
+        with patch("agents.templates.llm_curiosity_agent.call_planner") as mock_call_planner, patch(
+            "agents.templates.llm_curiosity_agent.execute_probe"
+        ) as mock_execute:
+            mock_call_planner.return_value = goal
+            mock_execute.return_value = (None, fake_unknowns)
+
+            action = agent.choose_action([frame], frame)
+
+        assert isinstance(action, GameAction)
+        assert action.value in [1, 2, 3, 4]
+        # failure_context was cleared after LLM call but then set by unreachable branch
+        assert agent._failure_context is not None
+        assert agent._failure_context["type"] == "unreachable"
+        assert "unknowns" in agent._failure_context
+        assert len(agent._failure_context["unknowns"]) == 1
+        assert agent._failure_context["unknowns"][0]["action"] == 3
+
+    # -----------------------------------------------------------------------
+    # 10. Goal already met with goal.action → execute that action
+    # -----------------------------------------------------------------------
+
+    def test_goal_already_met_with_action(self) -> None:
+        """When plan is empty but goal.action is set, execute goal.action directly."""
+        agent = _make_agent()
+        agent._phase = "llm_directed"
+        agent._probe_plan = None
+        agent._llm_cooldown = 0
+
+        scene = _make_scene_with_controllable()
+        agent._scene = scene
+        agent.policy.context = MagicMock()
+        agent.policy.status.return_value.diverged = False
+
+        frame = _FakeFrameData(state=GameState.NOT_FINISHED, available_actions=[1, 2, 3, 4])
+
+        goal = ProbeGoal(
+            target={"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
+            max_steps=50,
+            reason="probe entity 17",
+            action=2,
+        )
+
+        with patch("agents.templates.llm_curiosity_agent.call_planner") as mock_call_planner, patch(
+            "agents.templates.llm_curiosity_agent.execute_probe"
+        ) as mock_execute:
+            mock_call_planner.return_value = goal
+            # Empty plan means "already at target"
+            mock_execute.return_value = ([], [])
+
+            action = agent.choose_action([frame], frame)
+
+        assert action.value == 2
+        assert agent._current_goal == goal
+
+    # -----------------------------------------------------------------------
+    # 11. Goal already met without action → random choice
+    # -----------------------------------------------------------------------
+
+    def test_goal_already_met_without_action(self) -> None:
+        """When plan is empty and no goal.action, fall back to random.choice(actions)."""
+        agent = _make_agent()
+        agent._phase = "llm_directed"
+        agent._probe_plan = None
+        agent._llm_cooldown = 0
+
+        scene = _make_scene_with_controllable()
+        agent._scene = scene
+        agent.policy.context = MagicMock()
+        agent.policy.status.return_value.diverged = False
+
+        frame = _FakeFrameData(state=GameState.NOT_FINISHED, available_actions=[1, 2, 3, 4])
+
+        goal = ProbeGoal(
+            target={"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
+            max_steps=50,
+            reason="probe entity 17",
+        )
+
+        with patch("agents.templates.llm_curiosity_agent.call_planner") as mock_call_planner, patch(
+            "agents.templates.llm_curiosity_agent.execute_probe"
+        ) as mock_execute:
+            mock_call_planner.return_value = goal
+            mock_execute.return_value = ([], [])
+
+            action = agent.choose_action([frame], frame)
+
+        assert isinstance(action, GameAction)
+        assert action.value in [1, 2, 3, 4]

@@ -164,7 +164,7 @@ class LlmCuriosity(Agent):
         # ── LLM call ────────────────────────────────────────────────────
         if self._llm_cooldown > 0:
             self._llm_cooldown -= 1
-            action_id = self.policy.decide(scene, available)
+            action_id = random.choice(actions)
             return self._record_and_return(action_id, scene)
 
         goal: ProbeGoal | None = None
@@ -191,11 +191,11 @@ class LlmCuriosity(Agent):
         if goal is not None:
             ctx = self.policy.context
             if ctx is None:
-                # Lost context mid-flight — fall back to classical
-                log.info("Goal set but context lost, falling back to classical")
-                action_id = self.policy.decide(scene, available)
+                # Lost context mid-flight — fall back to random
+                log.info("Goal set but context lost, falling back to random")
+                action_id = random.choice(actions)
                 return self._record_and_return(action_id, scene)
-            plan = execute_probe(goal, scene, ctx, actions)
+            plan, unknowns = execute_probe(goal, scene, ctx, actions)
             if plan is not None and len(plan) > 0:
                 log.info("Probe plan: %d actions for goal=%s", len(plan), goal.reason)
                 self._probe_plan = plan
@@ -203,24 +203,28 @@ class LlmCuriosity(Agent):
                 action_id = self._probe_plan.pop(0)
                 return self._record_and_return(action_id, scene)
             elif plan is not None and len(plan) == 0:
-                # Goal already met — call LLM again next frame
+                # Goal already met — execute goal.action directly or random
                 log.info("Goal already met: %s", goal.reason)
                 self._current_goal = goal
-                action_id = self.policy.decide(scene, available)
+                if goal.action is not None and goal.action in actions:
+                    return self._record_and_return(goal.action, scene)
+                action_id = random.choice(actions)
                 return self._record_and_return(action_id, scene)
             else:
+                # No path found — store unknowns in failure context
                 log.info("No path found for goal: %s", goal.reason)
                 self._failure_context = {
                     "type": "unreachable",
+                    "unknowns": [{"action": ua.action, "state": ua.state.fingerprint()} for ua in unknowns],
                     "last_action": self._last_action_id,
                     "previous_probe_reason": goal.reason if goal else None,
                 }
                 self._current_goal = None
-                action_id = self.policy.decide(scene, available)
+                action_id = random.choice(actions)
                 return self._record_and_return(action_id, scene)
 
         self._llm_cooldown = max(self._llm_cooldown, 3) if goal is None else 0
-        action_id = self.policy.decide(scene, available)
+        action_id = random.choice(actions)
         return self._record_and_return(action_id, scene)
 
     # ── Helpers ──────────────────────────────────────────────────────────
