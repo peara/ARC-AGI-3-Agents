@@ -160,23 +160,36 @@ section per kind at that point.
 - **Effect.op widened to "revert"**: `Literal["delta", "set", "revert"]`. Revert branch in `Rule.apply()` reads `state_before.pos(effect.of)` to restore position. No-op when `state_before=None`.
 - **overlaps guard predicate**: `GuardClause` now has `has_overlaps: bool` and `overlaps_entity_ids: tuple[int, int] | None`. `parse_guard_clauses()` handles `{"overlaps": {"entity_a": N, "entity_b": M}}`. `evaluate_guard()` accepts `entity_cells: dict[int, frozenset[tuple[int, int]]] | None` keyword arg — raises `ValueError` if overlaps guard requires entity_cells but none provided.
 - **movement_rules bucket on EffectContext**: `movement_rules: tuple[Rule, ...] = ()` field. `to_dict()` serializes via `rule_to_dsl()`. `merge_effect_context()` deduplicates by `Rule.key()` with base-first priority.
-- **Dual-path predict() with entity_cells kwarg**: `predict(state, action, ctx, *, entity_cells=None)`. If `ctx.movement_rules` non-empty: iterate movement rules first, fall back to `predict_move()` if no guard matches, then apply terminal + relational rules. If empty: `predict_move()` then terminal + relational (original behavior). `entity_cells` forwarded to `Rule.apply()`.
 - **DSL widened for kind="movement"**: `dsl_to_rule()` and `rule_to_dsl()` handle `kind="movement"` with `"effects"` list format. `validate_proposal()` accepts `kind="movement"` proposals.
-- **Engine promotion routing for movement rules**: `_iter_managed_rules()` returns 3 groups (terminals, counters, movement). `_promote_rules()` routes `kind="movement"` to `movement_rules` bucket. `_bump_support()` handles movement rules. `prune_rules()` prunes movement rules. `format_rule()` and `_index_rules()` handle `kind="movement"`.
+- **Engine promotion routing for movement rules**: `_iter_managed_rules()` returns 4 groups (terminals, counters, movement, collision). `_promote_rules()` routes `kind="movement"` to `movement_rules` bucket, `kind="collision"` to `collision_rules`. `_bump_support()` handles both. `prune_rules()` prunes both. `format_rule()` and `_index_rules()` handle both kinds.
+
+### Implemented (rules-only predict increment — supersedes dual-path)
+
+- **MovementModel deleted**: `MovementModel`, `predict_move`, `_in_bounds`, `learn_movement_model`, kinematics `replay_predicted` removed. `kinematics.py` now contains only `observation_at`, `entity_pos_at`, `entity_exists_at`, `entity_size_at`.
+- **collision_rules bucket on EffectContext**: `collision_rules: tuple[Rule, ...] = ()`. `to_dict()` serializes via `rule_to_dsl()`. `merge_effect_context()` deduplicates with base-first priority.
+- **available_actions field on EffectContext**: `available_actions: tuple[int, ...] = ()`. Defaults to all game actions from perception. `merge_effect_context()` unions and sorts.
+- **has_confirmed reads rules** (D3): only rules with positional guards + `support >= 1` confirm. Generic action-only rules do NOT confirm. `terminal_rules` and `relational_rules` with positional guards also confirm.
+- **Prediction return type**: `predict()` returns `Prediction(state, unknown)` — never `None`. `unknown=True` means "no rule covers this (state, action)" (curiosity signal). `plan_bfs` skips unknowns. `replay_predicted` returns `None` on first unknown step.
+- **Rules-only predict()**: movement rules generate candidates → collision rules revert → terminal/relational rules apply. No dual-path fallback. No `predict_move` import.
+- **learn_movement_rules + learn_collision_rules**: classical learner emits position-specific movement rules (`op="set"`), generic per-action movement rules (`op="delta"`), and position-specific collision rules (`op="revert"`). Replaces `learn_movement_model`.
+- **Collision guards evaluate against state_after** (D1): collision rules see post-movement `nxt`, effects revert from `state_before`.
+- **No grid bounds** (D2): `_in_bounds` deleted entirely. Walls → collision rules. Off-grid → agent explores, BFS prunes.
+- **Rule ordering deferred** (D4): insertion order, no sorting at merge time.
+- **UnknownAction** in `planning/query.py`: `UnknownAction(action, state)` surfaces unknowns to LLM proposer via `QueryInterface` bundle.
+- **Planning consumers updated**: `exploration.py`, `heuristics.py`, `search.py`, `recording_eval.py` all read `ctx.available_actions` / `ctx.movement_rules` instead of `ctx.movement.motion_by_action`.
 
 ### Design decisions
 
 - **entity_cells as kwarg** (not SceneState field): avoids hashability and propagation problems. `entity_cells` is passed through `predict()` → `Rule.apply()` and `evaluate_guard()` call chains.
-- **MovementModel stays fully populated**: `motion_by_action` is the action vocabulary for BFS in 6+ sites. `has_confirmed()` reads `known_transitions`/`known_blocks` directly. Movement rules are additive predict()-only path.
 - **Collision = revert mutator** (not validator, not None return): "blocked" is emergent when all deltas are reverted.
-- **Rule.apply() → SceneState always**: None only for "unpredictable" (no rule, no model entry). Blocked moves are SceneState unchanged (all effects reverted).
+- **Rule.apply() → SceneState always**: `Prediction(state, unknown)` replaces `SceneState | None` return from `predict()`. Blocked moves are SceneState unchanged (all effects reverted).
+- **No grid bounds**: off-grid positions are valid `SceneState`s; BFS prunes via fingerprint dedup or dead-ends. Walls expressed as collision rules, not boundary checks.
+- **Generic action-only rules don't confirm**: `has_confirmed` only counts rules with positional guards + `support >= 1`. This is the rules equivalent of `known_transitions` / `known_blocks` membership.
+- **Rule ordering: insertion order**: learner emits positional rules first, then generic per-action rules. No priority field. Residuals correct ordering mistakes.
 
 ### Deferred (future increments)
 
-- Collision rules (using overlaps guard + revert op)
-- LLM proposer prompt for movement kind
-- known_blocks migration to collision rules
+- LLM proposer prompt for collision kind
 - exists/push rules
-- entity_cells threading through Rule.guard()
-- available_actions field on EffectContext
-- predict() return type change
+- Grid bounds as a rule kind (only if a game demands it and we have a fixture)
+- Rule priority field (only if residuals show ordering problems)
