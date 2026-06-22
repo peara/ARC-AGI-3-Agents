@@ -186,7 +186,7 @@ class TestLLMPlanner:
         result = _validate_goal(goal_dict, scene_entities)
         assert result is not None
         assert isinstance(result, ProbeGoal)
-        assert result.predicate == goal_dict["predicate"]
+        assert result.target == goal_dict["predicate"]
         assert result.max_steps == 50
         assert result.reason == "Entity 17 is unexplored"
 
@@ -256,7 +256,7 @@ class TestLLMPlanner:
         result = _validate_goal(goal_dict, scene_entities)
         assert result is not None
         assert isinstance(result, ProbeGoal)
-        assert result.predicate == goal_dict["predicate"]
+        assert result.target == goal_dict["predicate"]
         assert result.max_steps == 100
         assert result.reason == "navigate and check size"
 
@@ -275,8 +275,8 @@ class TestLLMPlanner:
         result = call_planner(bundle, [0, 1, 2, 3], _mock_llm_call(response_json))
         assert result is not None
         assert isinstance(result, ProbeGoal)
-        assert result.predicate["of"] == 0
-        assert result.predicate["near"]["of"] == 17
+        assert result.target["of"] == 0
+        assert result.target["near"]["of"] == 17
         assert result.max_steps == 50
         assert "unexplored" in result.reason
 
@@ -291,8 +291,8 @@ class TestLLMPlanner:
         result = call_planner(bundle, [0, 1, 2, 3], _mock_llm_call(response_json))
         assert result is not None
         assert isinstance(result, ProbeGoal)
-        assert result.predicate["of"] == 0
-        assert result.predicate["near"]["of"] == 17
+        assert result.target["of"] == 0
+        assert result.target["near"]["of"] == 17
 
     def test_call_planner_list_entities_rejects_invalid(self) -> None:
         """List entity format rejects goals referencing nonexistent entities."""

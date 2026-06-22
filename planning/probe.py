@@ -18,7 +18,7 @@ from .search import PlanSpec, plan_bfs
 class ProbeGoal:
     """Declarative goal specification for a single probe invocation."""
 
-    predicate: dict[str, object]  # DSL predicate dict
+    target: dict[str, object]  # DSL predicate dict
     entities: tuple[int, ...] | None = None  # auto-derived if None
     dims: tuple[str, ...] | None = None  # auto-derived if None
     max_steps: int = 20  # BFS node limit
@@ -26,7 +26,13 @@ class ProbeGoal:
 
 
 def compile_goal(predicate: dict[str, Any]) -> Callable[[SceneState], bool]:
-    """Compile a DSL predicate dict into a callable goal over SceneState."""
+    """Compile a DSL predicate dict into a callable goal over SceneState.
+
+    Note: ``resolve_predicate``, ``compile_goal``, and ``derive_spec_from_predicate``
+    all operate on plain DSL dicts (the value stored in ``ProbeGoal.target``), not on
+    the ``ProbeGoal`` dataclass field itself.  Their ``predicate`` parameter is a
+    dict, not a ProbeGoal attribute.
+    """
 
     # Conjunction of sub-predicates
     if "all" in predicate:
@@ -151,7 +157,7 @@ def execute_probe(
 ) -> tuple[list[int] | None, list[UnknownAction]]:
     """Resolve predicate, build spec, and run BFS to find an action sequence."""
 
-    resolved = resolve_predicate(goal.predicate, scene)
+    resolved = resolve_predicate(goal.target, scene)
 
     if goal.entities is not None and goal.dims is not None:
         entities = goal.entities

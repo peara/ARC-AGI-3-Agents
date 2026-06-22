@@ -203,7 +203,7 @@ def main() -> None:
         dims = tuple(d.strip() for d in args.dims.split(","))
 
     goal = ProbeGoal(
-        predicate=predicate,
+        target=predicate,
         entities=entities,
         dims=dims,
         max_steps=args.max_steps,
@@ -252,7 +252,7 @@ def main() -> None:
 
         llm_goal = call_planner(bundle, actions_available, llm_call)
         if llm_goal is not None:
-            print(f"llm goal: {json.dumps(llm_goal.predicate)} "
+            print(f"llm goal: {json.dumps(llm_goal.target)} "
                   f"max_steps={llm_goal.max_steps} reason={llm_goal.reason!r}")
         else:
             print("llm goal: None (parse failed or no response)")

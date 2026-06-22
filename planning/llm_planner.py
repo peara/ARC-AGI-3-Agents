@@ -222,7 +222,7 @@ def _validate_goal(
 
     try:
         return ProbeGoal(
-            predicate=predicate,
+            target=predicate,
             max_steps=int(goal_dict["max_steps"]),  # type: ignore[call-overload]
             reason=str(goal_dict["reason"]),
         )

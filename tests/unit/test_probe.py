@@ -52,9 +52,9 @@ class TestProbeGoal:
     # -----------------------------------------------------------------------
 
     def test_default_construction_predicate_only(self) -> None:
-        """ProbeGoal requires only predicate; other fields have defaults."""
-        goal = ProbeGoal(predicate={"dim": "pos", "of": 0, "eq": [5, 10]})
-        assert goal.predicate == {"dim": "pos", "of": 0, "eq": [5, 10]}
+        """ProbeGoal requires only target; other fields have defaults."""
+        goal = ProbeGoal(target={"dim": "pos", "of": 0, "eq": [5, 10]})
+        assert goal.target == {"dim": "pos", "of": 0, "eq": [5, 10]}
         assert goal.entities is None
         assert goal.dims is None
         assert goal.max_steps == 20
@@ -63,7 +63,7 @@ class TestProbeGoal:
     def test_explicit_entities_and_dims(self) -> None:
         """ProbeGoal accepts explicit entities and dims tuples."""
         goal = ProbeGoal(
-            predicate={"dim": "pos", "of": 0, "eq": [5, 10]},
+            target={"dim": "pos", "of": 0, "eq": [5, 10]},
             entities=(0, 17),
             dims=("pos", "size"),
             max_steps=50,
@@ -76,9 +76,9 @@ class TestProbeGoal:
 
     def test_frozen_dataclass_immutable(self) -> None:
         """ProbeGoal is frozen — attribute assignment raises."""
-        goal = ProbeGoal(predicate={"action": 1})
+        goal = ProbeGoal(target={"action": 1})
         with pytest.raises(AttributeError):
-            goal.predicate = {}  # type: ignore[misc]
+            goal.target = {}  # type: ignore[misc]
         with pytest.raises(AttributeError):
             goal.max_steps = 99  # type: ignore[misc]
 
@@ -372,7 +372,7 @@ class TestProbeGoal:
 
         scene = _mock_scene(entity_pos={5: (10, 20)})
         goal = ProbeGoal(
-            predicate={"dim": "pos", "of": 0, "near": {"of": 5, "radius": 3}},
+            target={"dim": "pos", "of": 0, "near": {"of": 5, "radius": 3}},
             max_steps=100,
         )
         fake_start = _state(0, "pos", (12, 19))
@@ -395,7 +395,7 @@ class TestProbeGoal:
         from unittest.mock import patch
 
         scene = _mock_scene()
-        goal = ProbeGoal(predicate={"dim": "pos", "of": 0, "eq": [5, 10]})
+        goal = ProbeGoal(target={"dim": "pos", "of": 0, "eq": [5, 10]})
         fake_ctx = MagicMock()
 
         with (
@@ -412,7 +412,7 @@ class TestProbeGoal:
         from unittest.mock import patch
 
         scene = _mock_scene()
-        goal = ProbeGoal(predicate={"dim": "pos", "of": 0, "eq": [5, 10]})
+        goal = ProbeGoal(target={"dim": "pos", "of": 0, "eq": [5, 10]})
         fake_start = _state(0, "pos", (0, 0))
         fake_ctx = MagicMock()
 
@@ -430,7 +430,7 @@ class TestProbeGoal:
 
         scene = _mock_scene()
         goal = ProbeGoal(
-            predicate={"dim": "pos", "of": 0, "eq": [5, 10]},
+            target={"dim": "pos", "of": 0, "eq": [5, 10]},
             entities=(0, 17),
             dims=("pos", "size"),
             max_steps=50,

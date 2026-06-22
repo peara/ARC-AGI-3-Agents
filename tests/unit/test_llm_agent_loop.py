@@ -136,7 +136,7 @@ class TestLlmCuriosityAgentLoop:
             "agents.templates.llm_curiosity_agent.execute_probe"
         ) as mock_execute:
             mock_call_planner.return_value = ProbeGoal(
-                predicate={"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
+                target={"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
                 max_steps=50,
                 reason="probe entity 17",
             )
@@ -195,7 +195,7 @@ class TestLlmCuriosityAgentLoop:
         frame = _FakeFrameData(state=GameState.NOT_FINISHED, available_actions=[1, 2, 3, 4])
 
         goal = ProbeGoal(
-            predicate={"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
+            target={"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
             max_steps=50,
             reason="probe entity 17",
         )
@@ -224,7 +224,7 @@ class TestLlmCuriosityAgentLoop:
         agent._phase = "llm_directed"
         agent._probe_plan = [1]  # one action left
         agent._current_goal = ProbeGoal(
-            predicate={"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
+            target={"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
             max_steps=50,
             reason="probe entity 17",
         )
@@ -267,7 +267,7 @@ class TestLlmCuriosityAgentLoop:
         agent._phase = "llm_directed"
         agent._probe_plan = None  # no active plan — falls through to divergence check
         agent._current_goal = ProbeGoal(
-            predicate={"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
+            target={"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
             max_steps=50,
             reason="probe entity 17",
         )
@@ -303,7 +303,7 @@ class TestLlmCuriosityAgentLoop:
         agent._phase = "llm_directed"
         agent._probe_plan = [1, 2, 3]
         agent._current_goal = ProbeGoal(
-            predicate={"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
+            target={"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
             max_steps=50,
             reason="probe entity 17",
         )

@@ -180,7 +180,7 @@ class LlmCuriosity(Agent):
             )
             self._failure_context = None
             if goal is not None:
-                log.info("LLM goal: predicate=%s max_steps=%s reason=%s", goal.predicate, goal.max_steps, goal.reason)
+                log.info("LLM goal: target=%s max_steps=%s reason=%s", goal.target, goal.max_steps, goal.reason)
             else:
                 log.info("LLM returned no valid goal")
         except Exception:
