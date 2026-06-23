@@ -30,11 +30,17 @@ def predict(
 ) -> Prediction:
     """Predict the next symbolic state after ``action``.
 
-    Rules-only path: movement rules propose candidate positions, collision
-    rules revert positions that collide, terminal and relational rules apply
-    effects. If no movement rule guard matches, returns ``unknown=True``.
+    Rules-only path: confirmed and proposed movement rules propose candidate
+    positions, collision rules revert positions that collide, terminal and
+    relational rules apply effects. If no movement rule guard matches
+    (confirmed or proposed), returns ``unknown=True``.
 
-    Collision rules evaluate guards against the post-movement state (D1).
+    Proposed rules (support=0) are treated the same as confirmed — they make
+    the action "known" so the engine can confirm or prune them via observation.
+
+    Collision rules evaluate guards against the pre-action state. This matches
+    how collision rules are learned — the guard captures the entity's position
+    before the movement, and ``op="revert"`` restores that position.
     Effects with ``op="revert"`` restore values from ``state_before``.
     """
     if ctx.non_markovian and not ctx.has_confirmed(state, action):
@@ -46,17 +52,30 @@ def predict(
         if rule.guard(state, action):
             nxt = rule.apply(nxt, action, state_before=state, entity_cells=entity_cells)
             any_fired = True
+    for rule in ctx.proposed_rules:
+        if rule.kind == "movement" and rule.guard(state, action):
+            nxt = rule.apply(nxt, action, state_before=state, entity_cells=entity_cells)
+            any_fired = True
     if not any_fired:
         return Prediction(state, unknown=True)
 
     for rule in ctx.collision_rules:
-        if rule.guard(nxt, action, entity_cells=entity_cells):
+        if rule.guard(state, action, entity_cells=entity_cells):
+            nxt = rule.apply(nxt, action, state_before=state, entity_cells=entity_cells)
+    for rule in ctx.proposed_rules:
+        if rule.kind == "collision" and rule.guard(state, action, entity_cells=entity_cells):
             nxt = rule.apply(nxt, action, state_before=state, entity_cells=entity_cells)
     for rule in ctx.terminal_rules:
         if rule.guard(state, action):
             nxt = rule.apply(nxt, action, state_before=state, entity_cells=entity_cells)
+    for rule in ctx.proposed_rules:
+        if rule.kind == "terminal" and rule.guard(state, action):
+            nxt = rule.apply(nxt, action, state_before=state, entity_cells=entity_cells)
     for rule in ctx.relational_rules:
         if rule.guard(state, action):
+            nxt = rule.apply(nxt, action, state_before=state, entity_cells=entity_cells)
+    for rule in ctx.proposed_rules:
+        if rule.kind == "delta" and rule.guard(state, action):
             nxt = rule.apply(nxt, action, state_before=state, entity_cells=entity_cells)
     return Prediction(nxt, unknown=False)
 
