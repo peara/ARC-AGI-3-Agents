@@ -185,6 +185,28 @@ def _rule_mispredicted(
     return False
 
 
+def _inject_llm_proposals(
+    ctx: EffectContext, llm_proposals: tuple[Rule, ...]
+) -> EffectContext:
+    """Merge LLM proposals into proposed_rules with support=0, deduplicating."""
+    if not llm_proposals:
+        return ctx
+    proposed = list(ctx.proposed_rules)
+    relational_keys = {r.key() for r in ctx.relational_rules}
+    proposed_keys = {r.key() for r in proposed}
+    terminal_keys = {r.key() for r in ctx.terminal_rules}
+    movement_keys = {r.key() for r in ctx.movement_rules}
+    collision_keys = {r.key() for r in ctx.collision_rules}
+    existing_keys = terminal_keys | relational_keys | proposed_keys | movement_keys | collision_keys
+    for rule in llm_proposals:
+        key = rule.key()
+        if key not in existing_keys:
+            proposed.append(replace(rule, support=0))
+            proposed_keys.add(key)
+            existing_keys.add(key)
+    return replace(ctx, proposed_rules=tuple(proposed))
+
+
 def propose_rules(
     ctx: EffectContext,
     state_before: SceneState,
@@ -200,7 +222,6 @@ def propose_rules(
     proposed_keys = {r.key() for r in proposed}
     terminal_keys = {r.key() for r in ctx.terminal_rules}
 
-    # Merge LLM proposals with support=0, deduplicating against existing rules
     for rule in llm_proposals:
         key = rule.key()
         if key not in terminal_keys | relational_keys | proposed_keys:
@@ -341,6 +362,8 @@ def engine_step(
     if not should_engine_step(ctx, state_before, action):
         return ctx
 
+    ctx = _inject_llm_proposals(ctx, llm_proposals)
+
     pred = predict(state_before, action, ctx)
     if pred.unknown:
         return ctx
@@ -353,16 +376,16 @@ def engine_step(
         dims=dims,
         include_terminal=include_terminal,
     )
-    updated = prune_rules(ctx, state_before, action, observed, residual)
     if residual:
         updated = propose_rules(
-            updated,
+            ctx,
             state_before,
             action,
             residual,
             controllable_id=controllable_id,
-            llm_proposals=llm_proposals,
         )
+    else:
+        updated = ctx
     updated = confirm_rules(updated, state_before, action, observed)
     if log_changes:
         log_effect_context_diff(ctx, updated, step_label=step_label)
