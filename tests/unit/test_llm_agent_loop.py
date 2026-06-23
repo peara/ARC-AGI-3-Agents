@@ -285,7 +285,7 @@ class TestLlmCuriosityAgentLoop:
     # -----------------------------------------------------------------------
 
     def test_divergence_clears_plan(self) -> None:
-        """When policy.status().diverged is True and no active probe plan, failure_context is 'rule_violation' and probe_plan is cleared."""
+        """When diverged is True with no active probe plan, failure_context is 'rule_violation' and passed to LLM."""
         agent = _make_agent()
         agent._phase = "llm_directed"
         agent._probe_plan = None  # no active plan — falls through to divergence check
@@ -513,3 +513,144 @@ class TestLlmCuriosityAgentLoop:
 
         assert isinstance(action, GameAction)
         assert action.value in [1, 2, 3, 4]
+
+    # -----------------------------------------------------------------------
+    # 12. Divergence during probe plan execution → abort plan
+    # -----------------------------------------------------------------------
+
+    def test_divergence_during_probe_plan_aborts(self) -> None:
+        """When diverged is True and a probe plan is active, the plan is cleared
+        and failure_context is set to rule_violation before the LLM is called."""
+        agent = _make_agent()
+        agent._phase = "llm_directed"
+        agent._probe_plan = [1, 1, 1]
+        agent._current_goal = ProbeGoal(
+            target={"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
+            max_steps=50,
+            reason="probe entity 17",
+        )
+        agent._llm_cooldown = 0
+
+        scene = _make_scene_with_controllable()
+        agent._scene = scene
+        agent.policy.context = MagicMock()
+        agent.policy.status.return_value.diverged = True
+
+        frame = _FakeFrameData(
+            state=GameState.NOT_FINISHED, available_actions=[1, 2, 3, 4]
+        )
+
+        with patch(
+            "agents.templates.llm_curiosity_agent.call_planner"
+        ) as mock_call_planner:
+            mock_call_planner.return_value = None
+
+            action = agent.choose_action([frame], frame)
+
+        assert agent._probe_plan is None
+        assert agent._current_goal is None
+        kw_failure = mock_call_planner.call_args.kwargs.get("failure_context")
+        assert kw_failure is not None
+        assert kw_failure["type"] == "rule_violation"
+        assert isinstance(action, GameAction)
+        assert action.value in [1, 2, 3, 4]
+
+    # -----------------------------------------------------------------------
+    # 13. Nearest unknown selection in fallback
+    # -----------------------------------------------------------------------
+
+    def test_fallback_picks_nearest_unknown(self) -> None:
+        """When BFS fails with unknowns, the fallback picks the unknown closest
+        to the current controllable position (Manhattan distance)."""
+        from effects.state import SceneState
+        from planning.query import UnknownAction
+
+        agent = _make_agent()
+        agent._phase = "llm_directed"
+        agent._probe_plan = None
+        agent._llm_cooldown = 0
+
+        scene = MagicMock()
+        scene.controllable_id.return_value = 0
+        scene.controllable_pos.return_value = (47, 31)
+        agent._scene = scene
+        agent.policy.context = MagicMock()
+        agent.policy.status.return_value.diverged = False
+
+        frame = _FakeFrameData(
+            state=GameState.NOT_FINISHED, available_actions=[1, 2, 3, 4]
+        )
+
+        goal = ProbeGoal(
+            target={"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
+            max_steps=50,
+            reason="probe entity 17",
+        )
+
+        far_unknown = UnknownAction(
+            action=3,
+            state=SceneState(relevant=((0, ("pos", (17, 31))),)),
+        )
+        near_unknown = UnknownAction(
+            action=3,
+            state=SceneState(relevant=((0, ("pos", (47, 31))),)),
+        )
+        fake_unknowns = [far_unknown, near_unknown]
+
+        with (
+            patch(
+                "agents.templates.llm_curiosity_agent.call_planner"
+            ) as mock_call_planner,
+            patch("agents.templates.llm_curiosity_agent.execute_probe") as mock_execute,
+        ):
+            mock_call_planner.return_value = goal
+            mock_execute.side_effect = [(None, fake_unknowns), ([3], [])]
+
+            agent.choose_action([frame], frame)
+
+        second_call_args = mock_execute.call_args_list[1]
+        fallback_goal: ProbeGoal = second_call_args.args[0]
+        target_dict = fallback_goal.target
+        assert "all" in target_dict
+        pos_pred = target_dict["all"][0]
+        assert pos_pred["dim"] == "pos"
+        assert pos_pred["of"] == 0
+        assert list(pos_pred["eq"]) == [47, 31]
+
+    # -----------------------------------------------------------------------
+    # 14. Unknown action triggers rule proposer via observed transition
+    # -----------------------------------------------------------------------
+
+    def test_unknown_action_triggers_proposer(self) -> None:
+        """When an unknown action is executed, the observed transition triggers
+        the LLM rule proposer (not just residual-gated)."""
+        from effects.state import SceneState
+
+        agent = _make_agent()
+        agent._phase = "llm_directed"
+
+        scene = _make_scene_with_controllable()
+        agent._scene = scene
+        agent.policy.context = MagicMock()
+        agent.policy.status.return_value.diverged = False
+        agent.policy.last_observed_transition = (
+            SceneState(relevant=((0, ("pos", (47, 26))),)),
+            1,
+            SceneState(relevant=((0, ("pos", (47, 26))),)),
+        )
+        agent.policy.last_residual = ()
+
+        with (
+            patch(
+                "agents.templates.llm_curiosity_agent.call_rule_proposer"
+            ) as mock_call_proposer,
+            patch(
+                "agents.templates.llm_curiosity_agent.call_planner"
+            ) as mock_call_planner,
+        ):
+            mock_call_proposer.return_value = []
+            mock_call_planner.return_value = None
+
+            agent._try_propose_rules()
+
+        mock_call_proposer.assert_called_once()

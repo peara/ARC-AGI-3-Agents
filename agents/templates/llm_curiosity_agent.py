@@ -27,7 +27,7 @@ from planning.llm_rule_proposer import (
     make_rule_proposer,
 )
 from planning.probe import ProbeGoal, execute_probe
-from planning.query import QueryInterface
+from planning.query import QueryInterface, UnknownAction
 
 from ..agent import Agent
 
@@ -45,7 +45,7 @@ def _format_status(status: Any) -> str:
 class LlmCuriosity(Agent):
     """Perception session + classical curiosity + LLM-directed probing."""
 
-    MAX_ACTIONS = 60
+    MAX_ACTIONS = 30
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -110,7 +110,7 @@ class LlmCuriosity(Agent):
             if (
                 self._phase == "llm_directed"
                 and self._rule_proposer is not NULL_RULE_PROPOSER
-                and self.policy.last_residual
+                and (self.policy.last_residual or self.policy.last_observed_transition)
             ):
                 self._try_propose_rules()
 
@@ -132,6 +132,18 @@ class LlmCuriosity(Agent):
             self._phase = "random"
             action_id = self.policy.decide(scene, available)
             return self._record_and_return(action_id, scene)
+
+        # ── Divergence check (runs every frame, before probe plan pop) ──────
+        if self.policy.status().diverged:
+            self._failure_context = {
+                "type": "rule_violation",
+                "last_action": self._last_action_id,
+                "previous_probe_reason": (
+                    self._current_goal.reason if self._current_goal else None
+                ),
+            }
+            self._probe_plan = None
+            self._current_goal = None
 
         # ── Probe plan execution ─────────────────────────────────────────
         if self._probe_plan is not None and len(self._probe_plan) > 0:
@@ -159,18 +171,6 @@ class LlmCuriosity(Agent):
                 self._probe_plan = None
             else:
                 return self._record_and_return(action_id, scene)
-
-        # ── Divergence check ─────────────────────────────────────────────
-        if self.policy.status().diverged:
-            self._failure_context = {
-                "type": "rule_violation",
-                "last_action": self._last_action_id,
-                "previous_probe_reason": (
-                    self._current_goal.reason if self._current_goal else None
-                ),
-            }
-            self._probe_plan = None
-            self._current_goal = None
 
         # ── LLM call ────────────────────────────────────────────────────
         if self._llm_cooldown > 0:
@@ -241,7 +241,7 @@ class LlmCuriosity(Agent):
                 }
                 self._current_goal = None
                 if unknowns:
-                    ua = random.choice(unknowns)
+                    ua = self._pick_nearest_unknown(unknowns, scene)
                     target = {
                         "all": [
                             {
@@ -278,20 +278,46 @@ class LlmCuriosity(Agent):
 
     # ── Helpers ──────────────────────────────────────────────────────────
 
+    def _pick_nearest_unknown(
+        self,
+        unknowns: list[UnknownAction],
+        scene: SceneSnapshot,
+    ) -> UnknownAction:
+        """Pick the unknown whose target state is closest to the current position.
+
+        Distance is Manhattan from the controllable's current pos to the unknown's
+        pos.  Unknowns without a pos entry default to distance 0 (prefer unknowns
+        at the current state — try the unknown action immediately, no navigation).
+        """
+        current = scene.controllable_pos()
+
+        def _dist(ua: UnknownAction) -> int:
+            if current is None:
+                return 0
+            for _eid, (dim, val) in ua.state.relevant:
+                if dim == "pos" and isinstance(val, tuple):
+                    dr: int = int(val[0]) - current[0]
+                    dc: int = int(val[1]) - current[1]
+                    return abs(dr) + abs(dc)
+            return 0
+
+        return min(unknowns, key=_dist)
+
     def _try_propose_rules(self) -> None:
-        """Call the rule proposer on the current residual and store proposals."""
         scene = self._scene or self.session.snapshot()
         ctx = self.policy.context
         if ctx is None:
             return
         residual = self.policy.last_residual
-        if not residual:
+        observed_transition = self.policy.last_observed_transition
+        if not residual and not observed_transition:
             return
         bundle = QueryInterface(
             scene,
             ctx,
             residual=residual,
             unknowns=self.policy.last_unknowns,
+            observed_transition=observed_transition,
         ).bundle()
         residual_dicts = [
             {
@@ -319,11 +345,16 @@ class LlmCuriosity(Agent):
         return list(self.policy.action_space)
 
     def _record_and_return(self, action_id: int, scene: SceneSnapshot) -> GameAction:
-        """Record last action, attach reasoning, and return the GameAction."""
+        """Record last action, track prediction for engine learning, and return."""
         self._last_action_id = action_id
         action = GameAction.from_id(action_id)
         if action.is_complex():
             action.set_data({"x": random.randint(0, 63), "y": random.randint(0, 63)})
+        # Wire prediction tracking so the effect engine learns from every action,
+        # including probe plan steps and LLM-directed fallbacks.  During the
+        # "random" phase, policy.decide() already calls record_step internally.
+        if self._phase == "llm_directed":
+            self.policy.record_step(scene, scene.controllable_id(), action_id)
         status = self.policy.status()
         action.reasoning = {
             "phase": self._phase,

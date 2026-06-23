@@ -79,7 +79,7 @@ class TestQueryInterface:
         scene = _make_scene()
         qi = QueryInterface(scene)
         bundle = qi.bundle()
-        expected_keys = {"scene", "action_legend", "engine_rules", "recent_actions", "unknowns", "context_note", "residual", "pruned_rules"}
+        expected_keys = {"scene", "action_legend", "engine_rules", "recent_actions", "unknowns", "context_note", "residual", "pruned_rules", "observed_transition"}
         assert set(bundle.keys()) == expected_keys
 
     def test_bundle_with_effect_context(self):
