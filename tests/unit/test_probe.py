@@ -59,7 +59,6 @@ class TestProbeGoal:
         assert goal.target == {"dim": "pos", "of": 0, "eq": [5, 10]}
         assert goal.entities is None
         assert goal.dims is None
-        assert goal.max_steps == 20
         assert goal.reason == ""
 
     def test_explicit_entities_and_dims(self) -> None:
@@ -68,12 +67,10 @@ class TestProbeGoal:
             target={"dim": "pos", "of": 0, "eq": [5, 10]},
             entities=(0, 17),
             dims=("pos", "size"),
-            max_steps=50,
             reason="test goal",
         )
         assert goal.entities == (0, 17)
         assert goal.dims == ("pos", "size")
-        assert goal.max_steps == 50
         assert goal.reason == "test goal"
 
     def test_frozen_dataclass_immutable(self) -> None:
@@ -81,8 +78,6 @@ class TestProbeGoal:
         goal = ProbeGoal(target={"action": 1})
         with pytest.raises(AttributeError):
             goal.target = {}  # type: ignore[misc]
-        with pytest.raises(AttributeError):
-            goal.max_steps = 99  # type: ignore[misc]
 
     # -----------------------------------------------------------------------
     # compile_goal — position equality (list → tuple conversion)
@@ -377,7 +372,6 @@ class TestProbeGoal:
         scene = _mock_scene(entity_pos={5: (10, 20)})
         goal = ProbeGoal(
             target={"dim": "pos", "of": 0, "near": {"of": 5, "radius": 3}},
-            max_steps=100,
         )
         fake_start = _state(0, "pos", (12, 19))
         fake_ctx = MagicMock()
@@ -392,7 +386,7 @@ class TestProbeGoal:
         assert result == ([1, 2], [])
         mock_bfs.assert_called_once()
         call_kwargs = mock_bfs.call_args
-        assert call_kwargs[1]["max_nodes"] == 100
+        assert call_kwargs[1]["max_nodes"] == 5000
 
     def test_execute_probe_returns_none_when_no_start(self) -> None:
         """execute_probe returns None when snapshot_from_scene returns None."""
@@ -437,7 +431,6 @@ class TestProbeGoal:
             target={"dim": "pos", "of": 0, "eq": [5, 10]},
             entities=(0, 17),
             dims=("pos", "size"),
-            max_steps=50,
         )
         fake_start = _state(0, "pos", (5, 10))
         fake_ctx = MagicMock()
@@ -449,7 +442,7 @@ class TestProbeGoal:
             result = execute_probe(goal, scene, fake_ctx, [0, 1])
 
         assert result == ([], [])
-        assert mock_bfs.call_args[1]["max_nodes"] == 50
+        assert mock_bfs.call_args[1]["max_nodes"] == 5000
 
 
 # ===========================================================================
@@ -488,7 +481,6 @@ class TestExecuteProbeWithAction:
         goal = ProbeGoal(
             target={"dim": "pos", "of": 0, "eq": [5, 10]},
             action=3,
-            max_steps=50,
         )
         # Start state already satisfies the goal predicate
         fake_start = _state(0, "pos", (5, 10))
@@ -515,7 +507,6 @@ class TestExecuteProbeWithAction:
         goal = ProbeGoal(
             target={"dim": "pos", "of": 0, "eq": [5, 10]},
             action=3,
-            max_steps=50,
         )
         # Start state does NOT satisfy the goal (wrong position)
         fake_start = _state(0, "pos", (0, 0))
@@ -543,7 +534,6 @@ class TestExecuteProbeWithAction:
         goal = ProbeGoal(
             target={"dim": "pos", "of": 0, "eq": [5, 10]},
             action=3,
-            max_steps=50,
         )
         fake_start = _state(0, "pos", (0, 0))
         fake_ctx = MagicMock()
@@ -571,7 +561,6 @@ class TestExecuteProbeWithAction:
         goal = ProbeGoal(
             target={"dim": "pos", "of": 0, "eq": [5, 10]},
             action=None,
-            max_steps=50,
         )
         fake_start = _state(0, "pos", (0, 0))
         fake_ctx = MagicMock()
@@ -598,7 +587,6 @@ class TestExecuteProbeWithAction:
         goal = ProbeGoal(
             target={"dim": "pos", "of": 0, "eq": [5, 10]},
             action=None,
-            max_steps=50,
         )
         fake_start = _state(0, "pos", (0, 0))
         fake_ctx = MagicMock()
@@ -624,7 +612,6 @@ class TestExecuteProbeWithAction:
         goal = ProbeGoal(
             target={"dim": "pos", "of": 0, "eq": [5, 10]},
             action=3,
-            max_steps=50,
         )
         fake_start = _state(0, "pos", (5, 10))
         fake_ctx = MagicMock()

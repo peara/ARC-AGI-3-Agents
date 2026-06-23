@@ -176,19 +176,17 @@ class TestLLMPlanner:
 
     def test_parse_markdown_json_block(self) -> None:
         """Extracts JSON from ```json ... ``` block."""
-        raw = 'Here is the plan:\n```json\n{"target": {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}}, "max_steps": 50, "reason": "test"}\n```'
+        raw = 'Here is the plan:\n```json\n{"target": {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}}, "reason": "test"}\n```'
         result = _parse_response(raw)
         assert result is not None
         assert result["target"]["of"] == 0
-        assert result["max_steps"] == 50
 
     def test_parse_raw_json(self) -> None:
         """Extracts raw JSON string (no markdown wrapper)."""
-        raw = '{"target": {"dim": "pos", "of": 0, "eq": [5, 10]}, "max_steps": 30, "reason": "raw test"}'
+        raw = '{"target": {"dim": "pos", "of": 0, "eq": [5, 10]}, "reason": "raw test"}'
         result = _parse_response(raw)
         assert result is not None
         assert result["target"]["dim"] == "pos"
-        assert result["max_steps"] == 30
 
     def test_parse_garbage_returns_none(self) -> None:
         """Unparseable text returns None."""
@@ -222,7 +220,6 @@ class TestLLMPlanner:
         """Valid entity IDs → returns ProbeGoal with correct fields."""
         goal_dict = {
             "target": {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
-            "max_steps": 50,
             "reason": "Entity 17 is unexplored",
         }
         scene_entities = {0, 17, 5}
@@ -230,14 +227,12 @@ class TestLLMPlanner:
         assert result is not None
         assert isinstance(result, ProbeGoal)
         assert result.target == goal_dict["target"]
-        assert result.max_steps == 50
         assert result.reason == "Entity 17 is unexplored"
 
     def test_validate_rejects_old_predicate_key(self) -> None:
         """Goals using old 'predicate' key (instead of 'target') → None."""
         goal_dict = {
             "predicate": {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
-            "max_steps": 50,
             "reason": "Entity 17 is unexplored",
         }
         scene_entities = {0, 17, 5}
@@ -248,7 +243,6 @@ class TestLLMPlanner:
         """Invalid entity ID in 'of' → None."""
         goal_dict = {
             "target": {"dim": "pos", "of": 99, "eq": [5, 10]},
-            "max_steps": 50,
             "reason": "navigate",
         }
         scene_entities = {0, 17}
@@ -259,7 +253,6 @@ class TestLLMPlanner:
         """Invalid entity ID in 'near' dict → None."""
         goal_dict = {
             "target": {"dim": "pos", "of": 0, "near": {"of": 99, "radius": 3}},
-            "max_steps": 50,
             "reason": "navigate",
         }
         scene_entities = {0, 17}
@@ -267,27 +260,23 @@ class TestLLMPlanner:
         assert result is None
 
     def test_validate_missing_required_keys(self) -> None:
-        """Missing 'reason' or 'max_steps' → None."""
         scene_entities = {0, 17}
         # Missing "reason"
         goal_no_reason = {
             "target": {"dim": "pos", "of": 0, "eq": [5, 10]},
-            "max_steps": 50,
         }
         assert _validate_goal(goal_no_reason, scene_entities) is None
 
-        # Missing "max_steps"
-        goal_no_steps = {
-            "target": {"dim": "pos", "of": 0, "eq": [5, 10]},
+        # Missing "target"
+        goal_no_target = {
             "reason": "navigate",
         }
-        assert _validate_goal(goal_no_steps, scene_entities) is None
+        assert _validate_goal(goal_no_target, scene_entities) is None
 
     def test_validate_target_not_dict(self) -> None:
         """Target is not a dict → None."""
         goal_dict = {
             "target": "not a dict",
-            "max_steps": 50,
             "reason": "navigate",
         }
         scene_entities = {0, 17}
@@ -303,7 +292,6 @@ class TestLLMPlanner:
                     {"dim": "size", "of": 17, "eq": 8},
                 ]
             },
-            "max_steps": 100,
             "reason": "navigate and check size",
         }
         scene_entities = {0, 17}
@@ -311,7 +299,6 @@ class TestLLMPlanner:
         assert result is not None
         assert isinstance(result, ProbeGoal)
         assert result.target == goal_dict["target"]
-        assert result.max_steps == 100
         assert result.reason == "navigate and check size"
 
     def test_validate_with_valid_action(self) -> None:
@@ -319,7 +306,6 @@ class TestLLMPlanner:
         goal_dict = {
             "target": {"dim": "pos", "of": 0, "near": [5, 10], "radius": 2},
             "action": 3,
-            "max_steps": 50,
             "reason": "probe action 3 near entity",
         }
         scene_entities = {0, 17}
@@ -327,13 +313,11 @@ class TestLLMPlanner:
         assert result is not None
         assert isinstance(result, ProbeGoal)
         assert result.target == goal_dict["target"]
-        assert result.max_steps == 50
 
     def test_validate_without_action(self) -> None:
         """No 'action' field → ProbeGoal returned (action is optional)."""
         goal_dict = {
             "target": {"dim": "pos", "of": 0, "near": [5, 10], "radius": 2},
-            "max_steps": 50,
             "reason": "navigate to area",
         }
         scene_entities = {0, 17}
@@ -347,7 +331,6 @@ class TestLLMPlanner:
         goal_dict = {
             "target": {"dim": "pos", "of": 0, "near": [5, 10], "radius": 2},
             "action": None,
-            "max_steps": 50,
             "reason": "navigate to area",
         }
         scene_entities = {0, 17}
@@ -360,7 +343,6 @@ class TestLLMPlanner:
         goal_dict = {
             "target": {"dim": "pos", "of": 0, "near": [5, 10], "radius": 2},
             "action": "three",
-            "max_steps": 50,
             "reason": "navigate to area",
         }
         scene_entities = {0, 17}
@@ -372,7 +354,6 @@ class TestLLMPlanner:
         goal_dict = {
             "target": {"dim": "pos", "of": 0, "near": [5, 10], "radius": 2},
             "action": 3.5,
-            "max_steps": 50,
             "reason": "navigate to area",
         }
         scene_entities = {0, 17}
@@ -388,7 +369,6 @@ class TestLLMPlanner:
         response_json = json.dumps(
             {
                 "target": {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
-                "max_steps": 50,
                 "reason": "Entity 17 is unexplored — navigate close to observe",
             }
         )
@@ -398,7 +378,6 @@ class TestLLMPlanner:
         assert isinstance(result, ProbeGoal)
         assert result.target["of"] == 0
         assert result.target["near"]["of"] == 17
-        assert result.max_steps == 50
         assert "unexplored" in result.reason
 
     def test_call_planner_list_entities_format(self) -> None:
@@ -406,7 +385,6 @@ class TestLLMPlanner:
         response_json = json.dumps(
             {
                 "target": {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
-                "max_steps": 50,
                 "reason": "Entity 17 is unexplored — navigate close to observe",
             }
         )
@@ -422,7 +400,6 @@ class TestLLMPlanner:
         response_json = json.dumps(
             {
                 "target": {"dim": "pos", "of": 99, "near": {"of": 17, "radius": 3}},
-                "max_steps": 50,
                 "reason": "navigate to nonexistent entity 99",
             }
         )
@@ -441,7 +418,6 @@ class TestLLMPlanner:
         response_json = json.dumps(
             {
                 "target": {"dim": "pos", "of": 99, "eq": [5, 10]},
-                "max_steps": 50,
                 "reason": "navigate to nonexistent",
             }
         )
@@ -457,7 +433,6 @@ class TestLLMPlanner:
             json.dumps(
                 {
                     "target": {"dim": "pos", "of": 0, "eq": [5, 10]},
-                    "max_steps": 30,
                     "reason": "retry",
                 }
             )
@@ -478,7 +453,6 @@ class TestLLMPlanner:
         response_json = json.dumps(
             {
                 "target": {"dim": "pos", "of": 0, "eq": [5, 10]},
-                "max_steps": 50,
             }
         )
         bundle = _bundle()
@@ -491,7 +465,6 @@ class TestLLMPlanner:
             {
                 "target": {"dim": "pos", "of": 0, "near": [5, 10], "radius": 2},
                 "action": 3,
-                "max_steps": 50,
                 "reason": "probe action 3",
             }
         )

@@ -69,7 +69,6 @@ def _make_agent() -> LlmCuriosity:
         )
         # Replace llm_call with a mock so no network calls happen
         agent.llm_call = MagicMock(
-            return_value='{"target": {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}}, "max_steps": 50, "reason": "probe entity 17"}'
         )
     return agent
 
@@ -150,7 +149,6 @@ class TestLlmCuriosityAgentLoop:
         ):
             mock_call_planner.return_value = ProbeGoal(
                 target={"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
-                max_steps=50,
                 reason="probe entity 17",
             )
             mock_execute.return_value = ([3, 1, 1, 4], [])
@@ -215,7 +213,6 @@ class TestLlmCuriosityAgentLoop:
 
         goal = ProbeGoal(
             target={"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
-            max_steps=50,
             reason="probe entity 17",
         )
 
@@ -250,7 +247,6 @@ class TestLlmCuriosityAgentLoop:
         agent._probe_plan = [1]  # one action left
         agent._current_goal = ProbeGoal(
             target={"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
-            max_steps=50,
             reason="probe entity 17",
         )
         agent._llm_cooldown = 0
@@ -291,7 +287,6 @@ class TestLlmCuriosityAgentLoop:
         agent._probe_plan = None  # no active plan — falls through to divergence check
         agent._current_goal = ProbeGoal(
             target={"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
-            max_steps=50,
             reason="probe entity 17",
         )
         agent._llm_cooldown = 0
@@ -331,7 +326,6 @@ class TestLlmCuriosityAgentLoop:
         agent._probe_plan = [1, 2, 3]
         agent._current_goal = ProbeGoal(
             target={"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
-            max_steps=50,
             reason="probe entity 17",
         )
         agent._failure_context = {"type": "probe_exhausted", "last_action": 1}
@@ -404,7 +398,6 @@ class TestLlmCuriosityAgentLoop:
 
         goal = ProbeGoal(
             target={"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
-            max_steps=50,
             reason="probe entity 17",
         )
 
@@ -454,7 +447,6 @@ class TestLlmCuriosityAgentLoop:
 
         goal = ProbeGoal(
             target={"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
-            max_steps=50,
             reason="probe entity 17",
             action=2,
         )
@@ -496,7 +488,6 @@ class TestLlmCuriosityAgentLoop:
 
         goal = ProbeGoal(
             target={"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
-            max_steps=50,
             reason="probe entity 17",
         )
 
@@ -526,7 +517,6 @@ class TestLlmCuriosityAgentLoop:
         agent._probe_plan = [1, 1, 1]
         agent._current_goal = ProbeGoal(
             target={"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
-            max_steps=50,
             reason="probe entity 17",
         )
         agent._llm_cooldown = 0
@@ -583,7 +573,6 @@ class TestLlmCuriosityAgentLoop:
 
         goal = ProbeGoal(
             target={"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
-            max_steps=50,
             reason="probe entity 17",
         )
 

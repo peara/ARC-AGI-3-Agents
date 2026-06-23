@@ -9,8 +9,7 @@ Usage:
         --predicate '{"dim": "pos", "of": 0, "eq": [5, 10]}'
 
     uv run python scripts/probe_recording.py RECORDING.jsonl \\
-        --predicate '{"dim": "pos", "of": 0, "near": [5, 10], "radius": 3}' \\
-        --max-steps 200
+        --predicate '{"dim": "pos", "of": 0, "near": [5, 10], "radius": 3}'
 
     uv run python scripts/probe_recording.py RECORDING.jsonl \\
         --predicate '{"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}}' \\
@@ -126,12 +125,6 @@ def main() -> None:
         help="frame index for snapshot (default: last observed frame)",
     )
     ap.add_argument(
-        "--max-steps",
-        type=int,
-        default=200,
-        help="BFS node limit (default: 200)",
-    )
-    ap.add_argument(
         "--entities",
         default=None,
         help="comma-separated entity IDs for PlanSpec projection "
@@ -206,7 +199,6 @@ def main() -> None:
         target=predicate,
         entities=entities,
         dims=dims,
-        max_steps=args.max_steps,
         reason=args.reason,
     )
 
@@ -253,7 +245,7 @@ def main() -> None:
         llm_goal = call_planner(bundle, actions_available, llm_call)
         if llm_goal is not None:
             print(f"llm goal: {json.dumps(llm_goal.target)} "
-                  f"max_steps={llm_goal.max_steps} reason={llm_goal.reason!r}")
+                  f"reason={llm_goal.reason!r}")
         else:
             print("llm goal: None (parse failed or no response)")
 
@@ -262,7 +254,7 @@ def main() -> None:
 
     if plan is None:
         print("\nresult: NO PLAN FOUND")
-        print("(predicate may be unreachable, or max_steps too low)")
+        print("(predicate may be unreachable)")
     else:
         print(f"\nresult: plan found ({len(plan)} steps)")
         print(f"actions: {plan}")

@@ -194,9 +194,8 @@ class LlmCuriosity(Agent):
             self._failure_context = None
             if goal is not None:
                 log.info(
-                    "LLM goal: target=%s max_steps=%s reason=%s",
+                    "LLM goal: target=%s reason=%s",
                     goal.target,
-                    goal.max_steps,
                     goal.reason,
                 )
             else:
@@ -255,7 +254,6 @@ class LlmCuriosity(Agent):
                     fallback = ProbeGoal(
                         target=target,
                         action=ua.action,
-                        max_steps=goal.max_steps,
                         reason=f"fallback: probe unknown action {ua.action} at reachable state",
                     )
                     fb_plan, fb_unknowns = execute_probe(fallback, scene, ctx, actions)

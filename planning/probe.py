@@ -13,6 +13,12 @@ from .heuristics import within
 from .query import UnknownAction
 from .search import PlanSpec, plan_bfs
 
+# Fixed BFS search limit — large enough for a 64×64 grid with step-of-5
+# movement.  The LLM planner does not control this; it was previously wired
+# to ``goal.max_steps`` which the LLM set to 50-100, far too small to reach
+# distant entities.
+MAX_BFS_NODES = 5000
+
 
 @dataclass(frozen=True)
 class ProbeGoal:
@@ -21,7 +27,6 @@ class ProbeGoal:
     target: dict[str, object]  # DSL predicate dict
     entities: tuple[int, ...] | None = None  # auto-derived if None
     dims: tuple[str, ...] | None = None  # auto-derived if None
-    max_steps: int = 20  # BFS node limit
     reason: str = ""  # logging only
     action: int | None = None  # unknown action to try at target
 
@@ -184,7 +189,7 @@ def execute_probe(
         return ([goal.action], [])
 
     plan, unknowns = plan_bfs(
-        start, compiled_goal, actions, ctx, max_nodes=goal.max_steps
+        start, compiled_goal, actions, ctx, max_nodes=MAX_BFS_NODES
     )
 
     if plan is not None and goal.action is not None:

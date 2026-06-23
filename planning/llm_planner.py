@@ -63,7 +63,6 @@ Example — probe an unknown action near an entity:
 {
   "target": {"dim": "pos", "of": 0, "near": [5, 10], "radius": 2},
   "action": 3,
-  "max_steps": 50,
   "reason": "Action 3 is unknown — let's probe it near entity 5"
 }
 ```
@@ -74,7 +73,6 @@ Example 1 — Go probe an entity (near with relative entity ref):
 ```json
 {
   "target": {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}},
-  "max_steps": 50,
   "reason": "Entity 17 at row 12 is unexplored — navigate close to discover its properties"
 }
 ```
@@ -83,7 +81,6 @@ Example 2 — Explore an area (near with coordinate list):
 ```json
 {
   "target": {"dim": "pos", "of": 0, "near": [5, 32], "radius": 5},
-  "max_steps": 100,
   "reason": "Top of map is undiscovered — check for entities or interactions in that area"
 }
 ```
@@ -92,16 +89,21 @@ Example 3 — Test if an object is solid (near with small radius):
 ```json
 {
   "target": {"dim": "pos", "of": 0, "near": {"of": 8, "radius": 1}},
-  "max_steps": 50,
   "reason": "Navigate adjacent to entity 8 at (58,6) — next turn, move into it to test if it's solid or walkable"
 }
 ```
+
+## Unreachable targets
+
+If the failure context says `"type": "unreachable"`, the target cannot be
+reached from the player's current position — the pathfinder explored the full
+reachable area and found no route. Do NOT retry the same target or any entity
+in the same region. Pick a completely different area or entity to explore.
 
 ## Instructions
 
 - Always have an opinion. If unsure, pick an unexplored entity to navigate toward.
 - Your `reason` should explain what you're doing AND what you'll do next — it helps you continue your plan across turns.
-- If the failure context says `"type": "unreachable"`, the target entity cannot be reached from the player's current position (no valid path exists). Do NOT retry the same target — pick a different entity or area to explore.
 - If the failure context includes `unknowns`, pick one unknown action to explore and include `"action"` in your goal.
 
 ## Output format
@@ -111,7 +113,6 @@ Respond with a single JSON object:
 {
   "target": { ... },
   "action": <int or null>,
-  "max_steps": <int>,
   "reason": "<string>"
 }
 ```"""
@@ -242,7 +243,7 @@ def _validate_goal(
     unknown action to try at the target).  If absent, the goal has no
     specific action constraint.
     """
-    required_keys = {"target", "max_steps", "reason"}
+    required_keys = {"target", "reason"}
     if not required_keys.issubset(goal_dict.keys()):
         return None
 
@@ -277,7 +278,6 @@ def _validate_goal(
         return ProbeGoal(
             target=target_dict,
             action=action_val,
-            max_steps=int(goal_dict["max_steps"]),  # type: ignore[call-overload]
             reason=str(goal_dict["reason"]),
         )
     except Exception:
