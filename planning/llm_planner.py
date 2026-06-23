@@ -10,6 +10,7 @@ import json
 import re
 from typing import Callable
 
+from effects.dsl import dsl_to_rule
 from effects.rules import Rule
 
 from .llm_rule_proposer import SYSTEM_PROMPT, parse_proposals, validate_proposal
@@ -396,14 +397,27 @@ def _extract_scene_entities(bundle: dict[str, object]) -> dict[int, dict]:
 
 
 def _extract_engine_rules(bundle: dict[str, object]) -> list[Rule]:
-    """Extract confirmed engine rules from a scene bundle (for dedup)."""
+    """Extract confirmed + proposed engine rules from a scene bundle (for dedup).
+
+    The bundle stores rules as DSL dicts (via ``rule_to_dsl``), not ``Rule``
+    objects, so we convert back via ``dsl_to_rule``.  Including ``proposed``
+    rules prevents the LLM from re-proposing rules already pending.
+    """
     engine_rules_val = bundle.get("engine_rules", {})
     if not isinstance(engine_rules_val, dict):
         return []
-    confirmed_val = engine_rules_val.get("confirmed", [])
-    if not isinstance(confirmed_val, list):
-        return []
-    return [r for r in confirmed_val if isinstance(r, Rule)]
+    out: list[Rule] = []
+    for field in ("confirmed", "proposed"):
+        val = engine_rules_val.get(field, [])
+        if not isinstance(val, list):
+            continue
+        for entry in val:
+            if isinstance(entry, dict):
+                try:
+                    out.append(dsl_to_rule(entry))
+                except (KeyError, ValueError, TypeError):
+                    continue
+    return out
 
 
 def call_rule_proposer(

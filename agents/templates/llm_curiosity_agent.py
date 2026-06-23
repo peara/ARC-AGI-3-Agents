@@ -45,7 +45,7 @@ def _format_status(status: Any) -> str:
 class LlmCuriosity(Agent):
     """Perception session + classical curiosity + LLM-directed probing."""
 
-    MAX_ACTIONS = 30
+    MAX_ACTIONS = 60
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
