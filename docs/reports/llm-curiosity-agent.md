@@ -2,9 +2,9 @@
 
 > Living design doc for the `LlmCuriosity` agent (`agents/templates/llm_curiosity_agent.py`).
 > Explains the full architecture, the two LLM loops (planner + rule proposer),
-> the known exploration deadlock, and the planned fix.
+> the rule learning lifecycle, and the expected agent flow.
 >
-> Last updated: 2026-06-22
+> Last updated: 2026-06-23
 
 ---
 
@@ -15,12 +15,13 @@ ARC-AGI-3. It combines:
 
 1. **Classical perception** — observes 64×64 grids, segments objects, tracks them
    across frames, detects the controllable entity.
-2. **Classical effects engine** — learns movement/collision/terminal rules from
-   observed transitions, predicts next states, computes residuals.
+2. **Effects engine** — predicts next states from rules, computes residuals,
+   confirms/prunes rules from observations. The LLM proposer is the sole source
+   of new rules; there is no classical learner in the LLM-directed phase.
 3. **LLM planner** — consumes the compact symbolic scene, proposes navigation
    goals (`ProbeGoal`) for the agent to explore.
-4. **LLM rule proposer** — consumes prediction residuals, hypothesizes new rules
-   to explain mismatches.
+4. **LLM rule proposer** — consumes observed transitions and prediction
+   mismatches (residuals), hypothesizes new rules to explain them.
 
 The LLM is **dev-only**. On the Kaggle eval path, `NULL_RULE_PROPOSER` replaces
 the rule proposer and the planner falls back to classical BFS. The classical
@@ -40,21 +41,21 @@ observations.
 ## 2. Architecture — three layers
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    LlmCuriosity (agent)                   │
-│                                                           │
-│  PerceptionSession ──► SceneSnapshot ──► ExplorationPolicy │
-│  (ingest frames)        (snapshot)        (decide actions)  │
-│                              │                  │           │
-│                              ▼                  ▼           │
-│                         QueryInterface    plan_bfs          │
-│                         (bundle for LLM)  (classical BFS)   │
-│                              │                              │
-│              ┌───────────────┼───────────────┐              │
-│              ▼               ▼               ▼              │
-│         LLM Planner    LLM Rule Proposer  Effects Engine    │
-│         (ProbeGoal)    (Rule hypotheses)  (learn + predict) │
-└─────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                    LlmCuriosity (agent)                       │
+│                                                               │
+│  PerceptionSession ──► SceneSnapshot ──► ExplorationPolicy     │
+│  (ingest frames)        (snapshot)        (engine + BFS)        │
+│                              │                  │              │
+│                              ▼                  ▼              │
+│                         QueryInterface    plan_bfs             │
+│                         (bundle for LLM)  (classical BFS)      │
+│                              │                                 │
+│              ┌───────────────┼───────────────┐                 │
+│              ▼               ▼               ▼                 │
+│         LLM Planner    LLM Rule Proposer  Effects Engine       │
+│         (ProbeGoal)    (Rule hypotheses)  (predict + confirm)  │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ### Layer 1: PerceptionSession
@@ -68,13 +69,15 @@ raw frames, emits `SceneSnapshot` after each step.
 
 ### Layer 2: ExplorationPolicy
 
-`planning/exploration.py` — the classical curiosity planner. Reads snapshots
-only (no perception state). Two modes:
+`planning/exploration.py` — owns the effects context and BFS. Two modes:
 
 - **Random cold start:** before controllable entity is detected, pick random
-  legal actions to generate action→effect evidence.
-- **BFS toward unknown:** once controllable is confirmed, learn effect rules
-  and plan toward curiosity targets (unconfirmed entities, unvisited frontier).
+  legal actions to generate action→effect evidence. The classical learner
+  (`learn_effect_context`) runs here to bootstrap initial rules.
+- **LLM-directed:** once controllable is confirmed, the LLM planner drives.
+  `decide()` is NOT called. The policy's role is purely: run `engine_step`
+  on each observation, expose context/rules to the agent, and provide BFS
+  for probe plan execution.
 
 ### Layer 3: LLM Curiosity agent
 
@@ -91,14 +94,17 @@ Each frame, the agent:
 ```
 1. RESET gate — if game over/not played, reset and return
 2. INGEST — session.ingest(frame, last_action)
-          → policy.on_observed(scene)  (verify + engine step)
-          → _try_propose_rules()       (if residual exists)
+           → policy.set_llm_proposals(pending proposals)
+           → policy.on_observed(scene)
+             → engine_step: inject proposals, predict, confirm/prune
+           → sync policy._ctx = policy._engine_ctx  (critical: ctx stays live)
+           → _try_propose_rules()  (if residual or observed_transition)
 3. Phase gate — "random" vs "llm_directed"
-4. Probe plan execution — if active plan exists, pop next action
-5. Divergence check — if prediction was wrong, drop plan
+4. Divergence check — if prediction was wrong, drop plan
+5. Probe plan execution — if active plan exists, pop next action
 6. LLM call — if no cooldown, ask planner for new ProbeGoal
 7. Execute probe — BFS to goal, store plan, execute first action
-8. Fallback — if no goal or no path, fall back to policy.decide()
+8. Fallback — if no goal or no path, random.choice(actions)
 ```
 
 ### Phase transitions
@@ -111,7 +117,7 @@ Each frame, the agent:
 
 ## 4. Effects engine
 
-`effects/` — the classical rule learning + prediction system.
+`effects/` — the rule-based prediction + learning system.
 
 ### 4.1 Rule types
 
@@ -122,34 +128,68 @@ Each frame, the agent:
 | `terminal` | action + position | `terminal="win"` or `"game_over"` | "Action 3 at exit → win" |
 | `delta` | action + optional position | `op="delta"` on any dim | "Action 5 increments entity size by 1" |
 
-### 4.2 Prediction
+### 4.2 Rule lifecycle
+
+```
+proposed (support=0)
+    ↓  confirm: guard fires + effect matches observed → support++
+    ↓  repeat until support >= confirm_threshold
+confirmed (in movement_rules / collision_rules / etc.)
+    ↓  used by predict for BFS planning
+```
+
+Rules do NOT get pruned automatically in `engine_step`. The LLM handles
+refinement — when a prediction is wrong (residual non-empty), the LLM proposer
+sees the mismatch and can propose a collision rule or a more specific rule.
+Wrong proposed rules die naturally: they never get support bumped, and the
+LLM stops re-proposing them once it sees they don't work.
+
+### 4.3 Prediction
 
 `effects.predict(state, action, ctx) → Prediction`
 
-- If a matching rule exists → applies effect, returns `Prediction(state, unknown=False)`
-- If no matching rule → returns `Prediction(state, unknown=True)`
+Checks **both confirmed and proposed** rules:
+- `movement_rules` + `proposed_rules` (kind=movement) → candidate positions
+- `collision_rules` + `proposed_rules` (kind=collision) → revert positions
+- `terminal_rules` + `proposed_rules` (kind=terminal) → terminal effects
+- `relational_rules` + `proposed_rules` (kind=delta) → dimension changes
 
-The `unknown` flag is the key signal: it means "we don't know what happens if
-we take this action from this state."
+If no movement rule guard matches (confirmed or proposed), returns
+`Prediction(state, unknown=True)`. The `unknown` flag is the curiosity signal:
+"we don't know what happens if we take this action from this state."
 
-### 4.3 Learning
+Proposed rules (support=0) make the action "known" so the engine can confirm
+or ignore them via observation. This is critical: without proposed rules being
+visible to `predict`, the action stays "unknown" forever, `engine_step`
+returns early, and `confirm_rules` never runs.
 
-`effects.learn_effect_context(...)` — builds an `EffectContext` from observed
-transitions:
-- `learn_movement_rules` — position-specific (`op="set"`) + generic per-action
-  (`op="delta"`) movement rules
-- `learn_collision_rules` — position-specific revert rules
+### 4.4 engine_step — the online learner
 
-`effects.engine_step(...)` — the online learner. Called after each observed
-transition. Computes residual (predicted vs observed), confirms/prunes rules,
-and accepts LLM proposals.
+`effects.engine_step(ctx, state_before, action, observed, llm_proposals) → EffectContext`
 
-### 4.4 Residual
+```
+1. Inject LLM proposals into proposed_rules (support=0, deduped)
+2. predict(state_before, action, ctx)  ← sees proposed rules too
+3. If predict returns unknown → return ctx
+   (proposals are in proposed_rules, but no prediction to compare)
+4. Compute residual (predicted vs observed)
+5. If residual non-empty → propose_rules (classical residual-based, for delta/terminal)
+6. confirm_rules — bump support on all rules whose guard fired + effect matched
+7. Return updated ctx
+```
+
+No automatic pruning. The LLM proposer handles refinement.
+
+### 4.5 Residual
 
 `effects.compute_residual(predicted, observed, ...)` — the difference between
 what the engine predicted and what actually happened. Non-empty residual means
-the engine's rules are wrong or incomplete. This is the trigger for the LLM
-rule proposer.
+the engine's rules are wrong or incomplete. This is one of two triggers for the
+LLM rule proposer.
+
+The other trigger is `observed_transition` — set when `predict` returns
+unknown. It carries `(state_before, action, observed)` so the LLM can see
+what happened when an unknown action was taken.
 
 ---
 
@@ -162,32 +202,34 @@ LLM planner receives:
   - scene bundle (entities, events, step observations)
   - available actions
   - effect rules (confirmed + proposed)
-  - failure context (if previous goal failed)
+  - failure context (if previous goal failed, including unknowns)
         ↓
-LLM returns: ProbeGoal { target, max_steps, reason }
+LLM returns: ProbeGoal { target, action?, max_steps, reason }
         ↓
 execute_probe(goal, scene, ctx, actions):
   - resolve_target (relative entity refs → coordinates)
   - compile_goal (DSL predicate → callable goal function)
-  - plan_bfs(start, goal_fn, actions, ctx) → plan | None
+  - plan_bfs(start, goal_fn, actions, ctx) → (plan | None, unknowns)
         ↓
   plan found → store as _probe_plan, execute first action
-  plan None  → set failure_context, fall back to classical
+  plan None  → store unknowns in failure_context
+             → pick nearest unknown → fallback ProbeGoal
+             → if fallback plan found, execute it
+             → else random.choice(actions)
 ```
 
-### 5.2 ProbeGoal (current)
+### 5.2 ProbeGoal
 
 ```python
 @dataclass(frozen=True)
 class ProbeGoal:
-    predicate: dict[str, object]   # navigation target (DSL predicate)
-    entities: tuple[int, ...] | None = None
-    dims: tuple[str, ...] | None = None
+    target: dict[str, object]        # navigation target (DSL predicate)
+    action: int | None = None         # unknown action to try at target
     max_steps: int = 20
     reason: str = ""
 ```
 
-The `predicate` field is a DSL predicate that compiles to a goal function over
+The `target` field is a DSL predicate that compiles to a goal function over
 `SceneState`. Forms:
 
 - `{"dim": "pos", "of": 0, "near": {"of": 17, "radius": 3}}` — navigate near entity 17
@@ -195,32 +237,61 @@ The `predicate` field is a DSL predicate that compiles to a goal function over
 - `{"dim": "<dim>", "of": <eid>, "eq": <value>}` — test a dimension value
 - `{"all": [<sub_pred1>, ...]}` — conjunction
 
+Two cases:
+- **Navigation only:** `target` set, `action=None` → BFS to target, done.
+- **Navigation + probe:** `target` set, `action=3` → BFS to target, then
+  execute action 3 and observe the effect.
+
 ### 5.3 Failure context
 
 When BFS fails to find a path, the agent stores:
 
 ```python
-{"type": "unreachable", "last_action": ..., "previous_probe_reason": ...}
+{"type": "unreachable", "unknowns": [...], "last_action": ..., "previous_probe_reason": ...}
 ```
 
-This is passed to the next LLM planner call so it doesn't retry the same
-unreachable target.
+The `unknowns` list contains `(action, state)` pairs where `predict` returned
+unknown — actions the BFS couldn't plan through. The LLM planner sees these
+and can pick one to probe.
+
+### 5.4 Fallback unknown probe
+
+When BFS fails and unknowns are available, the agent picks the **nearest**
+unknown (Manhattan distance from controllable's current position) and builds
+a fallback `ProbeGoal` with the unknown's full state as target and the
+unknown's action. This ensures the agent actually tries unknown actions
+instead of navigating to unreachable targets.
 
 ---
 
 ## 6. LLM rule proposer loop
 
-### 6.1 Flow
+### 6.1 Two trigger conditions
+
+The proposer fires when EITHER is true:
+
+1. **Residual non-empty** — a known action's prediction was wrong. The LLM
+   sees the mismatch and can propose a collision rule or refine the rule.
+   Example: movement rule says "action 1 → move up 5", but player hit a wall.
+   LLM proposes: collision rule at that position.
+
+2. **Observed transition available** — an unknown action was taken. The LLM
+   sees `(before, action, after)` and can propose a movement rule.
+   Example: action 2 taken at (47, 51), player moved to (42, 51). LLM
+   proposes: movement rule `{"action": 2} → delta (-5, 0)`.
+
+### 6.2 Flow
 
 ```
-After each observed transition:
-  engine_step runs → computes residual
+After each observed transition (in INGEST block):
+  engine_step runs → injects pending LLM proposals, predicts, confirms
         ↓
-  if residual is non-empty AND phase == "llm_directed":
+  if (residual non-empty OR observed_transition set) AND phase == "llm_directed":
         ↓
   _try_propose_rules():
     bundle = QueryInterface(scene, ctx, residual=residual,
-                            unknowns=policy.last_unknowns).bundle()
+                            unknowns=policy.last_unknowns,
+                            observed_transition=policy.last_observed_transition).bundle()
         ↓
     call_rule_proposer(bundle, residual_dicts, llm_call)
         ↓
@@ -230,179 +301,171 @@ After each observed transition:
         ↓
     store in self._llm_proposals
         ↓
-  Next frame: policy.set_llm_proposals(proposals)
-    → engine_step injects them as "proposed" rules
-    → engine confirms or prunes based on future observations
+  Next frame INGEST: policy.set_llm_proposals(proposals)
+    → engine_step injects them as "proposed" rules (support=0)
+    → predict sees them → action becomes "known"
+    → confirm_rules bumps support if prediction matches observation
+    → support >= threshold → promoted to confirmed
 ```
 
-### 6.2 The propose → confirm → prune lifecycle
+### 6.3 The learning loop (end-to-end example)
 
-LLM-proposed rules enter the engine as `proposed` (support=0). They follow the
-same lifecycle as classically-learned rules:
+Agent takes action 2 (unknown) for the first time:
 
-1. **Proposed** — rule exists but unconfirmed (support < threshold)
-2. **Confirmed** — rule has enough support from matching transitions
-3. **Pruned** — rule contradicted by observations (residual when rule predicts)
+```
+Frame N:   Agent at (47, 51), takes action 2 (fallback unknown probe)
+           → record_step sets _pending_action=2
 
-The engine doesn't distinguish LLM-proposed from classically-proposed rules.
-Both must earn confirmation through observation.
+Frame N+1: INGEST:
+             engine_step: inject (nothing yet), predict=unknown, return ctx
+             _last_observed_transition = (state_N, 2, observed_N+1)
+             _try_propose_rules fires (observed_transition set)
+             → LLM sees: before=(47,51), action=2, after=(42,51)
+             → LLM proposes: movement {"action": 2} → delta (-5, 0)
+             → self._llm_proposals = [Rule(movement, action=2)]
+           ACTION:
+             call_planner → fallback → takes action 2 again
+             record_step sets _pending_action=2
+
+Frame N+2: INGEST:
+             set_llm_proposals([Rule(movement, action=2)])
+             engine_step:
+               inject → proposed_rules = [Rule(support=0)]
+               predict → proposed movement fires → (42, 51) → KNOWN
+               residual = compute_residual((42,51), observed) → empty if correct
+               confirm_rules → guard fires, effect matches → support=1
+             _ctx synced to _engine_ctx (proposed rule visible to planner)
+           ACTION:
+             call_planner sees proposed rule in bundle → action 2 is "known"
+             → can plan through action 2
+
+Frame N+3: Same → support=2 → promoted to movement_rules (confirmed)
+           → predict uses confirmed rule → fully known
+```
+
+### 6.4 Collision refinement (wall scenario)
+
+Movement rule confirmed, but player hits a wall:
+
+```
+Frame M:   Agent at (27, 51), takes action 2
+           predict: movement fires → (22, 51)
+           observed: (27, 51) — player stayed (wall)
+           residual: non-empty (predicted (22,51) ≠ observed (27,51))
+           → NO pruning (movement rule stays)
+           → _try_propose_rules fires (residual set)
+           → LLM sees: predicted (22,51), observed (27,51)
+           → LLM proposes: collision {"action": 2, "pos eq": [22, 51]} → revert
+
+Frame M+1: inject collision rule (support=0)
+           predict: movement → (22, 51), collision fires at (22, 51) → revert → (27, 51)
+           observed: (27, 51) → no residual
+           confirm_rules → BOTH movement and collision get support bumped
+
+Frame M+2: Same → collision support=2 → promoted
+           → Both rules confirmed. Prediction correct at (27, 51).
+```
+
+The movement rule is never pruned. The collision rule overrides it at the wall
+position. Both get confirmed through repeated observation.
 
 ---
 
-## 7. The exploration deadlock
+## 7. Key design decisions
 
-### 7.1 The problem
+### 7.1 No classical learner in LLM-directed phase
 
-In ls20, the bot gets stuck repeating UP (action 1) for ~20+ steps. Root cause:
+`learn_effect_context` is only called from `decide()`, which is only called in
+the random cold-start phase. Once the agent transitions to `llm_directed`,
+the LLM rule proposer is the sole source of new rules. This removes the
+classical learner from the learning loop entirely.
 
-```
-1. Only UP has confirmed movement rules
-2. plan_bfs skips unknown actions:  if pred.unknown: continue
-3. BFS can only find plans using known actions → UP-only plans
-4. Bot executes UP repeatedly
-5. No new actions tried → no new rules learned
-6. LLM planner keeps producing navigation goals
-7. BFS can't reach them (only UP is known) → "unreachable"
-8. Fall back to policy.decide() → same broken BFS → UP again
-```
+### 7.2 Proposed rules visible to predict
 
-### 7.2 Why the LLM can't break out
+`predict` checks `proposed_rules` alongside confirmed rules. This is critical:
+without it, a proposed movement rule for an unknown action would never make
+the action "known", `engine_step` would return early, and `confirm_rules`
+would never bump the rule's support. The action would stay unknown forever.
 
-Two issues prevent the LLM from helping:
+### 7.3 No automatic pruning
 
-1. **BFS discards unknowns silently.** When `predict()` returns `unknown=True`,
-   `plan_bfs` just skips that action (`search.py:68`). It doesn't report *which*
-   `(state, action)` pairs were unknown. So the LLM never learns what's
-   blocking exploration.
+`engine_step` does NOT call `prune_rules`. When a prediction is wrong, the
+residual is passed to the LLM proposer, which can propose a collision rule
+or a more specific rule. The movement rule survives, the collision rule
+overrides it at the wall position, and both get confirmed over time.
 
-2. **Rule proposer is residual-gated.** `_try_propose_rules()` only fires when
-   `policy.last_residual` is non-empty (line 109). But residual is only
-   computed when `predict()` returns *known* (line 138-145). If the bot only
-   takes known actions, residual comes from those known predictions — the
-   unknowns from untried actions never trigger the proposer. Even if unknowns
-   are passed to the proposer, they're second-class: the proposer is meant to
-   *hypothesize rules*, but it can't know the effect of an action it hasn't
-   observed.
+Wrong proposed rules die naturally: they never get support bumped, and the
+LLM stops re-proposing them once it sees they don't work.
 
-### 7.3 The key insight
+### 7.4 LLM proposals injected before predict
 
-> The LLM shouldn't propose rules for unknown actions (it can't know the
-> effect). It should **direct exploration toward unknowns** — "go try action
-> 3 from state X" — so the bot actually executes the unknown action, observes
-> the real outcome, and the classical learner fills in the rule.
+`_inject_llm_proposals` runs at the top of `engine_step`, before `predict`.
+This ensures proposed rules are visible to predict on the same frame they're
+injected, not the next frame.
 
-The correct loop:
+### 7.5 _ctx synced after every engine_step
 
-```
-BFS says: "Can't reach target, but hit unknown (state X, action 3)"
-      ↓
-LLM receives unknowns → picks one to explore
-      ↓
-LLM says: "Go to state X, then try action 3"  (ProbeGoal with target + action)
-      ↓
-Bot navigates to X (via known actions), executes action 3
-      ↓
-Observes real effect → engine learns the rule
-      ↓
-Now BFS can plan through action 3 → reaches the original target
-```
+`self._ctx = self._engine_ctx` after every `_run_engine_step` call. Without
+this, the agent, the recording, and the planner all read a stale context
+that never reflects the engine's learning. In `llm_directed` phase, `decide()`
+is never called (where the sync used to happen), so the sync must happen in
+`_run_engine_step`.
+
+### 7.6 LLM-first control flow
+
+In the LLM-directed phase, `policy.decide()` is NOT called. The LLM is always
+the driver. When BFS fails to find a path or the LLM returns an invalid goal,
+the agent uses `random.choice(actions)` directly as an emergency fallback.
+`ExplorationPolicy.decide()` is only used during cold start (before any
+controllable object is detected).
 
 ---
 
 ## 8. Implemented changes
 
-### 8.1 ProbeGoal: `predicate` → `target` + `action` ✅ Implemented
+### 8.1 ProbeGoal: `predicate` → `target` + `action` ✅
 
-The field rename disambiguates the role:
+Field rename + action field for probing unknown actions.
 
-```python
-@dataclass(frozen=True)
-class ProbeGoal:
-    target: dict[str, object]        # navigation target (was: predicate)
-    action: int | None = None         # probe action to try at target
-    entities: tuple[int, ...] | None = None
-    dims: tuple[str, ...] | None = None
-    max_steps: int = 20
-    reason: str = ""
-```
+### 8.2 Unknowns surfacing from BFS ✅
 
-- `target` — where to navigate (BFS with known actions only)
-- `action` — what unknown action to try once at the target
+`plan_bfs` returns `(plan | None, list[UnknownAction])`. Unknowns propagate
+through `execute_probe` to the agent, stored in `failure_context`.
 
-Two cases:
-- **Navigation only:** `target` set, `action=None` → BFS to target, done.
-- **Navigation + probe:** `target` set, `action=3` → BFS to target, then
-  execute action 3 and observe the effect.
+### 8.3 Fallback unknown probe ✅
 
-If the bot is already at the target (trivially satisfied), only `action` matters
-— just execute it directly.
+When BFS fails, agent picks nearest unknown (Manhattan distance), builds
+fallback `ProbeGoal`, tries to execute it.
 
-### 8.2 Unknowns surfacing from BFS ✅ Implemented
+### 8.4 predict checks proposed_rules ✅
 
-`plan_bfs` currently returns `list[int] | None`. It should also return the
-unknown frontier — the set of `(state, action)` pairs where prediction was
-unknown:
+`predict` checks `proposed_rules` for all rule kinds (movement, collision,
+terminal, delta) alongside confirmed rules. Proposed rules make unknown
+actions "known" so the engine can confirm them.
 
-```python
-def plan_bfs(...) -> tuple[list[int] | None, list[UnknownAction]]:
-    ...
-    for action in actions:
-        pred = predict(state, action, ctx)
-        if pred.unknown:
-            unknowns.append(UnknownAction(action, state))
-            continue
-        ...
-    return plan, unknowns
-```
+### 8.5 LLM proposals injected before predict ✅
 
-This propagates through `execute_probe` to the agent, which stores unknowns in
-`failure_context` for the next LLM planner call.
+`_inject_llm_proposals` extracted from `propose_rules`, moved to top of
+`engine_step`. Proposals enter `proposed_rules` even when predict returns
+unknown.
 
-### 8.3 Loop-back to LLM planner ✅ Implemented
+### 8.6 No automatic pruning ✅
 
-When BFS fails (no path found), the agent loops back to the LLM planner with the unknowns. The control flow is LLM-first:
+`prune_rules` removed from `engine_step`. LLM handles refinement via
+collision rules. Wrong proposed rules die naturally (never get support).
 
-- **LLM-directed phase** (after controllable object detected): The LLM is always the driver. `policy.decide()` is NOT called. When BFS fails or the LLM fails, `random.choice(actions)` is used directly as an emergency fallback.
-- **Random phase** (before controllable detected): `ExplorationPolicy.decide()` is still used for exploration.
+### 8.7 _ctx synced after engine_step ✅
 
-```
-BFS fails → store UnknownAction in failure_context
-         → {"type": "unreachable", "unknowns": [...]}
-         → next frame: LLM planner sees unknowns
-         → LLM picks an unknown → ProbeGoal(target=reach_state, action=unknown_action)
-         → agent navigates + probes → observes effect → engine learns rule
+`self._ctx = self._engine_ctx` after every `_run_engine_step` call. Critical
+for `llm_directed` phase where `decide()` is never called.
 
-LLM fails or returns invalid → random.choice(actions)
-```
+### 8.8 Observed transition routing ✅
 
-This means `ExplorationPolicy.decide()` is only invoked during cold start (before any controllable object is detected). Once the LLM takes over, the classical planner is fully demoted.
-
-### 8.4 LLM planner prompt update ✅ Implemented
-
-The system prompt needs to teach the LLM about the `action` field and the
-unknowns:
-
-- When `failure_context` contains `unknowns`, the LLM should pick one and
-  produce a `ProbeGoal` with `action` set.
-- The LLM should explain *why* it picked that unknown (e.g., "action 3 hasn't
-  been tried yet, let's see if it moves left").
-
-### 8.5 Affected files ✅ Implemented
-
-| File | Change |
-|------|--------|
-| `planning/probe.py` | Rename `predicate` → `target`, add `action` field, update `compile_goal`, `resolve_predicate`, `derive_spec_from_predicate`, `execute_probe` |
-| `planning/search.py` | `plan_bfs` returns `(plan, unknowns)` tuple |
-| `planning/llm_planner.py` | Update prompt, validation, `_walk_predicate_ids` for `target` + `action` |
-| `planning/exploration.py` | Handle `action` in probe plans, surface unknowns from `_plan_toward_unknown` |
-| `planning/query.py` | `UnknownAction` already exists; ensure it flows through bundles |
-| `agents/templates/llm_curiosity_agent.py` | Loop-back: store unknowns in `failure_context`, handle `action` in probe execution |
-| `tests/unit/test_probe.py` | Rename + action field tests |
-| `tests/unit/test_llm_planner.py` | Rename + action field tests |
-| `tests/unit/test_llm_agent_loop.py` | Rename + action field tests |
-| `scripts/probe_recording.py` | Rename |
-
-**Design decision: LLM-first control flow.** In the LLM-directed phase (after a controllable object is detected), `policy.decide()` is NOT called. The LLM is always the driver. When BFS fails to find a path or the LLM returns an invalid goal, the agent uses `random.choice(actions)` directly as an emergency fallback. `ExplorationPolicy.decide()` is only used during cold start (before any controllable object is detected). This demotes the classical planner to a cold-start-only role and keeps the LLM in the loop at all times during the main exploration phase.
+When `predict` returns unknown, `_run_engine_step` stores
+`(state_before, action, observed)` as `last_observed_transition`. The agent
+fires `_try_propose_rules` when either `last_residual` OR
+`last_observed_transition` is set. The LLM proposer sees the observed
+transition in the bundle and can propose a movement rule.
 
 ---
 
@@ -419,7 +482,6 @@ unknowns:
 | Query bundle (LLM input) | `planning/query.py` |
 | Effects prediction | `effects/predict.py` |
 | Effects context (rules) | `effects/context.py` |
-| Effects learning | `effects/learn.py` |
 | Effects engine (online) | `effects/engine.py` |
 | Rule DSL | `effects/dsl.py` |
 | Rule types | `effects/rules.py` |
