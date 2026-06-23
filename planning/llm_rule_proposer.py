@@ -84,6 +84,47 @@ or `{"dim": "terminal", "of": EID, "terminal": "game_over"}`.
 - **Generic**: any `dim` string is allowed; `op` is `"delta"` (add) or `"set"` \
 (overwrite).
 
+## Rule kinds
+
+- `"delta"` — counter/size changes: `{"kind": "delta", "guard": {"action": 3}, \
+"effect": {"dim": "size", "of": 5, "delta": 1}, "support": 4}`
+- `"terminal"` — win/lose: `{"kind": "terminal", "guard": {"all": [{"dim": \
+"pos", "of": 3, "eq": [2, 7]}, {"action": 1}]}, "effect": {"dim": "terminal", \
+"of": 3, "terminal": "win"}, "support": 2}`
+- `"movement"` — position changes. Effects use `op` field: \
+`"set"` (absolute position) or `"delta"` (relative displacement). \
+`{"kind": "movement", "guard": {"action": 1}, "effects": [{"dim": "pos", \
+"of": 0, "op": "delta", "value": [-5, 0]}], "support": 3}` \
+means action 1 moves entity 0 by (-5, 0). A positional guard pinpoints a \
+specific transition: `{"kind": "movement", "guard": {"all": [{"action": 1}, \
+{"dim": "pos", "of": 0, "eq": [47, 26]}]}, "effects": [{"dim": "pos", "of": 0, \
+"op": "set", "value": [42, 26]}], "support": 1}`.
+- `"collision"` — movement blocked. Effects use `op: "revert"` to restore \
+the pre-action position: `{"kind": "collision", "guard": {"all": [{"action": \
+1}, {"dim": "pos", "of": 0, "eq": [47, 26]}]}, "effects": [{"dim": "pos", \
+"of": 0, "op": "revert"}], "support": 1}` means action 1 at (47,26) is \
+blocked — entity stays put.
+
+## Observed transitions (unknown actions)
+
+When you see an **Observed transition** section, it shows the result of an \
+action that had no existing rule. The `before` and `after` fields show \
+entity positions (as `(entity_id, dim, value)` tuples) before and after \
+the action was taken.
+
+Propose a movement or collision rule that explains the observed transition:
+
+- If the entity **moved**, propose a `movement` rule. Prefer a **generic** \
+`delta` rule (e.g., `{"action": 1}` guard with `op: "delta"` effect) when \
+the displacement is consistent. Use a **positional** `set` rule when the \
+movement only works from that specific position.
+- If the entity **did not move** (before == after for the controllable's \
+pos), propose a `collision` rule with `op: "revert"` effect and a \
+positional guard.
+- Always include a positional guard for collision rules (the block is \
+position-specific). For movement rules, a generic action-only guard is \
+preferred unless the movement only applies at that position.
+
 ## Output format
 
 Respond with a single JSON object:
@@ -96,28 +137,36 @@ Each rule has the shape:
 
 ```json
 {
-  "kind": "delta" | "terminal",
+  "kind": "delta" | "terminal" | "movement" | "collision",
   "guard": { ... },
-  "effect": { ... },
+  "effects": [{"dim": "pos", "of": 0, "op": "delta", "value": [-5, 0]}],
   "support": 3
 }
 ```
 
+For `delta` and `terminal` kinds, use `"effect"` (singular) instead of \
+`"effects"` (list) for backward compatibility.
+
 ## Examples
 
-1. Pressing action 3 increments entity 5's size by 1 (observed 4 times):
+1. Action 1 moves entity 0 up by 5 rows (observed 3 times):
+```json
+{"kind": "movement", "guard": {"action": 1}, "effects": [{"dim": "pos", "of": 0, "op": "delta", "value": [-5, 0]}], "support": 3}
+```
+
+2. Action 1 at position (47, 26) is blocked — entity doesn't move:
+```json
+{"kind": "collision", "guard": {"all": [{"action": 1}, {"dim": "pos", "of": 0, "eq": [47, 26]}]}, "effects": [{"dim": "pos", "of": 0, "op": "revert"}], "support": 1}
+```
+
+3. Action 3 at position (47, 41) moves entity 0 to (47, 36):
+```json
+{"kind": "movement", "guard": {"all": [{"action": 3}, {"dim": "pos", "of": 0, "eq": [47, 41]}]}, "effects": [{"dim": "pos", "of": 0, "op": "set", "value": [47, 36]}], "support": 1}
+```
+
+4. Pressing action 3 increments entity 5's size by 1 (observed 4 times):
 ```json
 {"kind": "delta", "guard": {"action": 3}, "effect": {"dim": "size", "of": 5, "delta": 1}, "support": 4}
-```
-
-2. Standing at (2, 7) and pressing action 1 ends the game as a win (observed 2 times):
-```json
-{"kind": "terminal", "guard": {"all": [{"dim": "pos", "of": 3, "eq": [2, 7]}, {"action": 1}]}, "effect": {"dim": "terminal", "of": 3, "terminal": "win"}, "support": 2}
-```
-
-3. Pressing action 5 decrements entity 2's size by 1 (observed 3 times):
-```json
-{"kind": "delta", "guard": {"action": 5}, "effect": {"dim": "size", "of": 2, "delta": -1}, "support": 3}
 ```
 """
 

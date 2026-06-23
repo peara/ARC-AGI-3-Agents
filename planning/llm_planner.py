@@ -361,6 +361,13 @@ def _build_rule_proposer_messages(
         f"## Observed residual (prediction mismatches)\n```json\n{json.dumps(residual, indent=2)}\n```"
     )
 
+    observed_transition = bundle.get("observed_transition", {})
+    if isinstance(observed_transition, dict) and observed_transition:
+        user_parts.append(
+            f"## Observed transition (unknown action — propose a rule from this)\n```json\n"
+            f"{json.dumps(observed_transition, indent=2)}\n```"
+        )
+
     if failure_context is not None:
         user_parts.append(
             f"## Failure context (previous proposals failed)\n```json\n"

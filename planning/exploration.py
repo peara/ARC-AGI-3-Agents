@@ -72,6 +72,7 @@ class ExplorationPolicy:
         self._last_residual: tuple[ResidualEntry, ...] = ()
         self._llm_proposals: tuple[Rule, ...] = ()
         self._last_unknowns: tuple[UnknownAction, ...] = ()
+        self._last_observed_transition: tuple[SceneState, int, SceneState] | None = None
         self.rng = random.Random(self.cfg.seed)
 
     def on_observed(self, scene: SceneSnapshot) -> None:
@@ -146,8 +147,10 @@ class ExplorationPolicy:
                 dims=spec.dims,
                 include_terminal=spec.include_terminal,
             )
+            self._last_observed_transition = None
         else:
             self._last_residual = ()
+            self._last_observed_transition = (self._engine_state_before, action, observed)
         self._engine_ctx = engine_step(
             before_ctx,
             self._engine_state_before,
@@ -160,6 +163,7 @@ class ExplorationPolicy:
             llm_proposals=self._llm_proposals,
         )
         self._llm_proposals = ()
+        self._ctx = self._engine_ctx
         if not self.cfg.log_engine:
             return
         lines = diff_effect_context(before_ctx, self._engine_ctx)
@@ -185,7 +189,7 @@ class ExplorationPolicy:
         controllable_id = scene.controllable_id()
         if controllable_id is None or scene.n_observed < self.cfg.min_random_steps:
             action = self._random_action(actions, phase="explore_random")
-            return self._record_step(scene, controllable_id, action)
+            return self.record_step(scene, controllable_id, action)
 
         non_markov = len(scene.determinism_violations) > 0
         base = learn_effect_context(
@@ -200,7 +204,7 @@ class ExplorationPolicy:
         )
         if base is None or not base.available_actions:
             action = self._random_action(actions, phase="explore_random")
-            return self._record_step(scene, controllable_id, action)
+            return self.record_step(scene, controllable_id, action)
 
         if self._engine_ctx is None:
             self._engine_ctx = base
@@ -213,12 +217,12 @@ class ExplorationPolicy:
 
         if not self.plan:
             action = self._random_action(actions, phase="frontier_exhausted")
-            return self._record_step(scene, controllable_id, action)
+            return self.record_step(scene, controllable_id, action)
 
         action = self.plan.pop(0)
-        return self._record_step(scene, controllable_id, action)
+        return self.record_step(scene, controllable_id, action)
 
-    def _record_step(
+    def record_step(
         self,
         scene: SceneSnapshot,
         controllable_id: int | None,
@@ -338,6 +342,10 @@ class ExplorationPolicy:
     @property
     def last_unknowns(self) -> tuple[UnknownAction, ...]:
         return self._last_unknowns
+
+    @property
+    def last_observed_transition(self) -> tuple[SceneState, int, SceneState] | None:
+        return self._last_observed_transition
 
     def set_llm_proposals(self, proposals: tuple[Rule, ...]) -> None:
         self._llm_proposals = proposals

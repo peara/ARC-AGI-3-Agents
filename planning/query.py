@@ -33,6 +33,7 @@ class QueryInterface:
         residual: tuple[ResidualEntry, ...] | list[ResidualEntry] | None = None,
         pruned_rules: tuple[Rule, ...] | list[Rule] | None = None,
         unknowns: tuple[UnknownAction, ...] | None = None,
+        observed_transition: tuple[SceneState, int, SceneState] | None = None,
     ) -> None:
         self._scene = scene
         self._ctx = ctx
@@ -41,6 +42,7 @@ class QueryInterface:
         self._residual = residual
         self._pruned_rules = pruned_rules
         self._unknowns = unknowns
+        self._observed_transition = observed_transition
 
     def bundle(
         self,
@@ -73,6 +75,7 @@ class QueryInterface:
             result["available_actions"] = list(self._available_actions)
         result["residual"] = self._build_residual()
         result["pruned_rules"] = self._build_pruned_rules()
+        result["observed_transition"] = self._build_observed_transition()
         return result
 
     # -- field builders -------------------------------------------------------
@@ -140,3 +143,13 @@ class QueryInterface:
             {"action": ua.action, "state": ua.state.fingerprint()}
             for ua in capped
         ]
+
+    def _build_observed_transition(self) -> dict[str, object]:
+        if self._observed_transition is None:
+            return {}
+        state_before, action, state_after = self._observed_transition
+        return {
+            "action": action,
+            "before": state_before.fingerprint(),
+            "after": state_after.fingerprint(),
+        }
