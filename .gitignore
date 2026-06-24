@@ -14,7 +14,9 @@
 
 # Recordings
 recordings/*.recording.jsonl
+recordings/*.llm.jsonl
 tests/recordings/*.recording.jsonl
+tests/recordings/*.llm.jsonl
 tests/recordings/not-a-recording.txt
 
 # Long-term memory

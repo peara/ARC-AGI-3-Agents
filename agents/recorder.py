@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 RECORDING_SUFFIX = ".recording.jsonl"
+LLM_LOG_SUFFIX = ".llm.jsonl"
 
 
 def get_recordings_dir() -> str:
@@ -61,6 +62,16 @@ class Recorder:
 
     def __repr__(self) -> str:
         return f"<Recorder guid={self.guid} file={self.filename}>"
+
+    def llm_log_path(self) -> str:
+        """Path to the sibling LLM-call log file for this recording.
+
+        Replaces the ``.recording.jsonl`` suffix of ``self.filename`` with
+        ``.llm.jsonl`` so the two files share a directory and guid.
+        """
+        if self.filename.endswith(RECORDING_SUFFIX):
+            return self.filename[: -len(RECORDING_SUFFIX)] + LLM_LOG_SUFFIX
+        return self.filename + LLM_LOG_SUFFIX
 
     @classmethod
     def list(cls) -> list[str]:
