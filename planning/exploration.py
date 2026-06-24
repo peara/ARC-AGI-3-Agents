@@ -15,6 +15,7 @@ from effects import (
     engine_step,
     entity_size_at,
     frame_meta_from_steps,
+    inject_llm_proposals,
     learn_effect_context,
     merge_effect_context,
     predict,
@@ -70,7 +71,6 @@ class ExplorationPolicy:
         self._last_phase = "init"
         self._last_diverged = False
         self._last_residual: tuple[ResidualEntry, ...] = ()
-        self._llm_proposals: tuple[Rule, ...] = ()
         self._last_unknowns: tuple[UnknownAction, ...] = ()
         self._last_observed_transition: tuple[SceneState, int, SceneState] | None = None
         self.rng = random.Random(self.cfg.seed)
@@ -160,9 +160,7 @@ class ExplorationPolicy:
             dims=spec.dims,
             include_terminal=spec.include_terminal,
             controllable_id=scene.controllable_id(),
-            llm_proposals=self._llm_proposals,
         )
-        self._llm_proposals = ()
         self._ctx = self._engine_ctx
         if not self.cfg.log_engine:
             return
@@ -347,8 +345,17 @@ class ExplorationPolicy:
     def last_observed_transition(self) -> tuple[SceneState, int, SceneState] | None:
         return self._last_observed_transition
 
-    def set_llm_proposals(self, proposals: tuple[Rule, ...]) -> None:
-        self._llm_proposals = proposals
+    def inject_llm_proposals(self, proposals: tuple[Rule, ...]) -> None:
+        """Inject LLM-proposed rules into the context immediately.
+
+        Rules enter ``proposed_rules`` with support=0 right away so that
+        ``predict`` and BFS see them on the same frame — no 1-step delay.
+        """
+        if not proposals:
+            return
+        if self._engine_ctx is not None:
+            self._engine_ctx = inject_llm_proposals(self._engine_ctx, proposals)
+            self._ctx = self._engine_ctx
 
     @property
     def controllable_id(self) -> int | None:

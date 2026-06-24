@@ -16,7 +16,6 @@ from typing import Any
 from arcengine import FrameData, GameAction, GameState
 
 from agents.llm_client import LLMClient
-from effects.rules import Rule
 from perception.session import RESET_ACTION, PerceptionSession, SceneSnapshot
 from planning.exploration import ExplorationPolicy
 from planning.heuristics import ExplorationConfig
@@ -88,9 +87,6 @@ class LlmCuriosity(Agent):
         # Rule proposer (wraps llm_call with cooldown; NULL_RULE_PROPOSER on eval path — no network)
         self._rule_proposer: RuleProposerFn = make_rule_proposer(self.llm_call)
 
-        # LLM-proposed rules pending injection into next engine step
-        self._llm_proposals: list[Rule] = []
-
         # Phase management
         self._phase: str = "random"  # "random" | "llm_directed"
 
@@ -126,12 +122,10 @@ class LlmCuriosity(Agent):
         # ── INGEST ─────────────────────────────────────────────────────
         if latest_frame.frame and id(latest_frame) != self._last_observed_frame_id:
             self._scene = self.session.ingest(latest_frame.frame, self._last_action_id)
-            self.policy.set_llm_proposals(tuple(self._llm_proposals))
-            self._llm_proposals = []
             self.policy.on_observed(self._scene)
             self._last_observed_frame_id = id(latest_frame)
 
-            # ── Rule proposer ──────────────────────────────────────────
+            # ── Rule proposer (after engine step, before divergence/planner) ─
             if (
                 self._phase == "llm_directed"
                 and self._rule_proposer is not NULL_RULE_PROPOSER
@@ -264,7 +258,7 @@ class LlmCuriosity(Agent):
                     "type": "unreachable",
                     "unknowns": [
                         {"action": ua.action, "state": ua.state.fingerprint()}
-                        for ua in unknowns
+                        for ua in unknowns[:5]
                     ],
                     "last_action": self._last_action_id,
                     "previous_probe_reason": goal.reason if goal else None,
@@ -361,7 +355,7 @@ class LlmCuriosity(Agent):
             proposals = call_rule_proposer(bundle, residual_dicts, self._proposer_call)
             if proposals:
                 log.info("Rule proposer returned %d proposals", len(proposals))
-                self._llm_proposals.extend(proposals)
+                self.policy.inject_llm_proposals(tuple(proposals))
         except Exception:
             log.exception("Rule proposer call failed")
 

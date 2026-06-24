@@ -11,6 +11,7 @@ from .dsl import dsl_to_rule, rule_to_dsl
 from .engine import (
     confirm_rules,
     engine_step,
+    inject_llm_proposals,
     propose_rules,
     prune_rules,
     should_engine_step,
@@ -52,6 +53,7 @@ __all__ = [
     "entity_pos_at",
     "entity_size_at",
     "frame_meta_from_steps",
+    "inject_llm_proposals",
     "is_terminal_dead_end",
     "learn_counter_rules",
     "learn_effect_context",

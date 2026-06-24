@@ -185,10 +185,15 @@ def _rule_mispredicted(
     return False
 
 
-def _inject_llm_proposals(
+def inject_llm_proposals(
     ctx: EffectContext, llm_proposals: tuple[Rule, ...]
 ) -> EffectContext:
-    """Merge LLM proposals into proposed_rules with support=0, deduplicating."""
+    """Merge LLM proposals into ``proposed_rules`` with support=0, deduplicating.
+
+    Public entry point — call this to inject LLM-proposed rules into the context
+    immediately after the proposer returns, so ``predict`` and BFS see them on
+    the same frame (not delayed by one engine step).
+    """
     if not llm_proposals:
         return ctx
     proposed = list(ctx.proposed_rules)
@@ -362,7 +367,7 @@ def engine_step(
     if not should_engine_step(ctx, state_before, action):
         return ctx
 
-    ctx = _inject_llm_proposals(ctx, llm_proposals)
+    ctx = inject_llm_proposals(ctx, llm_proposals)
 
     pred = predict(state_before, action, ctx)
     if pred.unknown:

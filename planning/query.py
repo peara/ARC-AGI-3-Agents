@@ -95,7 +95,7 @@ class QueryInterface:
         confirmed = [rule_to_dsl(r) for r in self._ctx.terminal_rules] + [
             rule_to_dsl(r) for r in self._ctx.relational_rules
         ]
-        proposed = [rule_to_dsl(r) for r in self._ctx.proposed_rules]
+        proposed = [rule_to_dsl(r) for r in self._ctx.proposed_rules[:20]]
         return {
             "confirm_threshold": self._ctx.confirm_threshold,
             "confirmed": confirmed,
