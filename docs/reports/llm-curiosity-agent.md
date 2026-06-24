@@ -489,3 +489,71 @@ transition in the bundle and can propose a movement rule.
 | Perception session | `perception/session/` |
 | Exploration heuristics | `planning/heuristics.py` |
 | Planner protocol | `planning/protocol.py` |
+
+---
+
+## 10. LLM call logging
+
+Every LLM call (planner + rule proposer) is recorded to a dedicated JSONL
+file for offline analysis. The log lives next to the game recording:
+
+- `<prefix>.<guid>.recording.jsonl` — frame events, scene, effect context
+- `<prefix>.<guid>.llm.jsonl` — one line per LLM call with full messages
+  and raw response
+
+### 10.1 Why a separate file
+
+Reconstructing prompts from the recording's `scene` + `effect_context`
+requires replaying perception and rebuilding the bundle — slow and
+fragile (breaks when the bundle builder changes). Storing raw messages
+costs ~2–5 KB × ~50–150 calls/game (well under 1 MB) and makes "what
+did the LLM see?" a one-line `jq` query.
+
+### 10.2 Event shape
+
+```json
+{
+  "timestamp": "2026-06-24T...",
+  "guid": "...",
+  "seq": 37,
+  "frame_index": 47,
+  "kind": "planner",
+  "trigger": "planner_cycle",
+  "messages": [{"role": "system", "content": "..."}, {"role": "user", "content": "..."}],
+  "response_raw": "{ \"target\": ... }",
+  "latency_ms": 1234,
+  "ok": true,
+  "error": null,
+  "truncated": false
+}
+```
+
+- `kind` — `"planner"` or `"rule_proposer"`
+- `trigger` — `"planner_cycle"` / `"residual"` / `"observed_transition"`
+- `frame_index` — monotonic per-run counter, matches the frame event
+- `seq` — monotonic per-run call counter
+- `truncated` — `true` if any message or response exceeded 20 KB; the
+  offending field is cut to 20 KB with a `[...truncated N chars]` marker
+
+### 10.3 Module
+
+`agents/templates/llm_logging.py`:
+
+- `LlmCallLogger` — lazy-opens the JSONL file, appends one event per
+  call, swallows internal errors so logging never breaks the agent loop
+- `wrap_llm_call(llm_call, logger, kind)` — returns a callable with the
+  same `(messages) -> str` signature that captures messages pre-call,
+  response post-call, timing, and exceptions (re-raised)
+- `Recorder.llm_log_path()` — sibling path helper
+
+### 10.4 Agent wiring
+
+`LlmCuriosity.__init__` constructs one `LlmCallLogger` and two wrapped
+callables (`self._planner_call`, `self._proposer_call`). The two call
+sites (`call_planner`, `call_rule_proposer`) receive the wrapped
+callables instead of `self.llm_call`. A `_frame_index` counter on the
+agent increments once per `choose_action` and is read by the logger via
+a closure.
+
+If the agent has no `Recorder` (e.g. test harness), the wrapped
+callables fall back to the raw `llm_call` and no file is written.

@@ -30,6 +30,7 @@ from planning.probe import ProbeGoal, execute_probe
 from planning.query import QueryInterface, UnknownAction
 
 from ..agent import Agent
+from .llm_logging import LlmCallLogger, wrap_llm_call
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +62,28 @@ class LlmCuriosity(Agent):
         # LLM client
         self._llm_client = LLMClient()
         self.llm_call = self._llm_client.chat
+
+        # Frame counter for LLM call logging (correlates calls to frame events).
+        self._frame_index = -1
+
+        recorder = getattr(self, "recorder", None)
+        self._llm_logger: LlmCallLogger | None
+        if recorder is not None:
+            self._llm_logger = LlmCallLogger(
+                guid=recorder.guid,
+                path=recorder.llm_log_path(),
+                frame_indexer=lambda: self._frame_index,
+            )
+            self._planner_call = wrap_llm_call(
+                self.llm_call, self._llm_logger, kind="planner"
+            )
+            self._proposer_call = wrap_llm_call(
+                self.llm_call, self._llm_logger, kind="rule_proposer"
+            )
+        else:
+            self._llm_logger = None
+            self._planner_call = self.llm_call
+            self._proposer_call = self.llm_call
 
         # Rule proposer (wraps llm_call with cooldown; NULL_RULE_PROPOSER on eval path — no network)
         self._rule_proposer: RuleProposerFn = make_rule_proposer(self.llm_call)
@@ -98,6 +121,8 @@ class LlmCuriosity(Agent):
             self._last_action_id = RESET_ACTION
             return GameAction.RESET
 
+        self._frame_index += 1
+
         # ── INGEST ─────────────────────────────────────────────────────
         if latest_frame.frame and id(latest_frame) != self._last_observed_frame_id:
             self._scene = self.session.ingest(latest_frame.frame, self._last_action_id)
@@ -112,6 +137,10 @@ class LlmCuriosity(Agent):
                 and self._rule_proposer is not NULL_RULE_PROPOSER
                 and (self.policy.last_residual or self.policy.last_observed_transition)
             ):
+                if self._llm_logger is not None:
+                    self._llm_logger.trigger = (
+                        "residual" if self.policy.last_residual else "observed_transition"
+                    )
                 self._try_propose_rules()
 
         scene = self._scene or self.session.snapshot()
@@ -185,10 +214,12 @@ class LlmCuriosity(Agent):
                 self.policy.context,
                 available_actions=actions,
             ).bundle()
+            if self._llm_logger is not None:
+                self._llm_logger.trigger = "planner_cycle"
             goal = call_planner(
                 bundle,
                 actions,
-                self.llm_call,
+                self._planner_call,
                 failure_context=self._failure_context,
             )
             self._failure_context = None
@@ -327,7 +358,7 @@ class LlmCuriosity(Agent):
             for r in residual
         ]
         try:
-            proposals = call_rule_proposer(bundle, residual_dicts, self.llm_call)
+            proposals = call_rule_proposer(bundle, residual_dicts, self._proposer_call)
             if proposals:
                 log.info("Rule proposer returned %d proposals", len(proposals))
                 self._llm_proposals.extend(proposals)
