@@ -204,6 +204,51 @@ def static_bounded(features: dict[int, EntityFeature]) -> list[GroupProposal]:
     return proposals
 
 
+def containment(features: dict[int, EntityFeature]) -> list[GroupProposal]:
+    """Detect strict bbox containment between entity pairs (last frame only).
+
+    Emits one proposal per (contained, container) ordered pair.  This is *not*
+    transitively closed — each pair is judged independently by the LLM, so the
+    model can reject incidental containment (maze contains everything) while
+    confirming meaningful containment (square contains cross).
+
+    Bounding boxes use the most recent observation.  Equal bboxes are skipped
+    (ambiguous — neither strictly contains the other).
+    """
+    candidates: list[tuple[int, tuple[int, int, int, int]]] = [
+        (eid, f.bboxes[-1]) for eid, f in features.items() if f.bboxes
+    ]
+    proposals: list[GroupProposal] = []
+    for (a_id, a_box), (b_id, b_box) in combinations(candidates, 2):
+        ar0, ac0, ar1, ac1 = a_box
+        br0, bc0, br1, bc1 = b_box
+        a_in_b = br0 <= ar0 and br1 >= ar1 and bc0 <= ac0 and bc1 >= ac1
+        b_in_a = ar0 <= br0 and ar1 >= br1 and ac0 <= bc0 and ac1 >= bc1
+        if a_in_b == b_in_a:
+            # Either no containment or symmetric (equal bbox) — skip.
+            continue
+        if a_in_b:
+            contained_id, container_id = a_id, b_id
+            contained_box, container_box = a_box, b_box
+        else:
+            contained_id, container_id = b_id, a_id
+            contained_box, container_box = b_box, a_box
+        proposals.append(
+            GroupProposal(
+                group_id=_next_group_id(),
+                member_ids=frozenset({contained_id, container_id}),
+                heuristic="containment",
+                evidence={
+                    "container_id": container_id,
+                    "contained_id": contained_id,
+                    "container_bbox": list(container_box),
+                    "contained_bbox": list(contained_box),
+                },
+            )
+        )
+    return proposals
+
+
 def adjacency(features: dict[int, EntityFeature]) -> list[GroupProposal]:
     eids = [eid for eid, f in features.items() if len(f.positions) >= 2]
     if len(eids) < 2:

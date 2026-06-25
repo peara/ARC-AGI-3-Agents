@@ -15,6 +15,7 @@ from grouping.heuristics import (
     static_bounded,
 )
 from grouping.proposal import GroupProposal, ProposedGroup
+from grouping.resolver import resolve_conflicts
 
 
 def _make_feature(
@@ -301,3 +302,149 @@ class TestDeduplication:
         co_movement_groups = [p for p in proposals if p.heuristic == "co_movement"]
         for group in co_movement_groups:
             assert len(group.member_ids) > 1
+
+
+def _make_proposal(
+    gid: int,
+    members: set[int],
+    heuristic: str,
+    evidence: dict[str, object] | None = None,
+) -> GroupProposal:
+    return GroupProposal(
+        group_id=gid,
+        member_ids=frozenset(members),
+        heuristic=heuristic,
+        evidence=evidence or {},
+    )
+
+
+class TestResolveConflicts:
+    def test_full_overlap_adjacency_suppressed(self) -> None:
+        proposals = [
+            _make_proposal(0, {7, 13, 14}, "adjacency"),
+            _make_proposal(1, {7, 13}, "containment"),
+            _make_proposal(2, {7, 14}, "containment"),
+            _make_proposal(3, {13, 14}, "containment"),
+        ]
+        out = resolve_conflicts(proposals)
+        adj = [p for p in out if p.heuristic == "adjacency"]
+        assert adj == []
+        cont = [p for p in out if p.heuristic == "containment"]
+        assert len(cont) == 3
+
+    def test_partial_overlap_adjacency_kept(self) -> None:
+        proposals = [
+            _make_proposal(0, {1, 2, 3}, "adjacency"),
+            _make_proposal(1, {1, 2}, "containment"),
+        ]
+        out = resolve_conflicts(proposals)
+        adj = [p for p in out if p.heuristic == "adjacency"]
+        assert len(adj) == 1
+        assert adj[0].member_ids == frozenset({1, 2, 3})
+
+    def test_no_containment_adjacency_untouched(self) -> None:
+        proposals = [
+            _make_proposal(0, {1, 2}, "adjacency"),
+            _make_proposal(1, {3, 4}, "adjacency"),
+        ]
+        out = resolve_conflicts(proposals)
+        assert len(out) == 2
+        assert all(p.heuristic == "adjacency" for p in out)
+
+    def test_singleton_adjacency_kept(self) -> None:
+        proposals = [
+            _make_proposal(0, {5}, "adjacency"),
+            _make_proposal(1, {5, 9}, "containment"),
+        ]
+        out = resolve_conflicts(proposals)
+        assert len(out) == 2
+
+    def test_empty_proposals(self) -> None:
+        assert resolve_conflicts([]) == []
+
+    def test_three_way_chains_fully_covered(self) -> None:
+        # Adjacency {A,B,C} with all pairs A-B, A-C, B-C contained — suppressed.
+        proposals = [
+            _make_proposal(0, {1, 2, 3}, "adjacency"),
+            _make_proposal(1, {1, 2}, "containment"),
+            _make_proposal(2, {2, 3}, "containment"),
+            _make_proposal(3, {1, 3}, "containment"),
+        ]
+        out = resolve_conflicts(proposals)
+        assert all(p.heuristic != "adjacency" for p in out)
+
+    def test_non_adjacency_not_suppressed(self) -> None:
+        # same_shape proposal with pairs also contained — kept (only adjacency
+        # gets suppressed, not other heuristics).
+        proposals = [
+            _make_proposal(0, {7, 13, 14}, "same_shape"),
+            _make_proposal(1, {7, 13}, "containment"),
+            _make_proposal(2, {7, 14}, "containment"),
+            _make_proposal(3, {13, 14}, "containment"),
+        ]
+        out = resolve_conflicts(proposals)
+        ss = [p for p in out if p.heuristic == "same_shape"]
+        assert len(ss) == 1
+        assert ss[0].member_ids == frozenset({7, 13, 14})
+
+
+class TestContainment:
+    def test_strictly_inside_emits_proposal(self) -> None:
+        from grouping.heuristics import containment
+
+        features = {
+            0: _make_feature(entity_id=0, bboxes=[(10, 10, 20, 20)]),
+            1: _make_feature(entity_id=1, bboxes=[(12, 12, 18, 18)]),
+        }
+        proposals = containment(features)
+        assert len(proposals) == 1
+        p = proposals[0]
+        assert p.heuristic == "containment"
+        assert p.member_ids == frozenset({0, 1})
+        assert p.evidence["container_id"] == 0
+        assert p.evidence["contained_id"] == 1
+
+    def test_disjoint_no_proposal(self) -> None:
+        from grouping.heuristics import containment
+
+        features = {
+            0: _make_feature(entity_id=0, bboxes=[(0, 0, 10, 10)]),
+            1: _make_feature(entity_id=1, bboxes=[(20, 20, 30, 30)]),
+        }
+        assert containment(features) == []
+
+    def test_equal_bbox_no_proposal(self) -> None:
+        from grouping.heuristics import containment
+
+        features = {
+            0: _make_feature(entity_id=0, bboxes=[(10, 10, 20, 20)]),
+            1: _make_feature(entity_id=1, bboxes=[(10, 10, 20, 20)]),
+        }
+        assert containment(features) == []
+
+    def test_touching_boundary_no_proposal(self) -> None:
+        # Inner bbox touching one edge of outer — still strict containment
+        # when inner is fully inside (equal edges count as inside).
+        from grouping.heuristics import containment
+
+        features = {
+            0: _make_feature(entity_id=0, bboxes=[(10, 10, 20, 20)]),
+            1: _make_feature(entity_id=1, bboxes=[(10, 10, 18, 18)]),
+        }
+        proposals = containment(features)
+        assert len(proposals) == 1
+        assert proposals[0].evidence["container_id"] == 0
+
+    def test_each_ordered_pair_separate(self) -> None:
+        # Three nesting levels → 3 containment pairs.
+        from grouping.heuristics import containment
+
+        features = {
+            0: _make_feature(entity_id=0, bboxes=[(0, 0, 30, 30)]),
+            1: _make_feature(entity_id=1, bboxes=[(5, 5, 25, 25)]),
+            2: _make_feature(entity_id=2, bboxes=[(10, 10, 20, 20)]),
+        }
+        proposals = containment(features)
+        assert len(proposals) == 3
+        pairs = {frozenset(p.member_ids) for p in proposals}
+        assert pairs == {frozenset({0, 1}), frozenset({0, 2}), frozenset({1, 2})}
