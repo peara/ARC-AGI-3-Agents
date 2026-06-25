@@ -249,6 +249,18 @@ def main(argv: list[str]) -> int:
             f"({n_before - len(proposals)} adjacency proposals suppressed)",
             file=sys.stderr,
         )
+    # Renumber to 0..N-1 so the LLM sees a gapless sequence (avoids the model
+    # "correcting" perceived gaps by overwriting IDs).
+    proposals = [
+        GroupProposal(
+            group_id=new_id,
+            member_ids=p.member_ids,
+            heuristic=p.heuristic,
+            evidence=p.evidence,
+            support=p.support,
+        )
+        for new_id, p in enumerate(proposals)
+    ]
     print(f"    {len(proposals)} proposals", file=sys.stderr)
 
     if not proposals:
