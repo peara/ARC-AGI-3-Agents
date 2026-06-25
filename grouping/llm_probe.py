@@ -55,7 +55,7 @@ def _entity_compact(f: EntityFeature) -> dict[str, Any]:
         "bbox_last": [r0, c0, r1, c1],
         "ever_moves": f.ever_moves,
         "shape_stable": f.shape_key_stable,
-        "n_observations": len(f.positions),
+        "n_observations": f.n_observations,
     }
 
 

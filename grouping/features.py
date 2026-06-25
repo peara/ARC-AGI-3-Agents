@@ -14,6 +14,7 @@ class EntityFeature:
     role: str | None
     composition: str
     n_members: int
+    n_observations: int
     positions: list[tuple[float, float]]
     bboxes: list[tuple[int, int, int, int]]
     displacements: list[tuple[int, int] | None]
@@ -92,6 +93,7 @@ def extract_features(
             role=ent.role,
             composition=ent.composition,
             n_members=len(member_tids),
+            n_observations=len(all_positions) // max(len(member_tids), 1),
             positions=all_positions,
             bboxes=all_bboxes,
             displacements=all_displacements,
