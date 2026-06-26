@@ -230,7 +230,7 @@ def main(argv: list[str]) -> int:
 
     # 2) Extract features + run heuristics
     print("[2] Extracting features and running heuristics", file=sys.stderr)
-    features = extract_features(sess, action_ids)
+    features = extract_features(sess.registry, sess.catalog, action_ids)
     print(f"    {len(features)} entities", file=sys.stderr)
 
     proposals: list[GroupProposal] = []

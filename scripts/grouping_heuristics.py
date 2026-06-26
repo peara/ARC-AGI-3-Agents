@@ -82,7 +82,7 @@ def main() -> None:
     session, _ = PerceptionSession.from_recording(path)
     action_ids = load_action_ids(path)
 
-    features = extract_features(session, action_ids)
+    features = extract_features(session.registry, session.catalog, action_ids)
 
     print("=== Entity Features ===")
     print(format_features(features))

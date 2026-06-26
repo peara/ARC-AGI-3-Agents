@@ -5,7 +5,6 @@ from dataclasses import dataclass
 
 from perception.entities import EntityCatalog
 from perception.registry import ObjectRegistry
-from perception.session import PerceptionSession
 
 
 @dataclass
@@ -29,11 +28,10 @@ class EntityFeature:
 
 
 def extract_features(
-    session: PerceptionSession, action_ids: list[int]
+    registry: ObjectRegistry,
+    catalog: EntityCatalog,
+    action_ids: list[int],
 ) -> dict[int, EntityFeature]:
-    reg: ObjectRegistry = session.registry
-    catalog: EntityCatalog = session.catalog
-
     track_to_entity: dict[int, int] = catalog.track_to_entity
 
     entity_tracks: dict[int, list[int]] = defaultdict(list)
@@ -54,7 +52,7 @@ def extract_features(
 
         has_observation = False
         for tid in member_tids:
-            track = reg.tracks.get(tid)
+            track = registry.tracks.get(tid)
             if track is None:
                 continue
             for obs in track.observations:

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from typing import Callable
+
 import pytest
 
 from grouping.features import EntityFeature
@@ -450,3 +453,242 @@ class TestContainment:
         assert len(proposals) == 3
         pairs = {frozenset(p.member_ids) for p in proposals}
         assert pairs == {frozenset({0, 1}), frozenset({0, 2}), frozenset({1, 2})}
+
+
+class TestApplyGates:
+    def test_adjacency_gated_by_frame_count(self) -> None:
+        from grouping.readiness import ReadinessConfig, apply_gates
+
+        features = {
+            0: _make_feature(entity_id=0, n_observations=20),
+            1: _make_feature(entity_id=1, n_observations=20),
+        }
+        adj = _make_proposal(0, {0, 1}, "adjacency")
+        config = ReadinessConfig(adjacency_min_frames=10)
+        assert apply_gates([adj], features, 5, config) == []
+        assert len(apply_gates([adj], features, 10, config)) == 1
+
+    def test_containment_gated_by_observations(self) -> None:
+        from grouping.readiness import ReadinessConfig, apply_gates
+
+        features = {
+            0: _make_feature(entity_id=0, n_observations=2),
+            1: _make_feature(entity_id=1, n_observations=10),
+        }
+        cont = _make_proposal(0, {0, 1}, "containment")
+        config = ReadinessConfig(containment_min_obs=4)
+        assert apply_gates([cont], features, 20, config) == []
+        features[0] = _make_feature(entity_id=0, n_observations=5)
+        assert len(apply_gates([cont], features, 20, config)) == 1
+
+    def test_same_shape_gated_by_observations(self) -> None:
+        from grouping.readiness import ReadinessConfig, apply_gates
+
+        features = {
+            0: _make_feature(entity_id=0, n_observations=3),
+            1: _make_feature(entity_id=1, n_observations=3),
+            2: _make_feature(entity_id=2, n_observations=10),
+        }
+        ss = _make_proposal(0, {0, 1, 2}, "same_shape")
+        config = ReadinessConfig(same_shape_min_obs=5)
+        assert apply_gates([ss], features, 20, config) == []
+        features[0] = _make_feature(entity_id=0, n_observations=6)
+        features[1] = _make_feature(entity_id=1, n_observations=6)
+        assert len(apply_gates([ss], features, 20, config)) == 1
+
+    def test_co_movement_not_gated_by_observations(self) -> None:
+        from grouping.readiness import ReadinessConfig, apply_gates
+
+        features = {
+            0: _make_feature(entity_id=0, n_observations=1, ever_moves=True),
+            1: _make_feature(entity_id=1, n_observations=1, ever_moves=True),
+        }
+        cm = _make_proposal(0, {0, 1}, "co_movement")
+        config = ReadinessConfig()
+        assert len(apply_gates([cm], features, 5, config)) == 1
+
+
+_RECORDING_PATH = (
+    "recordings/ls20-9607627b.llmcuriosity."
+    "abdbac8a-c81c-48ea-8710-c4b26301aa27.recording.jsonl"
+)
+
+
+def _load_recording_frames(path: str) -> list[dict]:
+    frames = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            data = json.loads(line).get("data", {})
+            if data.get("frame") is not None:
+                frames.append(data)
+    return frames
+
+
+def _has_recording() -> bool:
+    import os
+    return os.path.exists(_RECORDING_PATH)
+
+
+def _make_mock_llm(
+    responses: list[str],
+) -> tuple[Callable, list[list[dict[str, str]]]]:
+    calls: list[list[dict[str, str]]] = []
+    idx = [0]
+
+    def llm_call(messages: list[dict[str, str]]) -> str:
+        calls.append(messages)
+        i = idx[0]
+        idx[0] += 1
+        if i < len(responses):
+            return responses[i]
+        return "[]"
+
+    return llm_call, calls
+
+
+@pytest.mark.skipif(not _has_recording(), reason="recording not available")
+class TestGroupingEngineRecording:
+    def test_empty_snapshot_on_early_frames(self) -> None:
+        from grouping.engine import GroupingEngine
+        from perception.session.session import RESET_ACTION, PerceptionSession
+
+        llm_call, _ = _make_mock_llm([])
+        engine = GroupingEngine(llm_call=llm_call, debounce_frames=100)
+        frames = _load_recording_frames(_RECORDING_PATH)
+
+        sess = PerceptionSession()
+        for i, data in enumerate(frames[:5]):
+            ai = data.get("action_input") or {}
+            action = int(ai.get("id", -1))
+            if action < 0:
+                action = RESET_ACTION
+            snap = sess.ingest(
+                data["frame"], action,
+                state_name=str(data.get("state", "NOT_FINISHED")),
+                levels_completed=int(data.get("levels_completed", 0)),
+            )
+            groups = engine.update(snap.registry, snap.catalog, action)
+
+        assert groups == []
+        assert engine.confirmed_groups == []
+
+    def test_confirmed_groups_after_full_run(self) -> None:
+        from grouping.engine import GroupingEngine
+        from perception.session.session import RESET_ACTION, PerceptionSession
+
+        confirm_resp = json.dumps([
+            {"proposal_id": 0, "verdict": "confirm", "relation": "nest",
+             "members": [{"id": 0, "label": "a", "role": "container"},
+                          {"id": 1, "label": "b", "role": "dynamic"}],
+             "reason": "nested"},
+        ])
+        llm_call, calls = _make_mock_llm([confirm_resp, confirm_resp])
+        engine = GroupingEngine(
+            llm_call=llm_call, debounce_frames=1, confirm_threshold=1
+        )
+        frames = _load_recording_frames(_RECORDING_PATH)
+
+        sess = PerceptionSession()
+        for data in frames:
+            ai = data.get("action_input") or {}
+            action = int(ai.get("id", -1))
+            if action < 0:
+                action = RESET_ACTION
+            snap = sess.ingest(
+                data["frame"], action,
+                state_name=str(data.get("state", "NOT_FINISHED")),
+                levels_completed=int(data.get("levels_completed", 0)),
+            )
+            engine.update(snap.registry, snap.catalog, action)
+
+        confirmed = engine.confirmed_groups
+        assert len(confirmed) >= 1
+        g = confirmed[0]
+        assert g.relation == "nest"
+        assert g.confidence >= 1
+        assert len(calls) >= 1
+
+    def test_rejected_proposal_not_reconfirmed(self) -> None:
+        from grouping.engine import GroupingEngine
+        from perception.session.session import RESET_ACTION, PerceptionSession
+
+        reject_resp = json.dumps([
+            {"proposal_id": 0, "verdict": "reject", "relation": "none",
+             "members": [], "reason": "coincidental"},
+        ])
+        confirm_resp = json.dumps([
+            {"proposal_id": 0, "verdict": "confirm", "relation": "sibling",
+             "members": [{"id": 0, "label": "x", "role": "unknown"}],
+             "reason": "ok"},
+        ])
+        llm_call, _ = _make_mock_llm([reject_resp, confirm_resp])
+        engine = GroupingEngine(llm_call=llm_call, debounce_frames=1)
+        frames = _load_recording_frames(_RECORDING_PATH)
+
+        sess = PerceptionSession()
+        for data in frames:
+            ai = data.get("action_input") or {}
+            action = int(ai.get("id", -1))
+            if action < 0:
+                action = RESET_ACTION
+            snap = sess.ingest(
+                data["frame"], action,
+                state_name=str(data.get("state", "NOT_FINISHED")),
+                levels_completed=int(data.get("levels_completed", 0)),
+            )
+            engine.update(snap.registry, snap.catalog, action)
+
+        assert engine.confirmed_groups == []
+        assert len(engine.rejected_keys) >= 1
+
+
+class TestGroupingEngineMock:
+    def test_parse_response_fenced_json(self) -> None:
+        from grouping.engine import _parse_response
+
+        raw = '```json\n[{"a": 1}]\n```'
+        result = _parse_response(raw)
+        assert result == [{"a": 1}]
+
+    def test_parse_response_raw_json(self) -> None:
+        from grouping.engine import _parse_response
+
+        result = _parse_response('[{"a": 1}]')
+        assert result == [{"a": 1}]
+
+    def test_parse_response_garbage_returns_none(self) -> None:
+        from grouping.engine import _parse_response
+
+        assert _parse_response("not json at all") is None
+
+    def test_parse_members_valid(self) -> None:
+        from grouping.engine import _parse_members
+
+        raw = [{"id": 5, "label": "wall", "role": "obstacle"}]
+        result = _parse_members(raw)
+        assert len(result) == 1
+        assert result[0].entity_id == 5
+        assert result[0].role == "obstacle"
+        assert result[0].label == "wall"
+
+    def test_parse_members_bad_role_defaults_unknown(self) -> None:
+        from grouping.engine import _parse_members
+
+        raw = [{"id": 5, "label": "x", "role": "nonsense"}]
+        result = _parse_members(raw)
+        assert result[0].role == "unknown"
+
+    def test_parse_members_non_int_id_skipped(self) -> None:
+        from grouping.engine import _parse_members
+
+        raw = [{"id": "five", "label": "x", "role": "unknown"}]
+        assert _parse_members(raw) == ()
+
+    def test_parse_members_non_list_returns_empty(self) -> None:
+        from grouping.engine import _parse_members
+
+        assert _parse_members("not a list") == ()
+        assert _parse_members(None) == ()
