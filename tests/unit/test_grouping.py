@@ -625,7 +625,9 @@ class TestGroupingEngineRecording:
              "reason": "ok"},
         ])
         llm_call, _ = _make_mock_llm([reject_resp, confirm_resp])
-        engine = GroupingEngine(llm_call=llm_call, debounce_frames=1)
+        engine = GroupingEngine(
+            llm_call=llm_call, debounce_frames=1, confirm_threshold=2
+        )
         frames = _load_recording_frames(_RECORDING_PATH)
 
         sess = PerceptionSession()

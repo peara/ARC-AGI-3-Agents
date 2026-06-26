@@ -52,7 +52,7 @@ class _ProposalState:
     last_seen_frame: int = -1
 
 
-_CONFIRM_THRESHOLD = 2
+_CONFIRM_THRESHOLD = 1
 _DEBOUNCE_FRAMES = 5
 _MAX_CONTENT_LEN = 20000
 
@@ -158,7 +158,11 @@ def _build_proposal_payload(
     members = sorted(p.member_ids)
     member_feats = [_entity_compact(features[eid]) for eid in members if eid in features]
 
-    bboxes = [features[eid].bboxes[-1] for eid in members if features[eid].bboxes]
+    bboxes = [
+        features[eid].bboxes[-1]
+        for eid in members
+        if eid in features and features[eid].bboxes
+    ]
     if bboxes:
         r0 = min(b[0] for b in bboxes) - 3
         c0 = min(b[1] for b in bboxes) - 3
@@ -318,6 +322,13 @@ class GroupingEngine:
             return
 
         buffered = list(self._debounce_buffer)
+        valid = [
+            p for p in buffered
+            if all(eid in features for eid in p.member_ids)
+        ]
+        if not valid:
+            return
+
         renumbered = [
             GroupProposal(
                 group_id=new_id,
