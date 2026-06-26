@@ -35,6 +35,14 @@ never on the eval path.
   - `llm_planner.py` — LLM planner prompt, parse, validate, call
   - `llm_rule_proposer.py` — LLM rule proposer (movement/collision/terminal/delta)
   - `query.py` — `QueryInterface.bundle()`: LLM-facing scene + rules + context
+- `grouping/` — heuristic entity grouping (classical proposals + LLM confirm)
+  - `features.py` — `EntityFeature` dataclass + `extract_features(registry, catalog, action_ids)`
+  - `heuristics.py` — `co_movement`, `same_shape`, `containment`, `adjacency`, `static_bounded`
+  - `readiness.py` — `ReadinessConfig` + `apply_gates()` — per-heuristic readiness thresholds (eliminates cold-start noise)
+  - `resolver.py` — `resolve_conflicts()` — suppress adjacency covered by containment
+  - `engine.py` — `GroupingEngine`: one-function API (`update()` every frame → `list[ConfirmedGroup]`)
+  - `proposal.py` — `GroupProposal` / `ProposedGroup` frozen dataclasses
+  - `llm_probe.py` — standalone script: replay recording → heuristics → LLM → verdicts
 - `scripts/` — offline analysis over `*.recording.jsonl`
 - `recordings/` — game replays. `tests/reference_recordings.json` is the manifest.
 - `docs/` — design docs. `reports/` are living docs (e.g. `llm-curiosity-agent.md`), `brainstorms/` are future-session stubs, `diary/` are dated notes. **Keep design docs updated when behaviour changes.**
@@ -88,3 +96,4 @@ uv run pytest tests/unit/test_planning.py -v
 - LLM proposals inject into `EffectContext` immediately (no 1-frame buffer) so `predict` and BFS see them on the same frame.
 - Bundle size caps: `unknowns[:5]` in failure context, `proposed_rules[:20]` in query bundle — prevents LLM context explosion.
 - New capability → add an offline script + test fixture, update the relevant `docs/reports/` doc.
+- Grouping: `GroupingEngine.update()` is the one-function API for the agent. Readiness gates (`cm_min=4`, `adj_min_frames=10`, `cont_min_obs=4`, `ss_min_obs=5`) eliminate cold-start noise. `confirm_threshold=1` because the diff logic only sends each proposal once. See `docs/reports/grouping.md`.
