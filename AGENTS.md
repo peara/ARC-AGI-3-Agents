@@ -20,6 +20,10 @@ never on the eval path.
 - `main.py` — entry point. Loop: `main.py → Swarm → one Agent per game → Agent.choose_action()/is_done()`.
 - `agents/` — upstream harness. `agent.py` (base contract), `swarm.py`, `recorder.py`, `templates/` (random, curiosity, llmcuriosity, llm, langgraph, …). Registered by lowercased class name in `agents/__init__.py:AVAILABLE_AGENTS`.
 - `perception/` — observational extraction (frames → registry → `SceneSnapshot`)
+- `entity/` — entity identity layer (re-identification + composition + roles)
+  - `reconciler.py` — temporal successor: links dead tracks to born tracks (rotation, color change, compound co-transition)
+  - `logical_registry.py` — `LogicalRegistry`: wraps `ObjectRegistry` with a merge map
+  - `builder.py` — `EntityBuilder`: one-function API (`update()` every frame → `LogicalRegistry` + `EntityCatalog`)
 - `effects/` — forward prediction + rule engine
   - `predict.py` — state prediction (checks confirmed + proposed rules)
   - `engine.py` — online learner: inject proposals, predict, compute residual, confirm
