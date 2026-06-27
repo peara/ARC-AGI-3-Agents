@@ -16,6 +16,7 @@ from typing import Any
 from arcengine import FrameData, GameAction, GameState
 
 from agents.llm_client import LLMClient
+from entity import EntityBuilder
 from perception.session import RESET_ACTION, PerceptionSession, SceneSnapshot
 from planning.exploration import ExplorationPolicy
 from planning.heuristics import ExplorationConfig
@@ -53,6 +54,7 @@ class LlmCuriosity(Agent):
         random.seed(seed)
 
         self.session = PerceptionSession()
+        self._entity_builder = EntityBuilder()
         self.policy = ExplorationPolicy(
             action_space=[a.value for a in GameAction if a is not GameAction.RESET],
             config=ExplorationConfig(seed=seed, log_engine=True),
@@ -121,7 +123,26 @@ class LlmCuriosity(Agent):
 
         # ── INGEST ─────────────────────────────────────────────────────
         if latest_frame.frame and id(latest_frame) != self._last_observed_frame_id:
-            self._scene = self.session.ingest(latest_frame.frame, self._last_action_id)
+            self.session.ingest(latest_frame.frame, self._last_action_id)
+            logical_registry, catalog = self._entity_builder.update(
+                self.session.registry, self.session.action_ids
+            )
+            self._scene = SceneSnapshot(
+                frame_idx=self.session.registry.frame_idx,
+                n_observed=self.session.n_observed,
+                registry=logical_registry,
+                catalog=catalog,
+                action_ids=tuple(self.session.action_ids),
+                grid_rows=self.session.grid_rows,
+                grid_cols=self.session.grid_cols,
+                last_step=(
+                    self.session.step_observations[-1]
+                    if self.session.step_observations
+                    else None
+                ),
+                step_observations=tuple(self.session.step_observations),
+                determinism_violations=tuple(self.session.determinism_violations),
+            )
             self.policy.on_observed(self._scene)
             self._last_observed_frame_id = id(latest_frame)
 
