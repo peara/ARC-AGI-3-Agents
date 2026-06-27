@@ -1,20 +1,41 @@
-"""Incremental perception over a live episode."""
+"""Incremental perception over a live episode.
+
+Owns Layer 1 only: frame ingestion + track registry.  Entity building
+(Layer 2) has been extracted to ``entity.EntityBuilder`` — the agent
+creates an ``EntityBuilder`` and calls ``.update(registry, action_ids)``
+each frame to get a ``LogicalRegistry`` and ``EntityCatalog``.
+
+For backward compatibility, ``session.catalog`` remains accessible and is
+populated when an ``EntityBuilder`` is provided to ``from_recording()`` or
+set via ``session.entity_builder``.  Direct callers that need entities
+should use ``EntityBuilder`` explicitly.
+"""
 
 from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 
-from ..entities import EntityCatalog, build_entities
+from ..entities import EntityCatalog
 from ..motion import compute_delta
 from ..objects import Grid, n_subframes, to_grid
 from ..registry import ObjectRegistry
-from ..roles import assign_roles
 from .snapshot import SceneSnapshot, StepObservation
 
+if TYPE_CHECKING:
+    from entity.builder import EntityBuilder
+
 RESET_ACTION = 0
+
+
+def _default_entity_builder() -> EntityBuilder:
+    """Create a default EntityBuilder (avoids importing entity at module level)."""
+    from entity.builder import EntityBuilder as _EB
+
+    return _EB()
 
 
 def _grid_fingerprint(grid: Grid) -> str:
@@ -34,6 +55,7 @@ class PerceptionSession:
         grid_rows: int = 64,
         grid_cols: int = 64,
         registry: ObjectRegistry | None = None,
+        entity_builder: EntityBuilder | None | bool = True,
     ) -> None:
         self.grid_rows = grid_rows
         self.grid_cols = grid_cols
@@ -46,6 +68,9 @@ class PerceptionSession:
         self._transition_outcomes: dict[tuple[str, int], str] = {}
         self.determinism_violations: list[dict[str, object]] = []
         self.step_observations: list[StepObservation] = []
+        if entity_builder is True:
+            entity_builder = _default_entity_builder()
+        self._entity_builder: EntityBuilder | None = entity_builder if entity_builder is not False else None
 
     def ingest(
         self,
@@ -71,11 +96,13 @@ class PerceptionSession:
 
         self.registry.update(grid)  # action-agnostic on purpose
         self.n_observed += 1
-        self.catalog = assign_roles(
-            build_entities(self.registry),
-            self.registry,
-            self.action_ids,
-        )
+
+        # Entity building (Layer 2) is now owned by EntityBuilder.
+        # If an entity_builder is attached, run it to populate self.catalog.
+        if self._entity_builder is not None:
+            _logical_reg, self.catalog = self._entity_builder.update(
+                self.registry, self.action_ids
+            )
 
         step_obs = StepObservation(
             frame_idx=self.registry.frame_idx,
@@ -133,11 +160,21 @@ class PerceptionSession:
         *,
         grid_rows: int = 64,
         grid_cols: int = 64,
+        entity_builder: EntityBuilder | None | bool = True,
     ) -> tuple[PerceptionSession, list[Grid]]:
-        """Replay a recording into a session; returns (session, settled_grids)."""
+        """Replay a recording into a session; returns (session, settled_grids).
+
+        By default an ``EntityBuilder`` is created and run each frame so
+        ``session.catalog`` is populated with stable, re-identified entities.
+        Pass ``entity_builder=None`` to skip entity building (tracks only).
+        """
         import json
 
-        session = cls(grid_rows=grid_rows, grid_cols=grid_cols)
+        session = cls(
+            grid_rows=grid_rows,
+            grid_cols=grid_cols,
+            entity_builder=entity_builder,
+        )
         settled: list[Grid] = []
         with open(path, encoding="utf-8") as f:
             for line in f:
