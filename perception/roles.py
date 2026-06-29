@@ -31,6 +31,8 @@ class RoleAssigner(Protocol):
         catalog: EntityCatalog,
         reg: ObjectRegistry,
         action_ids: list[int],
+        *,
+        logical_map: dict[int, int] | None = None,
     ) -> EntityCatalog: ...
 
 
@@ -189,6 +191,7 @@ def detect_controllable(
     *,
     min_samples: int = 3,
     agree: float = 0.8,
+    logical_map: dict[int, int] | None = None,
 ) -> list[RolePatch]:
     """Heuristic: entity whose tracks correlate action ids with displacement.
 
@@ -199,6 +202,10 @@ def detect_controllable(
     )
     if not controllable:
         return []
+
+    # Translate raw track IDs to logical roots so they match entity members.
+    if logical_map is not None:
+        controllable = {logical_map.get(tid, tid) for tid in controllable}
 
     # An entity is the controllable when it CONTAINS controllable track(s) and
     # no structural member. Co-moving non-threshold members (e.g. a small dot
@@ -280,6 +287,8 @@ class HeuristicRoleAssignerV1:
         catalog: EntityCatalog,
         reg: ObjectRegistry,
         action_ids: list[int],
+        *,
+        logical_map: dict[int, int] | None = None,
     ) -> EntityCatalog:
         patches: list[RolePatch] = []
         patches.extend(
@@ -289,6 +298,7 @@ class HeuristicRoleAssignerV1:
                 action_ids,
                 min_samples=self.min_samples,
                 agree=self.agree,
+                logical_map=logical_map,
             )
         )
         patches.extend(detect_counter(catalog, reg, action_ids))
@@ -300,7 +310,9 @@ def assign_roles(
     reg: ObjectRegistry,
     action_ids: list[int],
     assigner: RoleAssigner | None = None,
+    *,
+    logical_map: dict[int, int] | None = None,
 ) -> EntityCatalog:
     if assigner is None:
         assigner = HeuristicRoleAssignerV1()
-    return assigner.assign(catalog, reg, action_ids)
+    return assigner.assign(catalog, reg, action_ids, logical_map=logical_map)

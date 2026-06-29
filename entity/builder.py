@@ -92,6 +92,7 @@ class EntityBuilder:
             catalog,
             registry,
             action_ids,
+            logical_map=logical_map,
         )
 
         return self._logical_registry, self._catalog
