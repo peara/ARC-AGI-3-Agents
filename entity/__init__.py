@@ -19,11 +19,29 @@ from __future__ import annotations
 from .builder import EntityBuilder, EntityBuilderConfig
 from .logical_registry import LogicalRegistry
 from .reconciler import Reconciler, ReconcilerConfig
+from .roles import (
+    HeuristicRoleAssignerV1,
+    RoleAssigner,
+    RolePatch,
+    apply_patches,
+    assign_roles,
+    detect_agent,
+    detect_controllable,
+    detect_counter,
+)
 
 __all__ = [
     "EntityBuilder",
     "EntityBuilderConfig",
+    "HeuristicRoleAssignerV1",
     "LogicalRegistry",
     "Reconciler",
     "ReconcilerConfig",
+    "RoleAssigner",
+    "RolePatch",
+    "apply_patches",
+    "assign_roles",
+    "detect_agent",
+    "detect_controllable",
+    "detect_counter",
 ]

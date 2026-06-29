@@ -24,11 +24,11 @@ import logging
 from dataclasses import dataclass
 from typing import cast
 
+from entity.roles import assign_roles
 from grouping.features import extract_features
 from grouping.heuristics import co_movement
 from perception.entities import Entity, EntityCatalog, build_entities
 from perception.registry import ObjectRegistry
-from perception.roles import assign_roles
 
 from .logical_registry import LogicalRegistry
 from .reconciler import Reconciler, ReconcilerConfig
