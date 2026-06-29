@@ -432,4 +432,13 @@ class LlmCuriosity(Agent):
         ctx = self.policy.context
         if ctx is not None:
             data["effect_context"] = ctx.to_dict()
+        data["policy_version"] = self._policy_version
         return data
+
+
+class LlmCuriosityV2(LlmCuriosity):
+    """Rule-first (v2) variant: uses RuleFirstPolicy instead of ExplorationPolicy."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        kwargs.setdefault("policy_version", "v2")
+        super().__init__(*args, **kwargs)

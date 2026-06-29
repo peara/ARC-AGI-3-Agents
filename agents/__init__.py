@@ -11,7 +11,7 @@ from .templates.langgraph_functional_agent import LangGraphFunc, LangGraphTextOn
 from .templates.langgraph_random_agent import LangGraphRandom
 from .templates.langgraph_thinking import LangGraphThinking
 from .templates.llm_agents import LLM, FastLLM, GuidedLLM, ReasoningLLM
-from .templates.llm_curiosity_agent import LlmCuriosity
+from .templates.llm_curiosity_agent import LlmCuriosity, LlmCuriosityV2
 from .templates.multimodal import MultiModalLLM
 from .templates.openclaw_agent import OpenClaw
 from .templates.random_agent import Random
@@ -32,12 +32,14 @@ for rec in Recorder.list():
 
 # update the agent dictionary to include subclasses of LLM class
 AVAILABLE_AGENTS["reasoningagent"] = ReasoningAgent
+AVAILABLE_AGENTS["llmcuriosityv2"] = cast(Type[Agent], LlmCuriosityV2)
 
 __all__ = [
     "Swarm",
     "Random",
     "Curiosity",
     "LlmCuriosity",
+    "LlmCuriosityV2",
     "LangGraphFunc",
     "LangGraphTextOnly",
     "LangGraphThinking",
