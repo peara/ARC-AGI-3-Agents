@@ -115,13 +115,13 @@ def _movement_rule(entity_id: int, action: int, dr: int, dc: int) -> Rule:
 @pytest.mark.unit
 class TestRuleFirstPolicy:
     def test_phase_transition_on_rules(self):
-        """Policy transitions from random to directed when _ctx has movement rules."""
+        """Policy transitions from random to directed when movement rules are learned."""
         policy = RuleFirstPolicy(
             action_space=[1, 2, 3, 4],
             config=ExplorationConfig(min_random_steps=0, seed=42),
         )
 
-        # No context → random phase
+        # Single-frame registry → no transitions → no movement rules → random phase
         reg, catalog = _make_registry_and_catalog(
             positions={0: [(5, 5)]},
         )
@@ -130,21 +130,19 @@ class TestRuleFirstPolicy:
         assert action in [1, 2, 3, 4]
         assert policy.status().phase == "explore_random"
 
-        # Inject a context with a movement rule → directed phase
-        rule = _movement_rule(entity_id=0, action=1, dr=0, dc=1)
-        policy._ctx = EffectContext(
-            movement_rules=(rule,),
-            available_actions=(1, 2, 3, 4),
-        )
-
-        # Now decide should attempt BFS (directed phase)
-        # Need enough observed frames and entities with positions
+        # Multi-frame registry → transitions exist → movement rules produced
+        # Entity 0 moves from (5,5) to (5,6) between frames
         reg2, catalog2 = _make_registry_and_catalog(
-            positions={0: [(5, 5)]},
+            positions={0: [(5, 5), (5, 6)]},
         )
-        scene2 = _scene(reg2, catalog2, n_observed=10)
+        action_ids = (0, 1)
+        scene2 = _scene(reg2, catalog2, n_observed=10, action_ids=action_ids)
         policy.decide(scene2)
-        # Phase should no longer be "explore_random"
+
+        assert policy.context is not None, "Context should be populated after decide"
+        assert len(policy.context.movement_rules) > 0, (
+            f"Should have movement rules from transitions, got {policy.context.movement_rules}"
+        )
         assert policy.status().phase != "explore_random"
 
     def test_bfs_uses_fingerprint_not_position(self):
@@ -183,36 +181,24 @@ class TestRuleFirstPolicy:
             config=ExplorationConfig(min_random_steps=0, seed=42),
         )
 
-        # No entity is controllable → controllable_id() returns None
+        # Two entities with multi-frame positions, neither controllable
         reg, catalog = _make_registry_and_catalog(
-            positions={0: [(5, 5)], 1: [(3, 3)]},
-            # No controllable_ids
+            positions={0: [(5, 5), (5, 6)], 1: [(3, 3), (2, 3)]},
         )
-        scene = _scene(reg, catalog, n_observed=10)
+        action_ids = (0, 1, 2)
+        scene = _scene(reg, catalog, n_observed=10, action_ids=action_ids)
         assert scene.controllable_id() is None
 
-        # Should still be able to decide and observe without error
         action = policy.decide(scene)
         assert action in [1, 2, 3, 4]
 
-        # on_observed should not crash
         policy.on_observed(scene)
 
-        # controllable_id property should always return None
         assert policy.controllable_id is None
 
-        # Inject context with movement rules for both entities
-        rule0 = _movement_rule(entity_id=0, action=1, dr=0, dc=1)
-        rule1 = _movement_rule(entity_id=1, action=2, dr=-1, dc=0)
-        policy._ctx = EffectContext(
-            movement_rules=(rule0, rule1),
-            available_actions=(1, 2, 3, 4),
-        )
-
-        # Decide should still work in directed phase without controllable
-        scene2 = _scene(reg, catalog, n_observed=10, frame_idx=1)
-        action2 = policy.decide(scene2)
-        assert action2 in [1, 2, 3, 4]
+        # With transitions, learn_effect_context_multi produces rules
+        assert policy.context is not None
+        assert len(policy.context.movement_rules) > 0
 
     def test_decide_random_phase_without_rules(self):
         """Without EffectContext, decide returns random actions and phase is explore_random."""

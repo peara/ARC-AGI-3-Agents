@@ -190,6 +190,22 @@ class RuleFirstPolicy:
             self._last_phase = "no_actions"
             return RESET_ACTION
 
+        # Learn rules every frame — bootstrap _ctx during random phase
+        # so the phase gate can open once movement rules appear.
+        base = learn_effect_context_multi(
+            scene.registry,
+            scene.catalog,
+            list(scene.action_ids),
+            grid_rows=scene.grid_rows,
+            grid_cols=scene.grid_cols,
+        )
+        if base is not None and base.available_actions:
+            if self._engine_ctx is None:
+                self._engine_ctx = base
+            else:
+                self._engine_ctx = merge_effect_context(base, self._engine_ctx)
+            self._ctx = self._engine_ctx
+
         # Phase gate: random until we have movement rules
         if (
             self._ctx is None
@@ -199,22 +215,9 @@ class RuleFirstPolicy:
             action = self._random_action(actions, phase="explore_random")
             return self.record_step(scene, action)
 
-        base = learn_effect_context_multi(
-            scene.registry,
-            scene.catalog,
-            list(scene.action_ids),
-            grid_rows=scene.grid_rows,
-            grid_cols=scene.grid_cols,
-        )
         if base is None or not base.available_actions:
             action = self._random_action(actions, phase="explore_random")
             return self.record_step(scene, action)
-
-        if self._engine_ctx is None:
-            self._engine_ctx = base
-        else:
-            self._engine_ctx = merge_effect_context(base, self._engine_ctx)
-        self._ctx = self._engine_ctx
 
         if not self.plan:
             self._plan_toward_unknown(scene, actions)
