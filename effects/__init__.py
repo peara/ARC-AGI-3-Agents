@@ -27,6 +27,7 @@ from .kinematics import (
     entity_size_at,
 )
 from .learn import learn_counter_rules, learn_effect_context, learn_terminal_rules
+from .learn_multi import learn_counter_rules_action_only, learn_effect_context_multi
 from .predict import Prediction, is_terminal_dead_end, predict, replay_predicted
 from .residual import ResidualEntry, compute_residual
 from .rules import Effect, Rule
@@ -55,7 +56,9 @@ __all__ = [
     "inject_llm_proposals",
     "is_terminal_dead_end",
     "learn_counter_rules",
+    "learn_counter_rules_action_only",
     "learn_effect_context",
+    "learn_effect_context_multi",
     "learn_terminal_rules",
     "load_recording_meta",
     "evaluate_guard",
