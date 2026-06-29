@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from effects.context import EffectContext
 from effects.rules import Effect, Rule
 from perception.entities import Entity, EntityCatalog
 from perception.registry import ObjectRegistry, Observation, Track
-from perception.session import SceneSnapshot
+from perception.session import RESET_ACTION, PerceptionSession, SceneSnapshot
 from planning.heuristics import ExplorationConfig
 from planning.rule_first import RuleFirstPolicy
+from tests.perception_fixtures import load_manifest
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -294,3 +297,103 @@ class TestRuleFirstPolicy:
         # Should include entity IDs from both movement and collision rules
         assert 0 in rule_entity_ids, f"Entity 0 from collision rule should be included, got {rule_entity_ids}"
         assert 1 in rule_entity_ids, f"Entity 1 from collision rule should be included, got {rule_entity_ids}"
+
+
+# ---------------------------------------------------------------------------
+# Recording-based integration tests
+# ---------------------------------------------------------------------------
+
+
+def _load_raw_frames(path: str):
+    """Read recording JSONL and extract (raw_frames, actions, state_names, levels)."""
+    raw_frames = []
+    actions = []
+    state_names = []
+    levels = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            data = json.loads(line).get("data", {})
+            if not isinstance(data, dict) or data.get("frame") is None:
+                continue
+            raw_frames.append(data["frame"])
+            ai = data.get("action_input") or {}
+            action = int(ai.get("id", -1))
+            if action < 0:
+                action = RESET_ACTION
+            actions.append(action)
+            state_names.append(str(data.get("state", "NOT_FINISHED")))
+            levels.append(int(data.get("levels_completed", 0)))
+    return raw_frames, actions, state_names, levels
+
+
+@pytest.mark.unit
+class TestRuleFirstOnRecording:
+    """Integration test: RuleFirstPolicy on a recording.
+
+    V2 policy should reach directed phase even when controllable_id
+    detection fails (which happens in wa30 due to track fragmentation).
+    """
+
+    def test_rule_first_reaches_directed_phase(self):
+        cases = [c for c in load_manifest() if c.recording.path.is_file()]
+        if not cases:
+            pytest.skip("no reference recordings available")
+
+        # Prefer wa30, fall back to first available
+        wa30_cases = [c for c in cases if "wa30" in c.recording.name]
+        case = wa30_cases[0] if wa30_cases else cases[0]
+
+        raw_frames, actions, _, _ = _load_raw_frames(str(case.recording.path))
+        if not raw_frames:
+            pytest.skip("recording file has no frames")
+
+        session = PerceptionSession()
+        policy = RuleFirstPolicy(
+            action_space=[1, 2, 3, 4],
+            config=ExplorationConfig(min_random_steps=6, seed=42),
+        )
+
+        max_frames = min(30, len(raw_frames))
+        last_action = RESET_ACTION
+
+        for i in range(max_frames):
+            scene = session.ingest(raw_frames[i], last_action)
+            policy.on_observed(scene)
+            action = policy.decide(scene)
+            last_action = action
+
+        # V2 should learn movement rules even without controllable_id
+        assert policy.context is not None, "V2 should build an EffectContext"
+        assert len(policy.context.movement_rules) > 0, (
+            "V2 should learn movement rules for multiple entities"
+        )
+        # V2 never has controllable_id
+        assert policy.controllable_id is None
+
+    def test_rule_first_no_crash_on_recording(self):
+        cases = [c for c in load_manifest() if c.recording.path.is_file()]
+        if not cases:
+            pytest.skip("no reference recordings available")
+
+        case = cases[0]
+        raw_frames, actions, _, _ = _load_raw_frames(str(case.recording.path))
+        if not raw_frames:
+            pytest.skip("recording file has no frames")
+
+        session = PerceptionSession()
+        policy = RuleFirstPolicy(
+            action_space=[1, 2, 3, 4],
+            config=ExplorationConfig(min_random_steps=6, seed=42),
+        )
+
+        max_frames = min(50, len(raw_frames))
+        last_action = RESET_ACTION
+
+        for i in range(max_frames):
+            scene = session.ingest(raw_frames[i], last_action)
+            policy.on_observed(scene)
+            action = policy.decide(scene)
+            last_action = action
