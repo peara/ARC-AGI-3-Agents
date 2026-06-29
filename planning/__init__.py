@@ -31,12 +31,14 @@ from .recording_eval import (
     plan_and_evaluate_session,
     verify_plan_on_recording,
 )
+from .rule_first import RuleFirstPolicy
 from .search import PlanSpec, goal_pos, plan_bfs, snapshot
 
 __all__ = [
     "DIM_READERS",
     "ExplorationConfig",
     "ExplorationPolicy",
+    "RuleFirstPolicy",
     "NULL_RULE_PROPOSER",
     "Planner",
     "PlannerStatus",
