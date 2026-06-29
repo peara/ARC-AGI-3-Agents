@@ -13,12 +13,45 @@ callers can translate raw track IDs to logical roots.  These tests FAIL until
 that parameter is added.
 """
 
-import pytest
-
+from entity.roles import (
+    HeuristicRoleAssignerV1,
+)
+from entity.roles import (
+    RolePatch as EntityRolePatch,
+)
+from entity.roles import (
+    assign_roles as entity_assign_roles,
+)
+from entity.roles import (
+    detect_agent as entity_detect_agent,
+)
+from entity.roles import (
+    detect_controllable as entity_detect_controllable,
+)
+from entity.roles import (
+    detect_counter as entity_detect_counter,
+)
 from perception.entities import Entity, EntityCatalog
 from perception.registry import ObjectRegistry, Observation, Track
-from perception.roles import RolePatch, detect_controllable
-
+from perception.roles import (
+    HeuristicRoleAssignerV1 as PerceptionHeuristicRoleAssignerV1,
+)
+from perception.roles import (
+    RolePatch as PerceptionRolePatch,
+)
+from perception.roles import (
+    assign_roles as perception_assign_roles,
+)
+from perception.roles import (
+    detect_agent as perception_detect_agent,
+)
+from perception.roles import detect_controllable
+from perception.roles import (
+    detect_controllable as perception_detect_controllable,
+)
+from perception.roles import (
+    detect_counter as perception_detect_counter,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -229,3 +262,91 @@ def test_detect_controllable_multi_hop_chain():
         logical_map={16: 28},
     )
     assert patches_merge == []
+
+
+# ---------------------------------------------------------------------------
+# Test 3-7: Module move verification
+# ---------------------------------------------------------------------------
+
+def test_import_from_perception_roles():
+    """All 6 public symbols are importable from perception.roles."""
+    assert PerceptionRolePatch is not None
+    assert PerceptionHeuristicRoleAssignerV1 is not None
+    assert perception_assign_roles is not None
+    assert perception_detect_agent is not None
+    assert perception_detect_controllable is not None
+    assert perception_detect_counter is not None
+
+
+def test_import_from_entity_roles():
+    """All 6 public symbols are importable from entity.roles."""
+    assert EntityRolePatch is not None
+    assert HeuristicRoleAssignerV1 is not None
+    assert entity_assign_roles is not None
+    assert entity_detect_agent is not None
+    assert entity_detect_controllable is not None
+    assert entity_detect_counter is not None
+
+
+def test_import_parity():
+    """perception.roles and entity.roles resolve to the same Python objects."""
+    assert PerceptionRolePatch is EntityRolePatch
+    assert PerceptionHeuristicRoleAssignerV1 is HeuristicRoleAssignerV1
+    assert perception_assign_roles is entity_assign_roles
+    assert perception_detect_agent is entity_detect_agent
+    assert perception_detect_controllable is entity_detect_controllable
+    assert perception_detect_counter is entity_detect_counter
+
+
+def test_detect_agent_alias():
+    """detect_agent is the same object as detect_controllable (backward-compat alias)."""
+    assert entity_detect_agent is entity_detect_controllable
+
+
+def test_entity_builder_controllable_survives_rotation():
+    """assign_roles from entity.roles correctly labels a controllable entity
+    that underwent a rotation (dead track 16 → alive track 28)."""
+
+    action_ids = [0, 1, 1, 1, 1]
+
+    track_16 = _make_track(
+        track_id=16,
+        color=5,
+        observations=[
+            _make_obs(0, color=5, centroid=(20.0, 20.0), displacement=None),
+            _make_obs(1, color=5, centroid=(16.0, 20.0), displacement=(-4, 0)),
+            _make_obs(2, color=5, centroid=(12.0, 20.0), displacement=(-4, 0)),
+            _make_obs(3, color=5, centroid=(8.0, 20.0), displacement=(-4, 0)),
+            _make_obs(4, color=5, centroid=(4.0, 20.0), displacement=(-4, 0)),
+        ],
+        alive=False,
+    )
+
+    track_28 = _make_track(
+        track_id=28,
+        color=5,
+        observations=[
+            _make_obs(4, color=5, centroid=(4.0, 20.0), displacement=None),
+        ],
+        alive=True,
+    )
+
+    reg = _make_registry_with_tracks(track_16, track_28)
+
+    catalog = EntityCatalog(
+        entities={
+            10: Entity(
+                id=10,
+                members=frozenset({28}),
+                composition="compound",
+            ),
+        }
+    )
+
+    # entity.roles.assign_roles must find the controllable entity via logical_map
+    result = entity_assign_roles(
+        catalog, reg, action_ids,
+        logical_map={16: 28, 28: 28},
+    )
+    assert 10 in result.entities
+    assert result.entities[10].role == "controllable"

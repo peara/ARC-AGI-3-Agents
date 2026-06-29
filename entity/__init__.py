@@ -19,16 +19,18 @@ from __future__ import annotations
 from .builder import EntityBuilder, EntityBuilderConfig
 from .logical_registry import LogicalRegistry
 from .reconciler import Reconciler, ReconcilerConfig
-from .roles import (
-    HeuristicRoleAssignerV1,
-    RoleAssigner,
-    RolePatch,
-    apply_patches,
-    assign_roles,
-    detect_agent,
-    detect_controllable,
-    detect_counter,
-)
+
+
+def __getattr__(name: str) -> object:
+    if name in {
+        "HeuristicRoleAssignerV1", "RoleAssigner", "RolePatch",
+        "apply_patches", "assign_roles", "detect_agent",
+        "detect_controllable", "detect_counter",
+    }:
+        from . import roles
+        return getattr(roles, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "EntityBuilder",

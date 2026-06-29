@@ -44,13 +44,17 @@ from .registry import (
     is_degenerate,
     run_registry,
 )
-from .roles import (
-    HeuristicRoleAssignerV1,
-    RolePatch,
-    assign_roles,
-    detect_controllable,
-    detect_counter,
-)
+
+
+def __getattr__(name: str) -> object:
+    if name in {
+        "HeuristicRoleAssignerV1", "RolePatch", "assign_roles",
+        "detect_controllable", "detect_counter",
+    }:
+        from . import roles
+        return getattr(roles, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "GameObject",
