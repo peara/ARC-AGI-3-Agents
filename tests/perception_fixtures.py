@@ -33,16 +33,12 @@ class PerceptionExpect:
     controllable_entity_id: int | None
     min_counters: int = 0
     min_animation_events: int = 0
-    expect_non_markovian: bool = False
-
 
 @dataclass(frozen=True)
 class EffectsExpect:
     recording: RecordingRef
     expect_terminal_rule: bool = False
     expect_counter_rule: bool = False
-    expect_non_markovian: bool = False
-    expect_abstain_non_markovian: bool = False
 
 
 @dataclass
@@ -85,7 +81,6 @@ def load_perception_expectations(
                 controllable_entity_id=int(ctrl) if ctrl is not None else None,
                 min_counters=int(perc.get("min_counters", 0)),
                 min_animation_events=int(perc.get("min_animation_events", 0)),
-                expect_non_markovian=bool(perc.get("expect_non_markovian", False)),
             )
         )
     return out
@@ -110,10 +105,6 @@ def load_effects_expectations(
                 recording=rec,
                 expect_terminal_rule=bool(effects.get("expect_terminal_rule", False)),
                 expect_counter_rule=bool(effects.get("expect_counter_rule", False)),
-                expect_non_markovian=bool(effects.get("expect_non_markovian", False)),
-                expect_abstain_non_markovian=bool(
-                    effects.get("expect_abstain_non_markovian", False)
-                ),
             )
         )
     return out

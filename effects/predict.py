@@ -43,8 +43,6 @@ def predict(
     before the movement, and ``op="revert"`` restores that position.
     Effects with ``op="revert"`` restore values from ``state_before``.
     """
-    if ctx.non_markovian and not ctx.has_confirmed(state, action):
-        return Prediction(state, unknown=True)
 
     nxt: SceneState = state
     any_fired = False

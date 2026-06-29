@@ -189,14 +189,12 @@ class ExplorationPolicy:
             action = self._random_action(actions, phase="explore_random")
             return self.record_step(scene, controllable_id, action)
 
-        non_markov = len(scene.determinism_violations) > 0
         base = learn_effect_context(
             scene.registry,
             scene.catalog,
             list(scene.action_ids),
             frame_meta_from_steps(scene.step_observations),
             controllable_id,
-            non_markovian=non_markov,
             grid_rows=scene.grid_rows,
             grid_cols=scene.grid_cols,
         )

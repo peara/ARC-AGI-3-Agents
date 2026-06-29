@@ -342,13 +342,6 @@ def prune_rules(
     )
 
 
-def should_engine_step(ctx: EffectContext, state_before: SceneState, action: int) -> bool:
-    """False when non-Markovian and the transition is not safe to model."""
-    if not ctx.non_markovian:
-        return True
-    return ctx.has_confirmed(state_before, action)
-
-
 def engine_step(
     ctx: EffectContext,
     state_before: SceneState,
@@ -364,9 +357,6 @@ def engine_step(
     llm_proposals: tuple[Rule, ...] = (),
 ) -> EffectContext:
     """Run propose / confirm / prune for one verified transition."""
-    if not should_engine_step(ctx, state_before, action):
-        return ctx
-
     ctx = inject_llm_proposals(ctx, llm_proposals)
 
     pred = predict(state_before, action, ctx)

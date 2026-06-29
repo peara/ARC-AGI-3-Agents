@@ -75,7 +75,6 @@ def build_effect_context(
     *,
     frame_meta=None,
     step_observations=(),
-    non_markovian: bool = False,
     grid_rows: int = 64,
     grid_cols: int = 64,
 ) -> EffectContext | None:
@@ -88,7 +87,6 @@ def build_effect_context(
         action_ids,
         meta,
         entity_id,
-        non_markovian=non_markovian,
         grid_rows=grid_rows,
         grid_cols=grid_cols,
     )
@@ -166,7 +164,6 @@ def plan_and_evaluate(
     goal_frame: int,
     *,
     max_nodes: int = 10_000,
-    non_markovian: bool = False,
     step_observations=(),
 ) -> PlanEvalResult | None:
     """Plan between two frames and evaluate against the recording."""
@@ -195,7 +192,6 @@ def plan_and_evaluate(
         action_ids,
         entity_id,
         step_observations=step_observations,
-        non_markovian=non_markovian,
     )
     if ctx is None or not ctx.available_actions:
         return None
@@ -231,7 +227,6 @@ def plan_and_evaluate_session(
     max_nodes: int = 10_000,
 ) -> PlanEvalResult | None:
     scene = session.snapshot()
-    non_markov = len(scene.determinism_violations) > 0
     return plan_and_evaluate(
         session.registry,
         scene.catalog,
@@ -240,6 +235,5 @@ def plan_and_evaluate_session(
         start_frame,
         goal_frame,
         max_nodes=max_nodes,
-        non_markovian=non_markov,
         step_observations=scene.step_observations,
     )

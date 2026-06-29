@@ -128,14 +128,12 @@ def main() -> None:
         goal=lambda s: False,
     )
 
-    non_markov = len(scene.determinism_violations) > 0
     ctx = learn_effect_context(
         session.registry,
         scene.catalog,
         list(session.action_ids),
         load_recording_meta(path),
         ctrl,
-        non_markovian=non_markov,
     )
     if ctx is None:
         raise SystemExit("failed to learn effect context")
@@ -145,7 +143,7 @@ def main() -> None:
         n_steps = min(n_steps, args.max_steps + 1)
 
     print(f"recording: {path.name}")
-    print(f"entities={entity_ids} dims={dims} non_markovian={non_markov}")
+    print(f"entities={entity_ids} dims={dims}")
     print("--- engine steps ---")
 
     change_steps = 0

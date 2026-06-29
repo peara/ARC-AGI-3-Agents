@@ -220,7 +220,6 @@ class SceneSnapshot:
             "events": self._registry_events(),
             "globals": self._globals(),
             "determinism": {
-                "non_markovian": len(violations) > 0,
                 "violation_count": len(violations),
                 "violations": violations[-5:],
             },

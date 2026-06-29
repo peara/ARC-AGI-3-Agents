@@ -196,7 +196,6 @@ def run_manifest_case(case_id: str, max_nodes: int, verify_segments: bool) -> No
         case.goal_frame,
         max_nodes=max_nodes,
         step_observations=stack.session.step_observations,
-        non_markovian=len(stack.session.determinism_violations) > 0,
     )
     if result is None:
         print("plan: NOT FOUND")

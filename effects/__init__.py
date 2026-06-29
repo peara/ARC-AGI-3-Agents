@@ -14,7 +14,6 @@ from .engine import (
     inject_llm_proposals,
     propose_rules,
     prune_rules,
-    should_engine_step,
 )
 from .engine_log import (  # noqa: F401
     diff_effect_context,
@@ -68,6 +67,5 @@ __all__ = [
     "parse_guard_clauses",
     "prune_rules",
     "replay_predicted",
-    "should_engine_step",
     "terminal_from_state_name",
 ]

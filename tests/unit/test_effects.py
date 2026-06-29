@@ -52,7 +52,6 @@ class TestLearnEffectContext:
             list(g50t_session.action_ids),
             meta,
             ctrl,
-            non_markovian=True,
         )
         assert ctx is not None
         game_over = [
@@ -209,7 +208,6 @@ class TestEffectsManifest:
             list(session.action_ids),
             load_recording_meta(expect.recording.path),
             ctrl,
-            non_markovian=expect.expect_non_markovian,
         )
         assert ctx is not None
         if expect.expect_terminal_rule:
@@ -220,7 +218,6 @@ class TestEffectsManifest:
             assert ctx.relational_rules
         else:
             assert not ctx.relational_rules
-        assert ctx.non_markovian == expect.expect_non_markovian
 
 
 def _make_rule(**overrides):
@@ -416,11 +413,6 @@ class TestOverlapsGuard:
         assert clauses[0]["has_overlaps"] is False
 
 
-# ---------------------------------------------------------------------------
-# New tests for collision_rules, available_actions, and has_confirmed (D3)
-# ---------------------------------------------------------------------------
-
-
 
 def _make_rule(**overrides):
     defaults = dict(
@@ -442,17 +434,6 @@ def _positional_rule(action: int = 1, entity_id: int = 0, pos: tuple[int, int] =
             ]
         },
         effects=(Effect("size", entity_id, "delta", 1),),
-        support=1,
-    )
-    defaults.update(overrides)
-    return Rule(**defaults)
-
-
-def _action_only_rule(action: int = 1, **overrides):
-    """Build a Rule whose guard is action-only (is_positional_guard=False)."""
-    defaults = dict(
-        guard_spec={"action": action},
-        effects=(Effect("size", 3, "delta", 1),),
         support=1,
     )
     defaults.update(overrides)
@@ -497,122 +478,6 @@ class TestEffectContextNewFields:
         d = ctx.to_dict()
         assert d["collision_rules"] == []
         assert d["available_actions"] == []
-
-
-@pytest.mark.unit
-class TestHasConfirmedPositionalGuards:
-    """Test has_confirmed per D3: only positional guards confirm."""
-
-    def test_non_markovian_false_always_returns_true(self):
-        """When non_markovian=False, has_confirmed always returns True."""
-        ctx = EffectContext(non_markovian=False)
-        state = SceneState(relevant=((0, ("pos", (5, 5))),))
-        assert ctx.has_confirmed(state, 1) is True
-
-    def test_movement_rule_with_positional_guard_confirms(self):
-        """A movement rule with a positional guard confirms the transition."""
-        rule = _positional_rule(action=1, entity_id=0, pos=(5, 5))
-        ctx = EffectContext(
-            movement_rules=(rule,),
-            non_markovian=True,
-        )
-        state = SceneState(relevant=((0, ("pos", (5, 5))),))
-        assert ctx.has_confirmed(state, 1) is True
-
-    def test_movement_rule_action_only_does_not_confirm(self):
-        """A movement rule with action-only guard (no positional) does NOT confirm."""
-        rule = _action_only_rule(action=1)
-        assert not rule.is_positional_guard
-        ctx = EffectContext(
-            movement_rules=(rule,),
-            non_markovian=True,
-        )
-        state = SceneState(relevant=((0, ("pos", (5, 5))),))
-        assert ctx.has_confirmed(state, 1) is False
-
-    def test_collision_rule_with_positional_guard_confirms(self):
-        """A collision rule with a positional guard confirms the transition."""
-        rule = _positional_rule(action=1, entity_id=0, pos=(5, 5))
-        ctx = EffectContext(
-            collision_rules=(rule,),
-            non_markovian=True,
-        )
-        state = SceneState(relevant=((0, ("pos", (5, 5))),))
-        assert ctx.has_confirmed(state, 1) is True
-
-    def test_collision_rule_action_only_does_not_confirm(self):
-        """A collision rule with action-only guard does NOT confirm."""
-        rule = _action_only_rule(action=1)
-        ctx = EffectContext(
-            collision_rules=(rule,),
-            non_markovian=True,
-        )
-        state = SceneState(relevant=((0, ("pos", (5, 5))),))
-        assert ctx.has_confirmed(state, 1) is False
-
-    def test_terminal_rule_positional_guard_confirms(self):
-        """A terminal rule with a positional guard confirms."""
-        rule = Rule(
-            guard_spec={
-                "all": [
-                    {"action": 1},
-                    {"dim": "pos", "of": 0, "eq": [5, 5]},
-                ]
-            },
-            effects=(Effect("terminal", 0, "set", TERMINAL_GAME_OVER),),
-            support=1,
-        )
-        ctx = EffectContext(
-            terminal_rules=(rule,),
-            non_markovian=True,
-        )
-        state = SceneState(relevant=((0, ("pos", (5, 5))),))
-        assert ctx.has_confirmed(state, 1) is True
-
-    def test_relational_rule_positional_guard_confirms(self):
-        """A relational rule with a positional guard confirms."""
-        rule = Rule(
-            guard_spec={
-                "all": [
-                    {"action": 1},
-                    {"dim": "pos", "of": 0, "eq": [5, 5]},
-                ]
-            },
-            effects=(Effect("size", 3, "delta", 1),),
-            support=1,
-        )
-        ctx = EffectContext(
-            relational_rules=(rule,),
-            non_markovian=True,
-        )
-        state = SceneState(relevant=((0, ("pos", (5, 5))),))
-        assert ctx.has_confirmed(state, 1) is True
-
-    def test_no_matching_rules_returns_false(self):
-        """When non_markovian=True and no positional-guard rules match, returns False."""
-        ctx = EffectContext(non_markovian=True)
-        state = SceneState(relevant=((0, ("pos", (5, 5))),))
-        assert ctx.has_confirmed(state, 1) is False
-
-    def test_positional_guard_wrong_pos_no_match(self):
-        """A positional guard that doesn't match the state position returns False."""
-        rule = _positional_rule(action=1, entity_id=0, pos=(9, 9))
-        ctx = EffectContext(
-            collision_rules=(rule,),
-            non_markovian=True,
-        )
-        state = SceneState(relevant=((0, ("pos", (5, 5))),))
-        assert ctx.has_confirmed(state, 1) is False
-
-    def test_support_zero_does_not_confirm(self):
-        """A rule with support=0 does not confirm even if guard matches."""
-        rule = _positional_rule(action=1, entity_id=0, pos=(5, 5), support=0)
-        ctx = EffectContext(
-            movement_rules=(rule,),
-            non_markovian=True,
-        )
-        state = SceneState(relevant=((0, ("pos", (5, 5))),))
-        assert ctx.has_confirmed(state, 1) is False
 
 
 @pytest.mark.unit
@@ -793,11 +658,4 @@ class TestPrediction:
         # Revert should restore entity 0 to (5,5)
         assert result.state.pos(0) == (5, 5)
 
-    def test_predict_non_markovian_returns_unknown(self):
-        """predict() returns Prediction(state, unknown=True) when non-Markovian
-        and has_confirmed returns False."""
-        ctx = EffectContext(non_markovian=True)
-        start = SceneState(relevant=((0, ("pos", (5, 5))),))
-        result = predict(start, 1, ctx)
-        assert result.unknown is True
-        assert result.state == start
+

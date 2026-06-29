@@ -8,7 +8,6 @@ from pathlib import Path
 
 from .dsl import rule_to_dsl
 from .rules import Rule
-from .state import SceneState
 
 
 @dataclass(frozen=True)
@@ -69,29 +68,8 @@ class EffectContext:
     movement_rules: tuple[Rule, ...] = ()
     collision_rules: tuple[Rule, ...] = ()
     available_actions: tuple[int, ...] = ()
-    non_markovian: bool = False
     confirm_threshold: int = 2
     latent_defaults: dict[tuple[int, str], object] = field(default_factory=dict)
-
-    def has_confirmed(self, state: SceneState, action: int) -> bool:
-        """True when a non-Markovian transition is safe to predict (slice 2).
-
-        Checks movement_rules, collision_rules, terminal_rules, and
-        relational_rules for rules with ``support >= 1`` that have a
-        positional guard (``is_positional_guard``) and whose guard matches.
-        """
-        if not self.non_markovian:
-            return True
-        for rule in self.movement_rules + self.collision_rules:
-            if rule.support >= 1 and rule.is_positional_guard and rule.guard(state, action):
-                return True
-        for rule in self.terminal_rules:
-            if rule.support >= 1 and rule.is_positional_guard and rule.guard(state, action):
-                return True
-        for rule in self.relational_rules:
-            if rule.support >= 1 and rule.is_positional_guard and rule.guard(state, action):
-                return True
-        return False
 
     def to_dict(self) -> dict[str, object]:
         result: dict[str, object] = {
@@ -101,7 +79,6 @@ class EffectContext:
             "movement_rules": [rule_to_dsl(r) for r in self.movement_rules],
             "collision_rules": [rule_to_dsl(r) for r in self.collision_rules],
             "available_actions": list(self.available_actions),
-            "non_markovian": self.non_markovian,
             "confirm_threshold": self.confirm_threshold,
         }
         return result
@@ -146,7 +123,6 @@ def merge_effect_context(base: EffectContext, engine: EffectContext) -> EffectCo
         movement_rules=tuple(merged_movement_rules),
         collision_rules=tuple(merged_collision_rules),
         available_actions=merged_available_actions,
-        non_markovian=base.non_markovian,
         confirm_threshold=engine.confirm_threshold,
         latent_defaults=base.latent_defaults,
     )

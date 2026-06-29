@@ -10,14 +10,11 @@
       "perception": {
         "controllable_entity_id": 0,
         "min_counters": 0,
-        "min_animation_events": 0,
-        "expect_non_markovian": false
+        "min_animation_events": 0
       },
       "effects": {
         "expect_terminal_rule": false,
-        "expect_counter_rule": true,
-        "expect_non_markovian": false,
-        "expect_abstain_non_markovian": false
+        "expect_counter_rule": true
       }
     },
     {
@@ -27,14 +24,11 @@
       "perception": {
         "controllable_entity_id": 0,
         "min_counters": 1,
-        "min_animation_events": 1,
-        "expect_non_markovian": true
+        "min_animation_events": 1
       },
       "effects": {
         "expect_terminal_rule": true,
-        "expect_counter_rule": true,
-        "expect_non_markovian": true,
-        "expect_abstain_non_markovian": true
+        "expect_counter_rule": true
       }
     }
   ]

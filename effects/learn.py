@@ -253,7 +253,6 @@ def learn_effect_context(
     frame_meta: list[FrameMeta],
     controllable_id: int,
     *,
-    non_markovian: bool = False,
     grid_rows: int = 64,
     grid_cols: int = 64,
 ) -> EffectContext | None:
@@ -279,5 +278,4 @@ def learn_effect_context(
         available_actions=available_actions,
         terminal_rules=terminal_rules,
         relational_rules=relational_rules,
-        non_markovian=non_markovian,
     )

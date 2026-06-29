@@ -105,12 +105,4 @@ class TestPerceptionContract:
         ]
         assert len(animations) >= expect.min_animation_events
 
-    def test_non_markovian_beacon(self, expect):
-        session, _ = PerceptionSession.from_recording(expect.recording.path)
-        summary = session.snapshot().summary()
-        non_markov = summary["determinism"]["non_markovian"]
-        if expect.expect_non_markovian:
-            assert non_markov is True
-            assert summary["determinism"]["violation_count"] >= 1
-        else:
-            assert non_markov is False
+

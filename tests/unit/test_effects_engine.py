@@ -19,7 +19,6 @@ from effects import (
     predict,
     propose_rules,
     prune_rules,
-    should_engine_step,
 )
 from effects.engine import _bump_support, _iter_managed_rules, _promote_rules
 from effects.engine_log import _index_rules, format_rule
@@ -27,15 +26,8 @@ from perception.session import PerceptionSession
 from planning.adapters import snapshot_from_scene
 from planning.search import PlanSpec
 from tests.perception_fixtures import (
-    REPO_ROOT,
     load_effects_expectations,
     load_manifest,
-)
-
-
-G50T_PATH = REPO_ROOT / (
-    "recordings/g50t-5849a774.curiosity.200."
-    "31c022a3-dd4e-4ebe-8ad9-c237c6053bb1.recording.jsonl"
 )
 
 
@@ -192,35 +184,6 @@ class TestLs20CounterPropose:
 
 
 @pytest.mark.unit
-class TestG50tAbstain:
-    @pytest.fixture
-    def g50t_session(self):
-        if not G50T_PATH.is_file():
-            pytest.skip("g50t recording missing")
-        session, _ = PerceptionSession.from_recording(G50T_PATH)
-        return session
-
-    def test_action5_abstains_when_not_confirmed(self, g50t_session):
-        scene = g50t_session.snapshot()
-        ctrl = scene.controllable_id()
-        assert ctrl is not None
-        ctx = learn_effect_context(
-            g50t_session.registry,
-            scene.catalog,
-            list(g50t_session.action_ids),
-            load_recording_meta(G50T_PATH),
-            ctrl,
-            non_markovian=True,
-        )
-        assert ctx is not None
-        assert ctx.non_markovian
-        assert scene.determinism_violations
-
-        uncovered = SceneState(relevant=((ctrl, ("pos", (999, 999))),))
-        assert predict(uncovered, 5, ctx).unknown
-
-
-@pytest.mark.unit
 class TestProposeRulesLlmProposals:
     def _ctx(self) -> EffectContext:
         return EffectContext(confirm_threshold=2)
@@ -340,18 +303,8 @@ class TestEffectsEngineManifest:
             list(session.action_ids),
             load_recording_meta(expect.recording.path),
             ctrl,
-            non_markovian=expect.expect_non_markovian,
         )
         assert ctx is not None
-        if not expect.expect_abstain_non_markovian:
-            return
-
-        scene = session.snapshot()
-        assert ctx.non_markovian
-        assert scene.determinism_violations
-        uncovered = SceneState(relevant=((ctrl, ("pos", (999, 999))),))
-        assert predict(uncovered, 5, ctx).unknown
-        assert not should_engine_step(ctx, uncovered, 5)
 
 
 @pytest.mark.unit
