@@ -28,6 +28,7 @@ from planning.llm_rule_proposer import (
 )
 from planning.probe import ProbeGoal, execute_probe
 from planning.query import QueryInterface, UnknownAction
+from planning.rule_first import RuleFirstPolicy
 
 from ..agent import Agent
 from .llm_logging import LlmCallLogger, wrap_llm_call
@@ -48,17 +49,25 @@ class LlmCuriosity(Agent):
 
     MAX_ACTIONS = 60
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, policy_version: str = "v1", **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         seed = int(time.time() * 1_000_000) + hash(self.game_id) % 1_000_000
         random.seed(seed)
 
+        self._policy_version = policy_version
         self.session = PerceptionSession()
         self._entity_builder = EntityBuilder()
-        self.policy = ExplorationPolicy(
-            action_space=[a.value for a in GameAction if a is not GameAction.RESET],
-            config=ExplorationConfig(seed=seed, log_engine=True),
-        )
+        action_space = [a.value for a in GameAction if a is not GameAction.RESET]
+        if policy_version == "v2":
+            self.policy = RuleFirstPolicy(
+                action_space=action_space,
+                config=ExplorationConfig(seed=seed, log_engine=True),
+            )
+        else:
+            self.policy = ExplorationPolicy(
+                action_space=action_space,
+                config=ExplorationConfig(seed=seed, log_engine=True),
+            )
 
         # LLM client
         self._llm_client = LLMClient()
@@ -166,9 +175,13 @@ class LlmCuriosity(Agent):
 
         # ── Phase gate ──────────────────────────────────────────────────
         if self._phase == "random":
-            if scene.controllable_id() is not None and self.policy.context is not None:
-                self._phase = "llm_directed"
+            if self._policy_version == "v2":
+                if self.policy.context is not None:
+                    self._phase = "llm_directed"
             else:
+                if scene.controllable_id() is not None and self.policy.context is not None:
+                    self._phase = "llm_directed"
+            if self._phase == "random":
                 action_id = self.policy.decide(scene, available)
                 return self._record_and_return(action_id, scene)
 
@@ -398,7 +411,10 @@ class LlmCuriosity(Agent):
         # including probe plan steps and LLM-directed fallbacks.  During the
         # "random" phase, policy.decide() already calls record_step internally.
         if self._phase == "llm_directed":
-            self.policy.record_step(scene, scene.controllable_id(), action_id)
+            if self._policy_version == "v2":
+                self.policy.record_step(scene, action_id)
+            else:
+                self.policy.record_step(scene, scene.controllable_id(), action_id)
         status = self.policy.status()
         action.reasoning = {
             "phase": self._phase,
