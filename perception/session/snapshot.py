@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from effects import Pos, entity_exists_at, entity_pos_at, entity_size_at
 
-from ..entities import Entity, EntityCatalog
+from ..entities import Entity, EntityCatalog, LifecycleState
 from ..registry import ObjectRegistry, derive_roles
 
 if TYPE_CHECKING:
@@ -168,6 +168,8 @@ class SceneSnapshot:
         track_roles = derive_roles(self.registry)
         entities: list[dict[str, object]] = []
         for eid, ent in sorted(self.catalog.entities.items()):
+            if ent.lifecycle in (LifecycleState.DORMANT, LifecycleState.DEAD):
+                continue
             pos = self.entity_pos(eid)
             traj = self._entity_trajectory(eid)
             member_roles = [
@@ -180,6 +182,7 @@ class SceneSnapshot:
                     "id": eid,
                     "composition": ent.composition,
                     "role": ent.role,
+                    "lifecycle": ent.lifecycle.value,
                     "members": sorted(ent.members),
                     "member_track_roles": member_roles,
                     "affordances": dict(ent.affordances),
