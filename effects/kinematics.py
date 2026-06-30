@@ -23,7 +23,10 @@ def entity_pos_at(
         return None
     cents: list[tuple[float, float]] = []
     for tid in ent.members:
-        obs = observation_at(reg.tracks[tid], frame_idx)
+        track = reg.tracks.get(tid)
+        if track is None:
+            return None
+        obs = observation_at(track, frame_idx)
         if obs is None:
             return None
         cents.append(obs.centroid)
