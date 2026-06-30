@@ -135,14 +135,28 @@ def _common_fate_groups(
 
 
 def build_entities(
-    reg: ObjectRegistry, *, min_cofate: int = 3, agree: float = 0.8
+    reg: ObjectRegistry,
+    *,
+    min_cofate: int = 3,
+    agree: float = 0.8,
+    prev_track_to_entity: dict[int, int] | None = None,
+    next_id_start: int = 0,
 ) -> EntityCatalog:
-    """Group tracks into entities: common-fate compounds + singleton leftovers."""
+    """Group tracks into entities: common-fate compounds + singleton leftovers.
+
+    When *prev_track_to_entity* is provided, existing tracks inherit their
+    entity ID from the previous frame.  New tracks receive IDs from the
+    monotonic counter starting at *next_id_start*.  The returned catalog's
+    ``track_to_entity`` property reflects the final mapping.
+    """
+    inherit = prev_track_to_entity or {}
     assigned: set[int] = set()
     entities: dict[int, Entity] = {}
-    next_id = 0
+    next_id = next_id_start
 
     for members in _common_fate_groups(reg, min_cofate=min_cofate, agree=agree):
+        # Compounds always get a new entity ID (composition may change
+        # across frames, so inheritance is not applicable).
         entities[next_id] = Entity(
             id=next_id,
             members=members,
@@ -154,11 +168,23 @@ def build_entities(
     for tid in sorted(reg.tracks):
         if tid in assigned:
             continue
-        entities[next_id] = Entity(
-            id=next_id,
-            members=frozenset({tid}),
-            composition="singleton",
-        )
-        next_id += 1
+        # Inherit entity ID from previous frame if available.
+        eid = inherit.get(tid, next_id)
+        if eid not in entities:
+            entities[eid] = Entity(
+                id=eid,
+                members=frozenset({tid}),
+                composition="singleton",
+            )
+            if eid >= next_id:
+                next_id = eid + 1
+        # else: eid already occupied (e.g. by a compound) — assign a new one
+        else:
+            entities[next_id] = Entity(
+                id=next_id,
+                members=frozenset({tid}),
+                composition="singleton",
+            )
+            next_id += 1
 
     return EntityCatalog(entities=entities)

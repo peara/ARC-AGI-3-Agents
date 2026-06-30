@@ -16,6 +16,10 @@ from effects.guard_parse import parse_guard_clauses
 from effects.rules import Rule
 from perception.entities import CONTROLLABLE_ENTITY_ID
 
+# Both 0 (legacy convention) and None (new sentinel) are accepted as
+# "the controllable entity" placeholder in proposals.
+_CONTROLLABLE_IDS: frozenset[int | None] = frozenset({0, CONTROLLABLE_ENTITY_ID})
+
 # ---------------------------------------------------------------------------
 # TypedDict for a raw proposal dict (mirrors DslRule in effects/dsl.py)
 # ---------------------------------------------------------------------------
@@ -285,7 +289,7 @@ def validate_proposal(proposal: dict, scene_entities: dict[int, dict]) -> Rule |
                 referenced_ids.add(of_val)
             referenced_ids |= _extract_entity_ids(eff)
         for eid in referenced_ids:
-            if eid is not CONTROLLABLE_ENTITY_ID and eid not in scene_entities:
+            if eid not in _CONTROLLABLE_IDS and eid not in scene_entities:
                 return None
     elif kind == "collision":
         effects = proposal.get("effects")
@@ -310,7 +314,7 @@ def validate_proposal(proposal: dict, scene_entities: dict[int, dict]) -> Rule |
                 referenced_ids.add(of_val)
             referenced_ids |= _extract_entity_ids(eff)
         for eid in referenced_ids:
-            if eid is not CONTROLLABLE_ENTITY_ID and eid not in scene_entities:
+            if eid not in _CONTROLLABLE_IDS and eid not in scene_entities:
                 return None
     else:
         effect = proposal.get("effect")
@@ -324,7 +328,7 @@ def validate_proposal(proposal: dict, scene_entities: dict[int, dict]) -> Rule |
         # (controllable placeholder); guard position clause provides the real
         # entity. We still validate non-placeholder IDs.
         for eid in referenced_ids:
-            if eid is not CONTROLLABLE_ENTITY_ID and eid not in scene_entities:
+            if eid not in _CONTROLLABLE_IDS and eid not in scene_entities:
                 return None
 
         # --- effect structure ---

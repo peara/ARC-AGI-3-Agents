@@ -27,11 +27,11 @@ from typing import cast
 from entity.roles import assign_roles
 from grouping.features import extract_features
 from grouping.heuristics import co_movement
-from perception.entities import Entity, EntityCatalog, build_entities
-from perception.registry import ObjectRegistry
+from perception.entities import Entity, EntityCatalog, LifecycleState, build_entities
+from perception.registry import ObjectRegistry, Track
 
 from .logical_registry import LogicalRegistry
-from .reconciler import Reconciler, ReconcilerConfig
+from .reconciler import Reconciler, ReconcilerConfig, compute_logical_map
 
 log = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ class EntityBuilderConfig:
     """Configuration for the entity builder."""
 
     reconciler: ReconcilerConfig = ReconcilerConfig()
-    min_cofate: int = 3
+    min_cofate: int = 2
     agree: float = 0.8
     compound_min_actions: int = 2
 
@@ -61,6 +61,8 @@ class EntityBuilder:
         self._logical_registry: LogicalRegistry | None = None
         self._catalog: EntityCatalog | None = None
         self._compound_members: frozenset[int] | None = None
+        self._compound_entity_id: int | None = None
+        self._compound_track_to_entity: dict[int, int] = {}
         # persistent cross-frame identity state
         self._next_entity_id: int = 0
         self._track_to_entity: dict[int, int] = {}
@@ -76,24 +78,57 @@ class EntityBuilder:
     ) -> tuple[LogicalRegistry, EntityCatalog]:
         """Re-identify tracks, build entities, group compounds, assign roles."""
         # 1. Re-identify: link dead→born tracks
-        _merge_map, logical_map = self._reconciler.reconcile(registry, action_ids)
+        merge_map, logical_map = self._reconciler.reconcile(registry, action_ids)
+
+        extra = self._same_frame_successors(registry, merge_map)
+        if extra:
+            merge_map.update(extra)
+            logical_map = compute_logical_map(
+                list(registry.tracks.keys()), merge_map
+            )
 
         # 2. Build logical registry with merge map applied
         self._logical_registry = LogicalRegistry(registry, logical_map)
+
+        # 2b. Propagate entity IDs through merge links so born tracks
+        #     inherit dead tracks' entity IDs via _track_to_entity.
+        merged_t2e = dict(self._track_to_entity)
+        for dead_tid, born_tid in merge_map.items():
+            if dead_tid in merged_t2e and born_tid not in merged_t2e:
+                merged_t2e[born_tid] = merged_t2e[dead_tid]
 
         # 3. Build entities from logical tracks (common-fate grouping)
         catalog = build_entities(
             cast(ObjectRegistry, self._logical_registry),
             min_cofate=self.config.min_cofate,
             agree=self.config.agree,
+            prev_track_to_entity=merged_t2e,
+            next_id_start=self._next_entity_id,
         )
+
+        # 3b. Track compound original IDs for compounds created by common-fate
+        for eid, ent in catalog.entities.items():
+            if ent.composition == "compound" and eid not in self._compound_original_ids:
+                orig = sorted(
+                    {
+                        oid
+                        for tid in ent.members
+                        for oid in [self._track_to_entity.get(tid)]
+                        if oid is not None
+                    }
+                )
+                if orig:
+                    self._compound_original_ids[eid] = orig
 
         # 4. Compound grouping: merge co-moving entities into one compound
         catalog = self._apply_compound_grouping(
             self._logical_registry, catalog, action_ids
         )
 
-        # 5. Assign roles using the raw registry.  Individual raw fragments
+        # 5. Dormant / DEAD lifecycle transitions
+        catalog = self._apply_lifecycle_transitions(catalog)
+
+        # 6. Assign roles using the raw registry.  Individual raw fragments
         # have consistent action→displacement (they die before rotation);
         # merged logical tracks mix displacements across rotation boundaries,
         # which drags the overall agreement below the detection threshold.
@@ -104,7 +139,67 @@ class EntityBuilder:
             logical_map=logical_map,
         )
 
+        # 7. Persist cross-frame identity state from final catalog
+        self._track_to_entity = dict(self._catalog.track_to_entity)
+        self._prev_catalog_entities = dict(self._catalog.entities)
+        if self._catalog.entities:
+            self._next_entity_id = max(
+                self._next_entity_id, max(self._catalog.entities.keys()) + 1
+            )
+
         return self._logical_registry, self._catalog
+
+    def _same_frame_successors(
+        self, registry: ObjectRegistry, merge_map: dict[int, int]
+    ) -> dict[int, int]:
+        """Find dead→born links at the same frame (gap=0) that the reconciler
+        misses because it only considers gap >= 1."""
+        dead_tracks: list[Track] = []
+        born_tracks: list[Track] = []
+        for tid, track in registry.tracks.items():
+            if tid in merge_map:
+                continue
+            if not track.observations:
+                continue
+            if track.alive:
+                if track.observations and all(
+                    obs.frame_idx == track.observations[0].frame_idx
+                    for obs in track.observations
+                ):
+                    born_tracks.append(track)
+            else:
+                dead_tracks.append(track)
+
+        if not dead_tracks or not born_tracks:
+            return {}
+
+        extra: dict[int, int] = {}
+        claimed: set[int] = set()
+        for dead in dead_tracks:
+            if dead.id in merge_map:
+                continue
+            last_obs = dead.observations[-1]
+            death_frame = last_obs.frame_idx
+            best_born: Track | None = None
+            best_dist = float("inf")
+            for born in born_tracks:
+                if born.id in claimed or born.id in merge_map.values():
+                    continue
+                first_obs = born.observations[0]
+                if first_obs.frame_idx != death_frame:
+                    continue
+                dist = (
+                    (last_obs.centroid[0] - first_obs.centroid[0]) ** 2
+                    + (last_obs.centroid[1] - first_obs.centroid[1]) ** 2
+                ) ** 0.5
+                if dist < best_dist:
+                    best_dist = dist
+                    best_born = born
+            if best_born is not None and best_dist <= 8.0:
+                extra[dead.id] = best_born.id
+                claimed.add(best_born.id)
+
+        return extra
 
     def _apply_compound_grouping(
         self,
@@ -156,7 +251,10 @@ class EntityBuilder:
                     "compound dissolved: members=%s",
                     sorted(self._compound_members),
                 )
+                catalog = self._dissolve_compound(catalog)
                 self._compound_members = None
+                self._compound_entity_id = None
+                self._compound_track_to_entity = {}
             return catalog
 
         all_member_ids: set[int] = set()
@@ -196,30 +294,184 @@ class EntityBuilder:
                 tids.update(ent.members)
         return frozenset(tids)
 
-    @staticmethod
     def _merge_into_compound(
+        self,
         catalog: EntityCatalog,
         member_entity_ids: frozenset[int],
     ) -> EntityCatalog:
         """Replace member singleton entities with one compound entity."""
         all_members: set[int] = set()
+        original_ids: list[int] = sorted(member_entity_ids)
         for eid in member_entity_ids:
             ent = catalog.entities.get(eid)
             if ent is not None:
                 all_members.update(ent.members)
 
-        kept: dict[int, Entity] = {
-            eid: ent
-            for eid, ent in catalog.entities.items()
-            if eid not in member_entity_ids
-        }
-        new_id = max(kept.keys()) + 1 if kept else 0
+        kept: dict[int, Entity] = {}
+        for eid, ent in catalog.entities.items():
+            if eid in member_entity_ids:
+                kept[eid] = Entity(
+                    id=ent.id,
+                    members=ent.members,
+                    composition=ent.composition,
+                    role=ent.role,
+                    affordances=ent.affordances,
+                    meta=ent.meta,
+                    lifecycle=LifecycleState.MERGED,
+                )
+            else:
+                kept[eid] = ent
+
+        new_id = self._next_entity_id
+        self._next_entity_id += 1
+        self._compound_original_ids[new_id] = original_ids
         kept[new_id] = Entity(
             id=new_id,
             members=frozenset(all_members),
             composition="compound",
+            lifecycle=LifecycleState.ACTIVE,
         )
+        self._compound_entity_id = new_id
+        self._compound_track_to_entity = {
+            tid: eid for eid in member_entity_ids
+            for tid in (catalog.entities[eid].members
+                        if eid in catalog.entities else ())
+        }
         return EntityCatalog(entities=kept)
+
+    def _dissolve_compound(self, catalog: EntityCatalog) -> EntityCatalog:
+        """Transition a compound entity to DEAD and restore members as ACTIVE."""
+        compound_id = self._compound_entity_id
+        if compound_id is None:
+            return catalog
+
+        compound_ent = catalog.entities.get(compound_id)
+        if compound_ent is None:
+            return catalog
+
+        original_ids = self._compound_original_ids.get(compound_id, [])
+
+        # Mark the compound entity as DEAD
+        kept: dict[int, Entity] = dict(catalog.entities)
+        kept[compound_id] = Entity(
+            id=compound_id,
+            members=compound_ent.members,
+            composition=compound_ent.composition,
+            role=compound_ent.role,
+            affordances=compound_ent.affordances,
+            meta=compound_ent.meta,
+            lifecycle=LifecycleState.DEAD,
+        )
+
+        # Restore each member track as a separate ACTIVE entity
+        # using its original entity ID from before the merge.
+        for orig_id in original_ids:
+            # Find tracks that belonged to this original entity via
+            # the track-to-entity map built at merge time.
+            tracks_for_member: set[int] = set()
+            for tid in compound_ent.members:
+                if self._compound_track_to_entity.get(tid) == orig_id:
+                    tracks_for_member.add(tid)
+
+            if not tracks_for_member:
+                continue
+
+            kept[orig_id] = Entity(
+                id=orig_id,
+                members=frozenset(tracks_for_member),
+                composition="singleton",
+                lifecycle=LifecycleState.ACTIVE,
+            )
+
+        # Clean up compound tracking state
+        del self._compound_original_ids[compound_id]
+
+        return EntityCatalog(entities=kept)
+
+    def _apply_lifecycle_transitions(self, catalog: EntityCatalog) -> EntityCatalog:
+        """Transition entities to DORMANT/DEAD when their tracks die,
+        reactivate DORMANT entities when their tracks reappear."""
+        if self._logical_registry is None:
+            return catalog
+
+        alive_tids: set[int] = {
+            tid for tid, trk in self._logical_registry.tracks.items() if trk.alive
+        }
+
+        merged: dict[int, Entity] = dict(catalog.entities)
+
+        # Entities currently in the catalog with all-dead tracks → DORMANT/DEAD
+        for eid, ent in list(catalog.entities.items()):
+            if any(tid in alive_tids for tid in ent.members):
+                if eid in self._dormant_frames:
+                    del self._dormant_frames[eid]
+                continue
+
+            prev_lifecycle = LifecycleState.ACTIVE
+            prev_ent = self._prev_catalog_entities.get(eid)
+            if prev_ent is not None:
+                prev_lifecycle = prev_ent.lifecycle
+
+            if prev_lifecycle == LifecycleState.DEAD:
+                merged[eid] = Entity(
+                    id=ent.id, members=ent.members,
+                    composition=ent.composition, lifecycle=LifecycleState.DEAD,
+                )
+            elif prev_lifecycle == LifecycleState.DORMANT or eid in self._dormant_frames:
+                frames = self._dormant_frames.get(eid, 0) + 1
+                if frames > self._dormant_ttl:
+                    merged[eid] = Entity(
+                        id=ent.id, members=ent.members,
+                        composition=ent.composition, lifecycle=LifecycleState.DEAD,
+                    )
+                    self._dormant_frames.pop(eid, None)
+                else:
+                    merged[eid] = Entity(
+                        id=ent.id, members=ent.members,
+                        composition=ent.composition, lifecycle=LifecycleState.DORMANT,
+                    )
+                    self._dormant_frames[eid] = frames
+            else:
+                merged[eid] = Entity(
+                    id=ent.id, members=ent.members,
+                    composition=ent.composition, lifecycle=LifecycleState.DORMANT,
+                )
+                self._dormant_frames[eid] = 1
+
+        # Persist entities from previous frame that disappeared entirely
+        for eid, prev_ent in self._prev_catalog_entities.items():
+            if eid in merged:
+                continue
+            if any(tid in alive_tids for tid in prev_ent.members):
+                continue
+
+            if prev_ent.lifecycle == LifecycleState.DEAD:
+                merged[eid] = Entity(
+                    id=prev_ent.id, members=prev_ent.members,
+                    composition=prev_ent.composition, lifecycle=LifecycleState.DEAD,
+                )
+            elif prev_ent.lifecycle == LifecycleState.DORMANT or eid in self._dormant_frames:
+                frames = self._dormant_frames.get(eid, 0) + 1
+                if frames > self._dormant_ttl:
+                    merged[eid] = Entity(
+                        id=prev_ent.id, members=prev_ent.members,
+                        composition=prev_ent.composition, lifecycle=LifecycleState.DEAD,
+                    )
+                    self._dormant_frames.pop(eid, None)
+                else:
+                    merged[eid] = Entity(
+                        id=prev_ent.id, members=prev_ent.members,
+                        composition=prev_ent.composition, lifecycle=LifecycleState.DORMANT,
+                    )
+                    self._dormant_frames[eid] = frames
+            else:
+                merged[eid] = Entity(
+                    id=prev_ent.id, members=prev_ent.members,
+                    composition=prev_ent.composition, lifecycle=LifecycleState.DORMANT,
+                )
+                self._dormant_frames[eid] = 1
+
+        return EntityCatalog(entities=merged)
 
     @property
     def logical_registry(self) -> LogicalRegistry | None:
