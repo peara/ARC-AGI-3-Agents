@@ -105,12 +105,16 @@ class RuleFirstPolicy:
         return sorted(ids)
 
     def _engine_plan_spec(self, scene: SceneSnapshot) -> PlanSpec:
-        """Projection for residual-driven rule learning (all rule-tracked entities)."""
+        """Projection for residual-driven rule learning (all rule-tracked entities).
+
+        Always includes ``pos`` so the LLM rule proposer can observe position
+        changes even on the very first frame (before any movement rules exist).
+        Without this, the cold-start path only tracks ``size``, so the proposer
+        never sees movement and can't propose movement rules.
+        """
         rule_ids = self._rule_entity_ids()
         entities: list[int] = list(rule_ids)
-        dims: list[str] = []
-        if entities:
-            dims.append("pos")
+        dims: list[str] = ["pos"]
         # Add entities with observable sizes for size tracking
         for eid in sorted(scene.catalog.entities):
             if eid in entities:
@@ -121,11 +125,16 @@ class RuleFirstPolicy:
             ):
                 continue
             entities.append(eid)
-            if "size" not in dims:
-                dims.append("size")
+            dims.append("size")
+        seen: set[str] = set()
+        unique_dims: list[str] = []
+        for d in dims:
+            if d not in seen:
+                seen.add(d)
+                unique_dims.append(d)
         return PlanSpec(
             entities=entities,
-            dims=tuple(dims) if dims else ("pos",),
+            dims=tuple(unique_dims) if unique_dims else ("pos",),
             goal=lambda s: False,
         )
 
