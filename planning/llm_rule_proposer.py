@@ -14,6 +14,7 @@ from typing import Callable
 from effects.dsl import dsl_to_rule
 from effects.guard_parse import parse_guard_clauses
 from effects.rules import Rule
+from perception.entities import CONTROLLABLE_ENTITY_ID
 
 # ---------------------------------------------------------------------------
 # TypedDict for a raw proposal dict (mirrors DslRule in effects/dsl.py)
@@ -284,7 +285,7 @@ def validate_proposal(proposal: dict, scene_entities: dict[int, dict]) -> Rule |
                 referenced_ids.add(of_val)
             referenced_ids |= _extract_entity_ids(eff)
         for eid in referenced_ids:
-            if eid != 0 and eid not in scene_entities:
+            if eid is not CONTROLLABLE_ENTITY_ID and eid not in scene_entities:
                 return None
     elif kind == "collision":
         effects = proposal.get("effects")
@@ -309,7 +310,7 @@ def validate_proposal(proposal: dict, scene_entities: dict[int, dict]) -> Rule |
                 referenced_ids.add(of_val)
             referenced_ids |= _extract_entity_ids(eff)
         for eid in referenced_ids:
-            if eid != 0 and eid not in scene_entities:
+            if eid is not CONTROLLABLE_ENTITY_ID and eid not in scene_entities:
                 return None
     else:
         effect = proposal.get("effect")
@@ -319,11 +320,11 @@ def validate_proposal(proposal: dict, scene_entities: dict[int, dict]) -> Rule |
         # --- collect entity IDs from guard and effect ---
         referenced_ids = _extract_entity_ids(guard) | _extract_entity_ids(effect)
 
-        # For terminal effects, the "of" in the effect may be 0 (placeholder);
-        # guard position clause provides the real entity. We still validate
-        # non-zero IDs. If an effect has "of": 0 it's valid (placeholder convention).
+        # For terminal effects, the "of" in the effect may be None
+        # (controllable placeholder); guard position clause provides the real
+        # entity. We still validate non-placeholder IDs.
         for eid in referenced_ids:
-            if eid != 0 and eid not in scene_entities:
+            if eid is not CONTROLLABLE_ENTITY_ID and eid not in scene_entities:
                 return None
 
         # --- effect structure ---

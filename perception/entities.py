@@ -26,6 +26,11 @@ DEFAULT_AFFORDANCES: dict[str, bool | None] = {
     "interactable": None,
 }
 
+#: Sentinel for "the controllable entity, resolved at runtime".
+#: Used in rule DSL and validation wherever entity ID 0 was previously
+#: hard-coded as a placeholder for the player-controlled entity.
+CONTROLLABLE_ENTITY_ID: None = None
+
 
 @dataclass
 class Entity:

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from perception.entities import CONTROLLABLE_ENTITY_ID
+
 from .guard_parse import parse_guard_clauses
 from .rules import Effect, Rule
 
@@ -131,10 +133,10 @@ def dsl_to_rule(dsl: DslRule) -> Rule:
     # terminal
     eff = dsl["effect"]
     terminal = eff["terminal"]
-    entity_id = 0
+    entity_id: int | None = CONTROLLABLE_ENTITY_ID
     for gc in parse_guard_clauses(guard):
         if gc["has_pos"]:
-            entity_id = gc.get("entity_id") or 0
+            entity_id = gc.get("entity_id", CONTROLLABLE_ENTITY_ID)
     return Rule(
         guard_spec=guard,
         effects=(Effect("terminal", entity_id, "set", terminal),),
