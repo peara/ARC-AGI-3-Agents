@@ -21,7 +21,7 @@ from perception._roles_helpers import (
     _is_structural,
     _track_action_displacements,
 )
-from perception.entities import Entity, EntityCatalog
+from perception.entities import Entity, EntityCatalog, LifecycleState
 from perception.registry import ObjectRegistry
 
 
@@ -65,6 +65,7 @@ def apply_patches(catalog: EntityCatalog, patches: list[RolePatch]) -> EntityCat
             role=patch.role if patch.role is not None else ent.role,
             affordances=affordances,
             meta=meta,
+            lifecycle=ent.lifecycle,
         )
     return EntityCatalog(entities=updated)
 
@@ -129,6 +130,8 @@ def detect_controllable(
     best: Entity | None = None
     best_score = -1
     for ent in catalog.entities.values():
+        if ent.lifecycle in (LifecycleState.DORMANT, LifecycleState.DEAD):
+            continue
         overlap = ent.members & controllable
         if not overlap:
             continue
