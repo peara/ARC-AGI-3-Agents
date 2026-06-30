@@ -8,9 +8,17 @@ are assigned in ``perception.roles``.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 from itertools import combinations
 
 from .registry import ObjectRegistry
+
+
+class LifecycleState(StrEnum):
+    ACTIVE = "active"
+    MERGED = "merged"
+    DORMANT = "dormant"
+    DEAD = "dead"
 
 DEFAULT_AFFORDANCES: dict[str, bool | None] = {
     "controllable": None,
@@ -31,6 +39,7 @@ class Entity:
         default_factory=lambda: dict(DEFAULT_AFFORDANCES)
     )
     meta: dict[str, object] = field(default_factory=dict)
+    lifecycle: LifecycleState = LifecycleState.ACTIVE
 
 
 @dataclass
