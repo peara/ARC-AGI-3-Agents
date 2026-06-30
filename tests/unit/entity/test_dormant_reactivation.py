@@ -12,9 +12,8 @@ from __future__ import annotations
 import pytest
 
 from entity.builder import EntityBuilder
-from perception.entities import Entity, EntityCatalog, LifecycleState
+from perception.entities import LifecycleState
 from perception.registry import ObjectRegistry, Observation, Track
-
 
 # ---------------------------------------------------------------------------
 # Helpers
