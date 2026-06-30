@@ -53,12 +53,21 @@ class EntityBuilder:
     ``(LogicalRegistry, EntityCatalog)``.
     """
 
-    def __init__(self, config: EntityBuilderConfig | None = None) -> None:
+    def __init__(
+        self, config: EntityBuilderConfig | None = None, *, dormant_ttl: int = 3
+    ) -> None:
         self.config = config or EntityBuilderConfig()
         self._reconciler = Reconciler(self.config.reconciler)
         self._logical_registry: LogicalRegistry | None = None
         self._catalog: EntityCatalog | None = None
         self._compound_members: frozenset[int] | None = None
+        # persistent cross-frame identity state
+        self._next_entity_id: int = 0
+        self._track_to_entity: dict[int, int] = {}
+        self._prev_catalog_entities: dict[int, Entity] = {}
+        self._dormant_ttl: int = dormant_ttl
+        self._dormant_frames: dict[int, int] = {}
+        self._compound_original_ids: dict[int, list[int]] = {}
 
     def update(
         self,
