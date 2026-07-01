@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import replace
 
 from .context import EffectContext
@@ -10,6 +11,8 @@ from .predict import predict
 from .residual import ResidualEntry, compute_residual
 from .rules import Effect, Rule
 from .state import SceneState
+
+log = logging.getLogger(__name__)
 
 
 def _replace_rule_in_bucket(
@@ -203,12 +206,21 @@ def inject_llm_proposals(
     movement_keys = {r.key() for r in ctx.movement_rules}
     collision_keys = {r.key() for r in ctx.collision_rules}
     existing_keys = terminal_keys | relational_keys | proposed_keys | movement_keys | collision_keys
+    added = 0
     for rule in llm_proposals:
         key = rule.key()
         if key not in existing_keys:
             proposed.append(replace(rule, support=0))
             proposed_keys.add(key)
             existing_keys.add(key)
+            added += 1
+    if added:
+        log.info(
+            "inject_llm_proposals: +%d new (of %d proposed), total proposed=%d",
+            added,
+            len(llm_proposals),
+            len(proposed),
+        )
     return replace(ctx, proposed_rules=tuple(proposed))
 
 
@@ -283,10 +295,35 @@ def confirm_rules(
     updated = ctx
     terminals, counters, movement, collision = _iter_managed_rules(ctx)
     all_rules: list[tuple[Rule, str]] = list(terminals) + list(counters) + list(movement) + list(collision)
+    bumped: list[str] = []
     for rule, _bucket in all_rules:
         if _rule_matches_observation(rule, state_before, action, observed):
             updated = _bump_support(updated, rule)
-    return _promote_rules(updated)
+            bumped.append(f"{rule.kind}[{rule.key()}]")
+    if bumped:
+        log.info("confirm_rules: bumped %d rules: %s", len(bumped), bumped)
+    before_counts = (
+        len(ctx.terminal_rules),
+        len(ctx.relational_rules),
+        len(ctx.movement_rules),
+        len(ctx.collision_rules),
+        len(ctx.proposed_rules),
+    )
+    promoted = _promote_rules(updated)
+    after_counts = (
+        len(promoted.terminal_rules),
+        len(promoted.relational_rules),
+        len(promoted.movement_rules),
+        len(promoted.collision_rules),
+        len(promoted.proposed_rules),
+    )
+    if before_counts != after_counts:
+        log.info(
+            "confirm_rules: promotion (term,rel,move,col,prop) %s -> %s",
+            before_counts,
+            after_counts,
+        )
+    return promoted
 
 
 def prune_rules(
@@ -306,32 +343,29 @@ def prune_rules(
     collision = list(ctx.collision_rules)
     proposed: list[Rule] = []
 
+    pruned: list[str] = []
     for rule in ctx.proposed_rules:
         if _rule_mispredicted(rule, state_before, action, observed, residual):
+            pruned.append(f"proposed[{rule.key()}]")
             continue
         proposed.append(rule)
 
-    terminal = [
-        r
-        for r in terminal
-        if not _rule_mispredicted(r, state_before, action, observed, residual)
-    ]
-    relational = [
-        r
-        for r in relational
-        if not _rule_mispredicted(r, state_before, action, observed, residual)
-    ]
-    movement = [
-        r
-        for r in movement
-        if not _rule_mispredicted(r, state_before, action, observed, residual)
-    ]
-    collision = [
-        r
-        for r in collision
-        if not _rule_mispredicted(r, state_before, action, observed, residual)
-    ]
+    def _filter_with_prune(rules: list[Rule], bucket: str) -> list[Rule]:
+        kept: list[Rule] = []
+        for r in rules:
+            if _rule_mispredicted(r, state_before, action, observed, residual):
+                pruned.append(f"{bucket}[{r.key()}]")
+            else:
+                kept.append(r)
+        return kept
 
+    terminal = _filter_with_prune(terminal, "terminal")
+    relational = _filter_with_prune(relational, "relational")
+    movement = _filter_with_prune(movement, "movement")
+    collision = _filter_with_prune(collision, "collision")
+
+    if pruned:
+        log.info("prune_rules: removed %d: %s", len(pruned), pruned)
     return replace(
         ctx,
         terminal_rules=tuple(terminal),

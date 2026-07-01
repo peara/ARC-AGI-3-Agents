@@ -70,6 +70,7 @@ class EntityBuilder:
         self._dormant_ttl: int = dormant_ttl
         self._dormant_frames: dict[int, int] = {}
         self._compound_original_ids: dict[int, list[int]] = {}
+        self._prev_controllable_id: int | None = None
 
     def update(
         self,
@@ -77,11 +78,22 @@ class EntityBuilder:
         action_ids: list[int],
     ) -> tuple[LogicalRegistry, EntityCatalog]:
         """Re-identify tracks, build entities, group compounds, assign roles."""
+        frame_idx = registry.frame_idx
+        prev_t2e = dict(self._track_to_entity)
+        prev_next_id = self._next_entity_id
+
         # 1. Re-identify: link dead→born tracks
         merge_map, logical_map = self._reconciler.reconcile(registry, action_ids)
+        if merge_map:
+            log.info(
+                "frame=%d reconciler merge_map=%s", frame_idx, dict(merge_map)
+            )
 
         extra = self._same_frame_successors(registry, merge_map)
         if extra:
+            log.info(
+                "frame=%d same_frame_successors extra=%s", frame_idx, dict(extra)
+            )
             merge_map.update(extra)
             logical_map = compute_logical_map(
                 list(registry.tracks.keys()), merge_map
@@ -93,9 +105,18 @@ class EntityBuilder:
         # 2b. Propagate entity IDs through merge links so born tracks
         #     inherit dead tracks' entity IDs via _track_to_entity.
         merged_t2e = dict(self._track_to_entity)
+        inherited: list[tuple[int, int, int]] = []  # (dead_tid, born_tid, eid)
         for dead_tid, born_tid in merge_map.items():
             if dead_tid in merged_t2e and born_tid not in merged_t2e:
-                merged_t2e[born_tid] = merged_t2e[dead_tid]
+                eid = merged_t2e[dead_tid]
+                merged_t2e[born_tid] = eid
+                inherited.append((dead_tid, born_tid, eid))
+        if inherited:
+            log.info(
+                "frame=%d entity_id_inherited %s",
+                frame_idx,
+                [(d, b, e) for d, b, e in inherited],
+            )
 
         # 3. Build entities from logical tracks (common-fate grouping)
         catalog = build_entities(
@@ -104,6 +125,14 @@ class EntityBuilder:
             agree=self.config.agree,
             prev_track_to_entity=merged_t2e,
             next_id_start=self._next_entity_id,
+        )
+        log.info(
+            "frame=%d build_entities: %d entities, next_id %d->%d, t2e=%s",
+            frame_idx,
+            len(catalog.entities),
+            prev_next_id,
+            self._next_entity_id,
+            dict(catalog.track_to_entity),
         )
 
         # 3b. Track compound original IDs for compounds created by common-fate
@@ -127,6 +156,11 @@ class EntityBuilder:
 
         # 5. Dormant / DEAD lifecycle transitions
         catalog = self._apply_lifecycle_transitions(catalog)
+        lifecycle_summary = [
+            (eid, ent.lifecycle.value)
+            for eid, ent in sorted(catalog.entities.items())
+        ]
+        log.info("frame=%d lifecycle: %s", frame_idx, lifecycle_summary)
 
         # 6. Assign roles using the raw registry.  Individual raw fragments
         # have consistent action→displacement (they die before rotation);
@@ -139,13 +173,44 @@ class EntityBuilder:
             logical_map=logical_map,
         )
 
-        # 7. Persist cross-frame identity state from final catalog
+        controllable = self._catalog.controllable()
+        ctrl_id = controllable.id if controllable else None
+        prev_ctrl_id = self._prev_controllable_id
+        if ctrl_id is not None and prev_ctrl_id is not None and ctrl_id != prev_ctrl_id:
+            log.warning(
+                "frame=%d CONTROLLABLE ID CHANGED: %d -> %d",
+                frame_idx,
+                prev_ctrl_id,
+                ctrl_id,
+            )
+        self._prev_controllable_id = ctrl_id
+        log.info(
+            "frame=%d controllable: id=%s members=%s role=%s lifecycle=%s",
+            frame_idx,
+            ctrl_id,
+            sorted(controllable.members) if controllable else None,
+            controllable.role if controllable else None,
+            controllable.lifecycle.value if controllable else None,
+        )
+
+        # 7. Persist cross-frame identity state from final catalog.
+        #    For compound member tracks, restore their original singleton
+        #    entity IDs (not the compound ID) so next frame's build_entities
+        #    inherits stable singleton IDs without collisions.
         self._track_to_entity = dict(self._catalog.track_to_entity)
+        if self._compound_track_to_entity:
+            self._track_to_entity.update(self._compound_track_to_entity)
         self._prev_catalog_entities = dict(self._catalog.entities)
         if self._catalog.entities:
             self._next_entity_id = max(
                 self._next_entity_id, max(self._catalog.entities.keys()) + 1
             )
+        log.info(
+            "frame=%d persist: next_id=%d t2e=%s",
+            frame_idx,
+            self._next_entity_id,
+            dict(self._track_to_entity),
+        )
 
         return self._logical_registry, self._catalog
 
@@ -261,14 +326,14 @@ class EntityBuilder:
         for ids in confirmed:
             all_member_ids |= ids
 
-        member_tids = self._member_track_ids(catalog, frozenset(all_member_ids))
-        if not member_tids:
+        if not all_member_ids:
             return catalog
 
         prev_members = self._compound_members
-        self._compound_members = frozenset(member_tids)
+        self._compound_members = frozenset(all_member_ids)
 
-        if prev_members != self._compound_members:
+        members_unchanged = prev_members == self._compound_members
+        if not members_unchanged:
             if prev_members is None:
                 log.info(
                     "compound formed: members=%s",
@@ -281,25 +346,22 @@ class EntityBuilder:
                     sorted(self._compound_members),
                 )
 
-        return self._merge_into_compound(catalog, frozenset(all_member_ids))
-
-    @staticmethod
-    def _member_track_ids(
-        catalog: EntityCatalog, entity_ids: frozenset[int]
-    ) -> frozenset[int]:
-        tids: set[int] = set()
-        for eid in entity_ids:
-            ent = catalog.entities.get(eid)
-            if ent is not None:
-                tids.update(ent.members)
-        return frozenset(tids)
+        return self._merge_into_compound(
+            catalog, frozenset(all_member_ids), reuse_id=members_unchanged
+        )
 
     def _merge_into_compound(
         self,
         catalog: EntityCatalog,
         member_entity_ids: frozenset[int],
+        *,
+        reuse_id: bool = False,
     ) -> EntityCatalog:
-        """Replace member singleton entities with one compound entity."""
+        """Replace member singleton entities with one compound entity.
+
+        When *reuse_id* is True, the existing ``_compound_entity_id`` is
+        reused (the compound persists with the same member set).
+        """
         all_members: set[int] = set()
         original_ids: list[int] = sorted(member_entity_ids)
         for eid in member_entity_ids:
@@ -322,8 +384,11 @@ class EntityBuilder:
             else:
                 kept[eid] = ent
 
-        new_id = self._next_entity_id
-        self._next_entity_id += 1
+        if reuse_id and self._compound_entity_id is not None:
+            new_id = self._compound_entity_id
+        else:
+            new_id = self._next_entity_id
+            self._next_entity_id += 1
         self._compound_original_ids[new_id] = original_ids
         kept[new_id] = Entity(
             id=new_id,

@@ -7,6 +7,7 @@ function, keeping ``planning/`` free of API client dependencies.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from typing import Callable
@@ -15,6 +16,8 @@ from effects.dsl import dsl_to_rule
 from effects.guard_parse import parse_guard_clauses
 from effects.rules import Rule
 from perception.entities import CONTROLLABLE_ENTITY_ID
+
+log = logging.getLogger(__name__)
 
 # Both 0 (legacy convention) and None (new sentinel) are accepted as
 # "the controllable entity" placeholder in proposals.
@@ -250,26 +253,28 @@ def validate_proposal(proposal: dict, scene_entities: dict[int, dict]) -> Rule |
 
     Returns a ``Rule`` on success, ``None`` on any failure.
     """
-    # --- kind ---
     kind = proposal.get("kind")
     if kind not in ("delta", "terminal", "movement", "collision"):
+        log.debug("validate_proposal: reject kind=%r", kind)
         return None
 
     guard = proposal.get("guard")
     support = proposal.get("support")
 
     if not isinstance(guard, dict):
+        log.debug("validate_proposal: reject guard not dict=%r", guard)
         return None
     if not isinstance(support, int):
+        log.debug("validate_proposal: reject support not int=%r", support)
         return None
 
-    # --- guard structure ---
     try:
         clauses = parse_guard_clauses(guard)
-    except Exception:
+    except Exception as exc:
+        log.debug("validate_proposal: reject guard parse error=%r", exc)
         return None
-    # If all clause fields are None/False, the guard has no recognized keys
     if clauses and not any(c.get("has_action") or c.get("has_pos") or c.get("has_overlaps") for c in clauses):
+        log.debug("validate_proposal: reject guard no recognized clauses=%r", guard)
         return None
 
     if kind == "movement":
@@ -290,6 +295,11 @@ def validate_proposal(proposal: dict, scene_entities: dict[int, dict]) -> Rule |
             referenced_ids |= _extract_entity_ids(eff)
         for eid in referenced_ids:
             if eid not in _CONTROLLABLE_IDS and eid not in scene_entities:
+                log.debug(
+                    "validate_proposal: reject unknown eid=%d (known=%s)",
+                    eid,
+                    sorted(scene_entities),
+                )
                 return None
     elif kind == "collision":
         effects = proposal.get("effects")
@@ -315,6 +325,11 @@ def validate_proposal(proposal: dict, scene_entities: dict[int, dict]) -> Rule |
             referenced_ids |= _extract_entity_ids(eff)
         for eid in referenced_ids:
             if eid not in _CONTROLLABLE_IDS and eid not in scene_entities:
+                log.debug(
+                    "validate_proposal: reject unknown eid=%d (known=%s)",
+                    eid,
+                    sorted(scene_entities),
+                )
                 return None
     else:
         effect = proposal.get("effect")
@@ -329,9 +344,13 @@ def validate_proposal(proposal: dict, scene_entities: dict[int, dict]) -> Rule |
         # entity. We still validate non-placeholder IDs.
         for eid in referenced_ids:
             if eid not in _CONTROLLABLE_IDS and eid not in scene_entities:
+                log.debug(
+                    "validate_proposal: reject unknown eid=%d (known=%s)",
+                    eid,
+                    sorted(scene_entities),
+                )
                 return None
 
-        # --- effect structure ---
         dim = effect.get("dim")
         if not isinstance(dim, str):
             return None
@@ -348,12 +367,13 @@ def validate_proposal(proposal: dict, scene_entities: dict[int, dict]) -> Rule |
             if not isinstance(delta_val, int) or delta_val == 0:
                 return None
 
-    # --- convert via dsl_to_rule ---
     try:
         rule = dsl_to_rule(proposal)
-    except (ValueError, KeyError, TypeError):
+    except (ValueError, KeyError, TypeError) as exc:
+        log.debug("validate_proposal: reject dsl_to_rule error=%r proposal=%r", exc, proposal)
         return None
 
+    log.info("validate_proposal: accept kind=%s effects=%d", rule.kind, len(rule.effects))
     return rule
 
 

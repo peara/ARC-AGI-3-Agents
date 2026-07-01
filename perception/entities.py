@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from itertools import combinations
 
 from .registry import ObjectRegistry
 
@@ -92,48 +91,6 @@ class EntityCatalog:
         return raw
 
 
-def _common_fate_groups(
-    reg: ObjectRegistry, *, min_cofate: int, agree: float
-) -> list[frozenset[int]]:
-    frame_disp: dict[int, dict[int, tuple[int, int]]] = {}
-    for tid, track in reg.tracks.items():
-        for fidx, disp in track.displacements():
-            if disp != (0, 0):
-                frame_disp.setdefault(fidx, {})[tid] = disp
-
-    pair: dict[tuple[int, int], list[int]] = {}
-    for dmap in frame_disp.values():
-        tids = sorted(dmap)
-        for a, b in combinations(tids, 2):
-            acc = pair.setdefault((a, b), [0, 0])
-            acc[1] += 1
-            if dmap[a] == dmap[b]:
-                acc[0] += 1
-
-    parent: dict[int, int] = {}
-
-    def find(x: int) -> int:
-        parent.setdefault(x, x)
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    def union(x: int, y: int) -> None:
-        parent[find(x)] = find(y)
-
-    for (a, b), (ag, tot) in pair.items():
-        if tot >= min_cofate and ag / tot >= agree:
-            union(a, b)
-
-    groups: dict[int, set[int]] = {}
-    for (a, b), (ag, tot) in pair.items():
-        if tot >= min_cofate and ag / tot >= agree:
-            groups.setdefault(find(a), set()).update({a, b})
-
-    return [frozenset(members) for members in groups.values() if len(members) > 1]
-
-
 def build_entities(
     reg: ObjectRegistry,
     *,
@@ -142,33 +99,20 @@ def build_entities(
     prev_track_to_entity: dict[int, int] | None = None,
     next_id_start: int = 0,
 ) -> EntityCatalog:
-    """Group tracks into entities: common-fate compounds + singleton leftovers.
+    """Create singleton entities with cross-frame ID inheritance.
 
-    When *prev_track_to_entity* is provided, existing tracks inherit their
-    entity ID from the previous frame.  New tracks receive IDs from the
-    monotonic counter starting at *next_id_start*.  The returned catalog's
-    ``track_to_entity`` property reflects the final mapping.
+    Each track becomes a singleton entity.  When *prev_track_to_entity* maps
+    a track to a previous entity ID, that ID is inherited.  New tracks receive
+    IDs from the monotonic counter starting at *next_id_start*.
+
+    Compound grouping is handled by ``EntityBuilder._apply_compound_grouping``
+    via the ``co_movement`` heuristic — not here.
     """
     inherit = prev_track_to_entity or {}
-    assigned: set[int] = set()
     entities: dict[int, Entity] = {}
     next_id = next_id_start
 
-    for members in _common_fate_groups(reg, min_cofate=min_cofate, agree=agree):
-        # Compounds always get a new entity ID (composition may change
-        # across frames, so inheritance is not applicable).
-        entities[next_id] = Entity(
-            id=next_id,
-            members=members,
-            composition="compound",
-        )
-        assigned.update(members)
-        next_id += 1
-
     for tid in sorted(reg.tracks):
-        if tid in assigned:
-            continue
-        # Inherit entity ID from previous frame if available.
         eid = inherit.get(tid, next_id)
         if eid not in entities:
             entities[eid] = Entity(
@@ -178,7 +122,6 @@ def build_entities(
             )
             if eid >= next_id:
                 next_id = eid + 1
-        # else: eid already occupied (e.g. by a compound) — assign a new one
         else:
             entities[next_id] = Entity(
                 id=next_id,

@@ -93,6 +93,56 @@ uv run pytest tests/unit/test_planning.py -v
 - Offline-only; no live game/network needed. Recording-based plan cases come from `tests/reference_recordings.json`.
 - Lint/format: `ruff` (+ import sort `I`). Types: `mypy --strict` (excludes `tests/`). Run via `pre-commit` (`pre-commit install`).
 
+## Observability & debugging
+
+**Principle: add observability over guessing.** This is an interactive
+environment — reading code is insufficient to understand runtime behaviour.
+When something misbehaves, first add structured logs at the decision points,
+then reproduce. Never debug blind.
+
+All logs go to `logs.log` (file) and stdout. Run with `DEBUG=True` to see
+DEBUG-level logs (e.g. proposal rejection reasons):
+
+```bash
+DEBUG=True uv run main.py --agent=llmcuriosityv2 --game=<game_id>
+```
+
+### Log channels (filter with `grep` on `logs.log`)
+
+| Logger prefix | What it traces | Key log lines |
+|---|---|---|
+| `entity.builder` | Entity identity lifecycle per frame | `frame=N reconciler merge_map`, `frame=N entity_id_inherited`, `frame=N build_entities`, `frame=N lifecycle`, `frame=N controllable`, `frame=N CONTROLLABLE ID CHANGED` (WARNING), `frame=N persist` |
+| `effects.engine` | Rule injection / confirmation / pruning | `inject_llm_proposals: +N new`, `confirm_rules: bumped N`, `confirm_rules: promotion`, `prune_rules: removed N` |
+| `planning.llm_planner` | LLM rule proposer pipeline | `rule_proposer: parsed=N validated=N deduped=N`, `rule_proposer: + <rule>`, `rule_proposer: 0/N proposals survived` (WARNING), `rule_proposer: exception` (WARNING) |
+| `planning.llm_rule_proposer` | Per-proposal validation | `validate_proposal: accept`, `validate_proposal: reject <reason>` (DEBUG) |
+| `effects.engine_log` | Rule context diff per engine step | `+ proposed:`, `↑ bucket→bucket`, `- pruned` |
+
+### Quick diagnostics
+
+```bash
+# Did the controllable entity ID change unexpectedly?
+grep "CONTROLLABLE ID CHANGED" logs.log
+
+# What did the entity builder do per frame?
+grep "entity.builder" logs.log | grep "frame=7 "
+
+# Why were no rules proposed?
+grep "rule_proposer" logs.log
+
+# Which proposals were rejected and why?
+DEBUG=True uv run main.py ... 2>&1 | grep "validate_proposal: reject"
+
+# Which rules got confirmed / promoted?
+grep "confirm_rules" logs.log
+
+# Full engine step diffs
+grep "engine_log" logs.log
+```
+
+The LLM `.llm.jsonl` sidecar (see "Debugging with LLM logs" above) records
+prompt/response content; the `logs.log` channels record the *decisions*
+made from that content. Use both together.
+
 ## Conventions
 
 - Prefer game-agnostic mechanisms over per-game reverse-engineering.

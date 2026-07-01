@@ -7,6 +7,7 @@ invocation, keeping ``planning/`` free of API client dependencies.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Callable
 
@@ -15,6 +16,8 @@ from effects.rules import Rule
 
 from .llm_rule_proposer import SYSTEM_PROMPT, parse_proposals, validate_proposal
 from .probe import ProbeGoal
+
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # System prompt
@@ -468,6 +471,38 @@ def call_rule_proposer(
                 unique.append(rule)
                 seen_keys.add(k)
 
+        log.info(
+            "rule_proposer: parsed=%d validated=%d deduped=%d (existing=%d)",
+            len(proposals),
+            len(rules),
+            len(unique),
+            len(existing_keys),
+        )
+        if not unique and proposals:
+            log.warning(
+                "rule_proposer: 0/%d proposals survived validation. "
+                "raw snippet: %.400s",
+                len(proposals),
+                raw,
+            )
+        for rule in unique:
+            parts = [rule.kind]
+            for e in rule.effects:
+                val = e.value
+                if isinstance(val, int):
+                    parts.append(f"e{e.of}.{e.dim}{e.op}{val:+d}")
+                else:
+                    parts.append(f"e{e.of}.{e.dim}{e.op}{val}")
+            if rule.is_positional_guard:
+                parts.append(f"guard={rule.guard_spec}")
+            parts.append(f"support={rule.support}")
+            log.info("rule_proposer: + %s", " ".join(parts))
         return unique
-    except Exception:
+    except Exception as exc:
+        log.warning(
+            "rule_proposer: exception %r — raw snippet: %.400s",
+            exc,
+            raw if "raw" in locals() else "<no response>",
+            exc_info=True,
+        )
         return []
