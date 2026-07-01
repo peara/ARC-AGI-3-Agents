@@ -20,6 +20,7 @@ from effects.transition_history import TransitionHistory
 from entity import EntityBuilder
 from perception.session import RESET_ACTION, PerceptionSession, SceneSnapshot
 from planning.exploration import ExplorationPolicy
+from planning.fallback import build_fallback_goal, pick_fallback_unknown, tried_key
 from planning.heuristics import ExplorationConfig
 from planning.llm_planner import call_planner, call_rule_proposer
 from planning.llm_rule_proposer import (
@@ -28,7 +29,7 @@ from planning.llm_rule_proposer import (
     make_rule_proposer,
 )
 from planning.probe import ProbeGoal, execute_probe
-from planning.query import QueryInterface, UnknownAction
+from planning.query import QueryInterface
 from planning.rule_first import RuleFirstPolicy
 
 from ..agent import Agent
@@ -118,6 +119,11 @@ class LlmCuriosity(Agent):
         self._last_action_id: int = RESET_ACTION
         self._scene: SceneSnapshot | None = None
 
+        # Fallback probe dedup: (state_fingerprint, action) pairs already
+        # tried via fallback. Prevents re-trying no-op actions at the same
+        # state in a loop. Cleared on game reset.
+        self._tried_fallback_unknowns: set[tuple[object, ...]] = set()
+
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
         return latest_frame.state is GameState.WIN
 
@@ -130,6 +136,7 @@ class LlmCuriosity(Agent):
             self._failure_context = None
             self._current_goal = None
             self._last_action_id = RESET_ACTION
+            self._tried_fallback_unknowns.clear()
             return GameAction.RESET
 
         self._frame_index += 1
@@ -303,33 +310,30 @@ class LlmCuriosity(Agent):
                 }
                 self._current_goal = None
                 if unknowns:
-                    ua = self._pick_nearest_unknown(unknowns, scene)
-                    target = {
-                        "all": [
-                            {
-                                "dim": dim,
-                                "of": eid,
-                                "eq": list(val) if isinstance(val, tuple) else val,
-                            }
-                            for eid, (dim, val) in ua.state.relevant
-                        ]
-                    }
-                    fallback = ProbeGoal(
-                        target=target,
-                        action=ua.action,
-                        reason=f"fallback: probe unknown action {ua.action} at reachable state",
+                    ua = pick_fallback_unknown(
+                        unknowns, self._tried_fallback_unknowns, scene
                     )
-                    fb_plan, fb_unknowns = execute_probe(fallback, scene, ctx, actions)
-                    if fb_plan is not None and len(fb_plan) > 0:
-                        log.info(
-                            "Fallback probe: %d actions for unknown action %d",
-                            len(fb_plan),
-                            ua.action,
+                    if ua is not None:
+                        self._tried_fallback_unknowns.add(tried_key(ua))
+                        fallback = build_fallback_goal(ua)
+                        fb_plan, _fb_unknowns = execute_probe(
+                            fallback, scene, ctx, actions
                         )
-                        self._probe_plan = fb_plan
-                        self._current_goal = fallback
-                        action_id = self._probe_plan.pop(0)
-                        return self._record_and_return(action_id, scene)
+                        if fb_plan is not None and len(fb_plan) > 0:
+                            log.info(
+                                "Fallback probe: %d actions for unknown action %d",
+                                len(fb_plan),
+                                ua.action,
+                            )
+                            self._probe_plan = fb_plan
+                            self._current_goal = fallback
+                            action_id = self._probe_plan.pop(0)
+                            return self._record_and_return(action_id, scene)
+                    else:
+                        log.info(
+                            "Fallback probe: all %d unknowns already tried, random",
+                            len(unknowns),
+                        )
                 action_id = random.choice(actions)
                 return self._record_and_return(action_id, scene)
 
@@ -338,31 +342,6 @@ class LlmCuriosity(Agent):
         return self._record_and_return(action_id, scene)
 
     # ── Helpers ──────────────────────────────────────────────────────────
-
-    def _pick_nearest_unknown(
-        self,
-        unknowns: list[UnknownAction],
-        scene: SceneSnapshot,
-    ) -> UnknownAction:
-        """Pick the unknown whose target state is closest to the current position.
-
-        Distance is Manhattan from the controllable's current pos to the unknown's
-        pos.  Unknowns without a pos entry default to distance 0 (prefer unknowns
-        at the current state — try the unknown action immediately, no navigation).
-        """
-        current = scene.controllable_pos()
-
-        def _dist(ua: UnknownAction) -> int:
-            if current is None:
-                return 0
-            for _eid, (dim, val) in ua.state.relevant:
-                if dim == "pos" and isinstance(val, tuple):
-                    dr: int = int(val[0]) - current[0]
-                    dc: int = int(val[1]) - current[1]
-                    return abs(dr) + abs(dc)
-            return 0
-
-        return min(unknowns, key=_dist)
 
     def _try_propose_rules(self) -> None:
         scene = self._scene or self.session.snapshot()

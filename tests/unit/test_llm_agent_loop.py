@@ -643,3 +643,23 @@ class TestLlmCuriosityAgentLoop:
             agent._try_propose_rules()
 
         mock_call_proposer.assert_called_once()
+
+    # -----------------------------------------------------------------------
+    # 15. Fallback probe tried-set cleared on reset
+    # -----------------------------------------------------------------------
+
+    def test_fallback_dedup_cleared_on_reset(self) -> None:
+        """Tried unknowns are cleared on game reset (NOT_PLAYED/GAME_OVER)."""
+        from effects.state import SceneState
+
+        agent = _make_agent()
+        agent._phase = "llm_directed"
+        agent._tried_fallback_unknowns.add(
+            (SceneState(relevant=((0, ("pos", (5, 5))),)).fingerprint(), 5)
+        )
+        assert len(agent._tried_fallback_unknowns) == 1
+
+        reset_frame = _FakeFrameData(state=GameState.NOT_PLAYED)
+        agent.choose_action([reset_frame], reset_frame)
+
+        assert len(agent._tried_fallback_unknowns) == 0

@@ -2,6 +2,7 @@
 
 from .adapters import DIM_READERS, snapshot_from_registry, snapshot_from_scene
 from .exploration import ExplorationPolicy
+from .fallback import build_fallback_goal, pick_fallback_unknown, tried_key
 from .heuristics import (
     ExplorationConfig,
     curiosity_entity_target,
@@ -48,6 +49,7 @@ __all__ = [
     "UnknownAction",
     "RuleProposerFn",
     "build_effect_context",
+    "build_fallback_goal",
     "call_planner",
     "call_rule_proposer",
     "collect_observed_steps",
@@ -58,6 +60,7 @@ __all__ = [
     "goal_pos",
     "is_structural_entity",
     "make_rule_proposer",
+    "pick_fallback_unknown",
     "plan_and_evaluate",
     "plan_and_evaluate_session",
     "plan_bfs",
@@ -66,6 +69,7 @@ __all__ = [
     "snapshot",
     "snapshot_from_registry",
     "snapshot_from_scene",
+    "tried_key",
     "verify_plan_on_recording",
     "within",
 ]
