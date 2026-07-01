@@ -269,7 +269,7 @@ confirmation, no stale cleanup.
 
 **Design**: Four mechanisms:
 
-#### 4a. Retroactive testing on proposal — PARTIALLY IMPLEMENTED (2026-07-01)
+#### 4a. Retroactive testing on proposal — IMPLEMENTED (2026-07-01)
 
 **Transition history store: DONE.** `effects/transition_history.py` provides
 `TransitionHistory` (unbounded in-memory `list[Transition]`) and `Transition`
@@ -277,6 +277,14 @@ confirmation, no stale cleanup.
 Both `ExplorationPolicy` and `RuleFirstPolicy` accept an optional `history`
 param and append to it in `_run_engine_step`. `LlmCuriosityAgent` creates
 the history, passes it to the policy, and exposes it as `self.history`.
+
+**Retroactive test function: DONE.** `retroactive_test(rule, history)` in
+`effects/engine.py` counts how many historical transitions a rule explains.
+`_apply_retroactive_support()` bumps proposed rule support based on
+historical matches. Integrated into `engine_step()` via an optional
+`history` param — runs after `propose_rules` but before `confirm_rules`,
+so the current transition is NOT double-counted (history is appended
+AFTER `engine_step` returns).
 
 Design decisions (diverged from original plan):
 - **No cap**: store every frame. Games max at 80 actions, so unbounded is
@@ -289,32 +297,18 @@ Design decisions (diverged from original plan):
 - **Policy-independent**: the agent owns the `TransitionHistory` instance
   and passes it to the policy. Any consumer (retroactive tester, LLM bundle,
   classical learner) can read from it.
+- **Append after engine_step**: history.append() is called AFTER
+  `engine_step()` returns, so the current transition is not in the buffer
+  during retroactive testing. This prevents double-counting (retroactive
+  matches + confirm_rules bump).
 
-**Retroactive test function: NOT YET IMPLEMENTED.** The `retroactive_test()`
-function and its integration into `engine_step()` are the remaining work.
-The history store is the prerequisite; the test function is the consumer.
+**What this fixes**: Rules that explain many past transitions get
+immediate support bumps instead of waiting frame by frame. A rule matching
+5 historical transitions starts with `support=5` and is confirmed
+immediately (threshold=2).
 
-When a new rule is proposed (by the classical learner or the LLM), test it
-against the stored transition history:
-
-```python
-def retroactive_test(rule, history: TransitionHistory) -> int:
-    """Test rule against all stored transitions. Return support count."""
-    support = 0
-    for t in history:
-        if rule.guard(t.state_before, t.action):
-            predicted = rule.apply(t.state_before, t.action)
-            if matches(predicted, t.state_after, rule.effects):
-                support += 1
-    return support
-```
-
-If a rule matches 5 historical transitions, it starts with `support=5` and is
-confirmed immediately. This eliminates the slow frame-by-frame wait.
-
-**Integration point**: `engine_step()` in `effects/engine.py` — after
-`propose_rules()` adds a candidate, call `retroactive_test()` and set initial
-support.
+**Verification**: 10 new tests (6 for `retroactive_test`, 4 for
+`engine_step` integration). 443 total tests pass.
 
 #### 4b. Active confirmation
 
@@ -411,17 +405,16 @@ scoring.
    └── New QueryInterface section: groups + orientation + history
 
 4. Rule lifecycle (engine quality)
-   ├── 4a Retroactive testing: transition history DONE, test function TODO
+   ├── 4a Retroactive testing: DONE (history + test function + engine integration)
    ├── 4b Active confirmation: needs planner integration
    ├── 4c Stale pruning: needs entity TTL tracking (depends on 1) ✓ unblocked
    └── 4d Conflict detection: needs rule indexing by guard
 ```
 
-**Recommended order**: ~~1~~ → ~~4a history~~ → 4a test function → 2 → 3 → 4b/4c/4d
+**Recommended order**: ~~1~~ → ~~4a~~ → 2 → 3 → 4b/4c/4d
 
-Workstream 1 is complete. Transition history store (4a prerequisite) is
-complete. Next: the `retroactive_test()` function itself — test proposed
-rules against the history buffer for immediate support bumping.
+Workstreams 1 and 4a are complete. Next: orientation dimension (2) or
+active confirmation (4b).
 confirmation, less noise from unconfirmed proposals.
 
 ## Total effort (rough)

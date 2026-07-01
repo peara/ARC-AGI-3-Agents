@@ -14,6 +14,7 @@ from .engine import (
     inject_llm_proposals,
     propose_rules,
     prune_rules,
+    retroactive_test,
 )
 from .engine_log import (  # noqa: F401
     diff_effect_context,
@@ -32,6 +33,7 @@ from .predict import Prediction, is_terminal_dead_end, predict, replay_predicted
 from .residual import ResidualEntry, compute_residual
 from .rules import Effect, Rule
 from .state import Pos, SceneState, Terminal, terminal_from_state_name
+from .transition_history import Transition, TransitionHistory
 
 __all__ = [
     "Effect",
@@ -70,5 +72,8 @@ __all__ = [
     "parse_guard_clauses",
     "prune_rules",
     "replay_predicted",
+    "retroactive_test",
     "terminal_from_state_name",
+    "Transition",
+    "TransitionHistory",
 ]

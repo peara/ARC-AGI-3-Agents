@@ -11,6 +11,7 @@ from .predict import predict
 from .residual import ResidualEntry, compute_residual
 from .rules import Effect, Rule
 from .state import SceneState
+from .transition_history import TransitionHistory
 
 log = logging.getLogger(__name__)
 
@@ -285,6 +286,52 @@ def propose_rules(
     return replace(ctx, proposed_rules=tuple(proposed))
 
 
+def retroactive_test(rule: Rule, history: TransitionHistory) -> int:
+    """Count how many historical transitions a rule explains.
+
+    Tests the rule against every transition in the history buffer. A
+    transition "matches" if the rule's guard fires AND every effect produces
+    the observed state_after value. Returns the match count — suitable as
+    an initial support value for a newly proposed rule.
+
+    The current transition should NOT be in the history when this is called
+    (otherwise confirm_rules would double-count it).
+    """
+    count = 0
+    for t in history:
+        if _rule_matches_observation(rule, t.state_before, t.action, t.state_after):
+            count += 1
+    return count
+
+
+def _apply_retroactive_support(
+    ctx: EffectContext, history: TransitionHistory
+) -> EffectContext:
+    """Bump support on proposed rules based on historical transitions.
+
+    For each proposed rule with support < its historical match count, raise
+    its support to the historical count. This lets rules that explain many
+    past transitions be confirmed immediately instead of waiting frame by
+    frame.
+    """
+    if not ctx.proposed_rules or len(history) == 0:
+        return ctx
+    proposed = list(ctx.proposed_rules)
+    changed = False
+    for i, rule in enumerate(proposed):
+        matches = retroactive_test(rule, history)
+        if matches > rule.support:
+            proposed[i] = replace(rule, support=matches)
+            changed = True
+    if changed:
+        log.info(
+            "retroactive_test: bumped support on %d proposed rules (history=%d)",
+            sum(1 for r in proposed if r.support > 0),
+            len(history),
+        )
+    return replace(ctx, proposed_rules=tuple(proposed))
+
+
 def confirm_rules(
     ctx: EffectContext,
     state_before: SceneState,
@@ -389,8 +436,14 @@ def engine_step(
     step_label: str | None = None,
     log_changes: bool = False,
     llm_proposals: tuple[Rule, ...] = (),
+    history: TransitionHistory | None = None,
 ) -> EffectContext:
-    """Run propose / confirm / prune for one verified transition."""
+    """Run propose / confirm / prune for one verified transition.
+
+    If ``history`` is provided, proposed rules are retroactively tested
+    against past transitions for an immediate support bump. The current
+    transition should NOT be in the history yet (append after this call).
+    """
     ctx = inject_llm_proposals(ctx, llm_proposals)
 
     pred = predict(state_before, action, ctx)
@@ -415,6 +468,8 @@ def engine_step(
         )
     else:
         updated = ctx
+    if history is not None and len(history) > 0:
+        updated = _apply_retroactive_support(updated, history)
     updated = confirm_rules(updated, state_before, action, observed)
     if log_changes:
         log_effect_context_diff(ctx, updated, step_label=step_label)

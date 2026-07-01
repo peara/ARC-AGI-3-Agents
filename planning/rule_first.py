@@ -151,13 +151,6 @@ class RuleFirstPolicy:
         observed = snapshot_from_scene(scene, spec)
         if observed is None:
             return
-        if self._history is not None:
-            self._history.append(
-                state_before=self._engine_state_before,
-                action=action,
-                state_after=observed,
-                frame_idx=scene.frame_idx,
-            )
         step_label = f"f{scene.frame_idx} a{action}"
         before_ctx = self._engine_ctx
         predicted = predict(self._engine_state_before, action, before_ctx)
@@ -182,7 +175,15 @@ class RuleFirstPolicy:
             dims=spec.dims,
             include_terminal=spec.include_terminal,
             controllable_id=None,
+            history=self._history,
         )
+        if self._history is not None:
+            self._history.append(
+                state_before=self._engine_state_before,
+                action=action,
+                state_after=observed,
+                frame_idx=scene.frame_idx,
+            )
         self._ctx = self._engine_ctx
         if not self.cfg.log_engine:
             return
