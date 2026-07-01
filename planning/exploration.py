@@ -22,6 +22,7 @@ from effects import (
     replay_predicted,
 )
 from effects.rules import Rule
+from effects.transition_history import TransitionHistory
 from perception.session import RESET_ACTION, SceneSnapshot
 
 from .adapters import snapshot_from_scene
@@ -51,11 +52,13 @@ class ExplorationPolicy:
         config: ExplorationConfig | None = None,
         grid_rows: int = 64,
         grid_cols: int = 64,
+        history: TransitionHistory | None = None,
     ) -> None:
         self.action_space = [a for a in action_space if a != RESET_ACTION]
         self.cfg = config or ExplorationConfig()
         self.grid_rows = grid_rows
         self.grid_cols = grid_cols
+        self._history = history
 
         self.visited: set[Pos] = set()
         self.reached_targets: set[Pos] = set()
@@ -136,6 +139,13 @@ class ExplorationPolicy:
         observed = snapshot_from_scene(scene, spec)
         if observed is None:
             return
+        if self._history is not None:
+            self._history.append(
+                state_before=self._engine_state_before,
+                action=action,
+                state_after=observed,
+                frame_idx=scene.frame_idx,
+            )
         step_label = f"f{scene.frame_idx} a{action}"
         before_ctx = self._engine_ctx
         predicted = predict(self._engine_state_before, action, before_ctx)

@@ -16,6 +16,7 @@ from typing import Any
 from arcengine import FrameData, GameAction, GameState
 
 from agents.llm_client import LLMClient
+from effects.transition_history import TransitionHistory
 from entity import EntityBuilder
 from perception.session import RESET_ACTION, PerceptionSession, SceneSnapshot
 from planning.exploration import ExplorationPolicy
@@ -57,16 +58,19 @@ class LlmCuriosity(Agent):
         self._policy_version = policy_version
         self.session = PerceptionSession()
         self._entity_builder = EntityBuilder()
+        self.history = TransitionHistory()
         action_space = [a.value for a in GameAction if a is not GameAction.RESET]
         if policy_version == "v2":
             self.policy = RuleFirstPolicy(
                 action_space=action_space,
                 config=ExplorationConfig(seed=seed, log_engine=True),
+                history=self.history,
             )
         else:
             self.policy = ExplorationPolicy(
                 action_space=action_space,
                 config=ExplorationConfig(seed=seed, log_engine=True),
+                history=self.history,
             )
 
         # LLM client

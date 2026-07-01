@@ -269,30 +269,48 @@ confirmation, no stale cleanup.
 
 **Design**: Four mechanisms:
 
-#### 4a. Retroactive testing on proposal
+#### 4a. Retroactive testing on proposal — PARTIALLY IMPLEMENTED (2026-07-01)
+
+**Transition history store: DONE.** `effects/transition_history.py` provides
+`TransitionHistory` (unbounded in-memory `list[Transition]`) and `Transition`
+(frozen dataclass: `frame_idx`, `action`, `state_before`, `state_after`).
+Both `ExplorationPolicy` and `RuleFirstPolicy` accept an optional `history`
+param and append to it in `_run_engine_step`. `LlmCuriosityAgent` creates
+the history, passes it to the policy, and exposes it as `self.history`.
+
+Design decisions (diverged from original plan):
+- **No cap**: store every frame. Games max at 80 actions, so unbounded is
+  fine. Add `deque(maxlen=N)` if memory ever matters.
+- **No residual in Transition**: consumers compute residual themselves.
+  Keeps the store independent from `effects/residual.py`.
+- **Lives in `effects/`** alongside `state.py` — where state lives, history
+  lives. Not a top-level package; it's a runtime cache, not a separate
+  observability layer (the recording `.recording.jsonl` is the durable layer).
+- **Policy-independent**: the agent owns the `TransitionHistory` instance
+  and passes it to the policy. Any consumer (retroactive tester, LLM bundle,
+  classical learner) can read from it.
+
+**Retroactive test function: NOT YET IMPLEMENTED.** The `retroactive_test()`
+function and its integration into `engine_step()` are the remaining work.
+The history store is the prerequisite; the test function is the consumer.
 
 When a new rule is proposed (by the classical learner or the LLM), test it
 against the stored transition history:
 
 ```python
-def retroactive_test(rule, history: list[Transition]) -> int:
+def retroactive_test(rule, history: TransitionHistory) -> int:
     """Test rule against all stored transitions. Return support count."""
     support = 0
     for t in history:
         if rule.guard(t.state_before, t.action):
             predicted = rule.apply(t.state_before, t.action)
-            if matches(predicted, t.state_observed, rule.effects):
+            if matches(predicted, t.state_after, rule.effects):
                 support += 1
     return support
 ```
 
 If a rule matches 5 historical transitions, it starts with `support=5` and is
 confirmed immediately. This eliminates the slow frame-by-frame wait.
-
-**Requirement**: Store `(state_before, action, state_observed)` tuples in a
-ring buffer. Currently, `RuleFirstPolicy` only keeps the last one
-(`_engine_state_before`). Add a `TransitionHistory` with a cap (e.g., 100
-frames).
 
 **Integration point**: `engine_step()` in `effects/engine.py` — after
 `propose_rules()` adds a candidate, call `retroactive_test()` and set initial
@@ -393,31 +411,32 @@ scoring.
    └── New QueryInterface section: groups + orientation + history
 
 4. Rule lifecycle (engine quality)
-   ├── 4a Retroactive testing: needs transition history buffer
+   ├── 4a Retroactive testing: transition history DONE, test function TODO
    ├── 4b Active confirmation: needs planner integration
    ├── 4c Stale pruning: needs entity TTL tracking (depends on 1) ✓ unblocked
    └── 4d Conflict detection: needs rule indexing by guard
 ```
 
-**Recommended order**: ~~1~~ → 4a (quick win) → 2 → 3 → 4b/4c/4d
+**Recommended order**: ~~1~~ → ~~4a history~~ → 4a test function → 2 → 3 → 4b/4c/4d
 
-Workstream 1 is complete. Next up is 4a (retroactive testing) — lowest-effort,
-highest-impact. It doesn't require perception changes — just a transition
-history buffer and a test function. It gives immediate value: faster rule
+Workstream 1 is complete. Transition history store (4a prerequisite) is
+complete. Next: the `retroactive_test()` function itself — test proposed
+rules against the history buffer for immediate support bumping.
 confirmation, less noise from unconfirmed proposals.
 
 ## Total effort (rough)
 
 | Piece | New/Modified | Est. lines |
 |-------|-------------|-----------|
-| 1. Stable entity IDs | EntityBuilder, LogicalRegistry, reconciler, EntityCatalog | ~200 |
+| 1. Stable entity IDs | EntityBuilder, build_entities | ~200 (actual) |
 | 2. Orientation dimension | SceneState, predict, learn, perception | ~150 |
 | 3. LLM bundle enrichment | QueryInterface, GroupingEngine wiring | ~100 |
-| 4a. Retroactive testing | TransitionHistory, retroactive_test, engine_step | ~80 |
+| 4a. Retroactive testing — history store | effects/transition_history.py, both policies, agent | ~80 (actual: 73+tests) |
+| 4a. Retroactive testing — test function | retroactive_test, engine_step integration | ~40 |
 | 4b. Active confirmation | RuleFirstPolicy action scoring | ~50 |
 | 4c. Stale pruning | EffectContext dormant_rules, prune_stale | ~60 |
 | 4d. Conflict detection | detect_conflicts, policy integration | ~50 |
-| **Total** | | **~690** |
+| **Total** | | **~730** |
 
 ## Open questions (left for observation)
 
