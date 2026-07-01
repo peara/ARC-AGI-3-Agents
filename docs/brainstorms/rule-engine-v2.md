@@ -310,6 +310,12 @@ immediately (threshold=2).
 **Verification**: 10 new tests (6 for `retroactive_test`, 4 for
 `engine_step` integration). 443 total tests pass.
 
+**Runtime verification** (2026-07-01, wa30 game): retroactive testing fired
+3 times, bumping 16+12+12 proposed rules from 27-29 historical transitions.
+First shot: 3 movement + 1 collision rule promoted immediately (17→11
+proposed, threshold=2). Rules that previously took 2+ frames to confirm are
+now confirmed in one engine step.
+
 #### 4b. Active confirmation
 
 When the planner picks an action, prefer actions that would confirm or refute
@@ -415,7 +421,17 @@ scoring.
 
 Workstreams 1 and 4a are complete. Next: orientation dimension (2) or
 active confirmation (4b).
-confirmation, less noise from unconfirmed proposals.
+
+**Newly discovered issue** (2026-07-01 runtime): the fallback probe loop in
+`LlmCuriosityAgent._pick_nearest_unknown` latches onto the same unknown
+action every frame. When `predict(state, action, ctx)` returns unknown for
+action 5 at the current state, the agent does action 5, lands in a state
+where action 5 is still unknown, and repeats — producing 17+ consecutive
+action 5s. The root cause: the fallback probe runs BEFORE the LLM rule
+proposer gets a chance to propose a rule for the unknown action. This is a
+pre-existing bug, not a regression from 4a. Fix candidate: track recently
+tried unknowns and skip them in fallback selection, or prioritize the LLM
+proposer over the fallback probe.
 
 ## Total effort (rough)
 
@@ -443,15 +459,17 @@ confirmation, less noise from unconfirmed proposals.
    immediately active — the rules were confirmed before, and the physical
    object is the same.
 
-3. **Transition history size.** 100 frames may be too small for long games or
-   too large for short ones. Consider adaptive sizing based on game length,
-   or a rolling window that prioritizes recent transitions.
+3. **Transition history size.** ~~100 frames may be too small for long games
+   or too large for short ones.~~ Resolved (2026-07-01): unbounded is fine.
+   Games max at 80 actions (`MAX_ACTIONS=80`), and `Transition` is lightweight
+   (two `SceneState` references + int + int). Add `deque(maxlen=N)` only if
+   memory profiling shows a problem.
 
 4. **Active confirmation vs. exploration.** If the planner always picks
    actions that test uncertain rules, it may neglect novel-state exploration.
    Need a balance — maybe a weighted score: `novelty * 0.7 +
    rule_test_score * 0.3`.
 
-5. **GroupingEngine connection.** Is `GroupingEngine` already wired to
-   `RuleFirstPolicy`, or does it need integration? If not, that's a
-   prerequisite for workstream 3.
+5. **GroupingEngine connection.** ~~Is `GroupingEngine` already wired to
+   `RuleFirstPolicy`, or does it need integration?~~ Still open — not yet
+   checked. This is a prerequisite for workstream 3.
