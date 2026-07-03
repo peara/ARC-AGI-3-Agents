@@ -70,6 +70,7 @@ class EntityBuilder:
         self._dormant_ttl: int = dormant_ttl
         self._dormant_frames: dict[int, int] = {}
         self._compound_original_ids: dict[int, list[int]] = {}
+        self._compound_signature_map: dict[frozenset[int], int] = {}
         self._prev_controllable_id: int | None = None
 
     def update(
@@ -387,8 +388,21 @@ class EntityBuilder:
         if reuse_id and self._compound_entity_id is not None:
             new_id = self._compound_entity_id
         else:
-            new_id = self._next_entity_id
-            self._next_entity_id += 1
+            # Signature-based reuse: same logical-track member set → same id
+            if self._logical_registry is not None:
+                signature = frozenset(
+                    self._logical_registry.raw_to_logical(tid)
+                    for tid in all_members
+                )
+            else:
+                signature = frozenset(all_members)
+            existing_id = self._compound_signature_map.get(signature)
+            if existing_id is not None:
+                new_id = existing_id
+            else:
+                new_id = self._next_entity_id
+                self._next_entity_id += 1
+                self._compound_signature_map[signature] = new_id
         self._compound_original_ids[new_id] = original_ids
         kept[new_id] = Entity(
             id=new_id,
