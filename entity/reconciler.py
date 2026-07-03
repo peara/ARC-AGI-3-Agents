@@ -229,12 +229,174 @@ class MergeCandidate:
 
 
 @dataclass(frozen=True)
+class AbsorbEmitConfig:
+    """Thresholds for absorb/emit detection (entity absorbs another or emits a new one).
+
+    Fields:
+        overlap_threshold: Minimum cell overlap ratio for both dead→absorber and
+            emitter→born links. 0.75 default filters out structure depletion at ~50%.
+        size_delta_tolerance: Allowed difference between ``size_delta`` and
+            ``dead_size`` for absorb events. Exact match ±1 cell for grid noise.
+        min_size_delta: Minimum size change for an absorb/emit event. Filters
+            out 1-cell step-counter oscillations.
+        role_filter: If set, only consider absorbers/emitters whose role is in
+            this set. Default None (no filter; builder will set it to ``{"mover"}``).
+    """
+
+    overlap_threshold: float = 0.75
+    size_delta_tolerance: int = 1
+    min_size_delta: int = 3
+    role_filter: set[str] | None = None
+
+
+@dataclass(frozen=True)
+class AbsorbEvent:
+    """Track A absorbed dead track D at frame F."""
+
+    dead_tid: int
+    absorber_tid: int
+    frame: int
+    overlap_of_dead: float
+    overlap_of_growth: float
+    size_delta: int
+
+
+@dataclass(frozen=True)
+class EmitEvent:
+    """Track A emitted born track B at frame F."""
+
+    emitter_tid: int
+    born_tid: int
+    frame: int
+    overlap_of_born: float
+    overlap_of_shed: float
+    size_delta: int
+
+
+def find_absorb_emit_events(
+    registry: ObjectRegistry,
+    prev_registry: ObjectRegistry,
+    config: AbsorbEmitConfig,
+) -> tuple[list[AbsorbEvent], list[EmitEvent]]:
+    """Detect absorb and emit events by comparing current and previous registries.
+
+    Absorb: an alive track grew (``size_delta > min_size_delta``) and its new
+    cells overlap with a dead track's last cells (overlap ≥
+    ``overlap_threshold``).  Additionally checks that
+    ``|size_delta − dead_size| ≤ size_delta_tolerance``.
+
+    Emit: an alive track shrank (``size_delta < −min_size_delta``) and its
+    lost cells overlap with a born track's first cells (overlap ≥
+    ``overlap_threshold``).
+
+    Dead tracks: ``track.alive is False``.
+    Born tracks: ``track.alive is True`` and ``len(track.observations) == 1``.
+    """
+    absorbs: list[AbsorbEvent] = []
+    emits: list[EmitEvent] = []
+
+    frame_idx = registry.frame_idx
+
+    dead_tracks = [t for t in registry.tracks.values() if not t.alive]
+    born_tracks = [
+        t for t in registry.tracks.values()
+        if t.alive and len(t.observations) == 1
+    ]
+
+    for tid, track in registry.tracks.items():
+        if not track.alive or len(track.observations) < 2:
+            continue
+
+        curr_obs = track.observations[-1]
+        if curr_obs.frame_idx != frame_idx:
+            continue
+
+        # Previous observation: prefer prev_registry snapshot, else
+        # fall back to penultimate observation in current registry.
+        if tid in prev_registry.tracks and prev_registry.tracks[tid].observations:
+            prev_obs = prev_registry.tracks[tid].observations[-1]
+        else:
+            prev_obs = track.observations[-2]
+
+        prev_cells = prev_obs.cells
+        curr_cells = curr_obs.cells
+        size_delta = curr_obs.size - prev_obs.size
+
+        # --- Absorb detection -----------------------------------------------
+        if size_delta > config.min_size_delta:
+            new_cells = curr_cells - prev_cells
+            if new_cells:
+                for dt in dead_tracks:
+                    dead_cells = dt.observations[-1].cells
+                    if not dead_cells:
+                        continue
+                    overlap = new_cells & dead_cells
+                    overlap_count = len(overlap)
+                    if overlap_count == 0:
+                        continue
+
+                    overlap_of_dead = overlap_count / len(dead_cells)
+                    overlap_of_growth = overlap_count / len(new_cells)
+
+                    if (
+                        overlap_of_dead >= config.overlap_threshold
+                        and overlap_of_growth >= config.overlap_threshold
+                    ):
+                        dead_size = dt.observations[-1].size
+                        if abs(size_delta - dead_size) <= config.size_delta_tolerance:
+                            absorbs.append(
+                                AbsorbEvent(
+                                    dead_tid=dt.id,
+                                    absorber_tid=tid,
+                                    frame=frame_idx,
+                                    overlap_of_dead=overlap_of_dead,
+                                    overlap_of_growth=overlap_of_growth,
+                                    size_delta=size_delta,
+                                )
+                            )
+
+        # --- Emit detection --------------------------------------------------
+        if size_delta < -config.min_size_delta:
+            lost_cells = prev_cells - curr_cells
+            if lost_cells:
+                for bt in born_tracks:
+                    born_cells = bt.observations[0].cells
+                    if not born_cells:
+                        continue
+                    overlap = born_cells & lost_cells
+                    overlap_count = len(overlap)
+                    if overlap_count == 0:
+                        continue
+
+                    overlap_of_born = overlap_count / len(born_cells)
+                    overlap_of_shed = overlap_count / len(lost_cells)
+
+                    if (
+                        overlap_of_born >= config.overlap_threshold
+                        and overlap_of_shed >= config.overlap_threshold
+                    ):
+                        emits.append(
+                            EmitEvent(
+                                emitter_tid=tid,
+                                born_tid=bt.id,
+                                frame=frame_idx,
+                                overlap_of_born=overlap_of_born,
+                                overlap_of_shed=overlap_of_shed,
+                                size_delta=size_delta,
+                            )
+                        )
+
+    return absorbs, emits
+
+
+@dataclass(frozen=True)
 class ReconcilerConfig:
     """Configuration for the temporal successor matcher."""
 
     max_frame_gap: int = 2
     position_tolerance: float = 8.0
     allow_color_change: bool = True
+    absorb_emit: AbsorbEmitConfig = AbsorbEmitConfig()
 
 
 def find_successors(
@@ -409,6 +571,72 @@ def compute_logical_map(
 # ─── reconciler ──────────────────────────────────────────────────────────────
 
 
+def _chain_absorb_emit(
+    absorbs: list[AbsorbEvent],
+    emits: list[EmitEvent],
+    registry: ObjectRegistry,
+    merge_map: dict[int, int],
+) -> dict[int, int]:
+    """Match absorb events to emit events to recover dead→born identity.
+
+    For each absorb (D absorbed by A), find the earliest matching emit
+    (A' emits B at a later frame) where A' is A or shares A's logical root
+    via *merge_map*, and B's color or shape is compatible with D's.
+    Returns {dead_tid → born_tid} for confirmed chains.
+    """
+    emits_by_emitter: dict[int, list[EmitEvent]] = defaultdict(list)
+    for e in emits:
+        emits_by_emitter[e.emitter_tid].append(e)
+
+    # Reverse map: logical root → all raw tids sharing that root (for absorber rotation)
+    all_tids = list(registry.tracks.keys())
+    logical_map_current = compute_logical_map(all_tids, merge_map)
+    root_to_tids: dict[int, set[int]] = defaultdict(set)
+    for tid, logical in logical_map_current.items():
+        root_to_tids[logical].add(tid)
+
+    mediated_links: dict[int, int] = {}
+
+    for ab in absorbs:
+        absorber_tid = ab.absorber_tid
+
+        # Candidate emitters: absorber itself + all tids sharing its logical root
+        candidate_emitter_tids: set[int] = {absorber_tid}
+        absorber_logical = logical_map_current.get(absorber_tid, absorber_tid)
+        if absorber_logical in root_to_tids:
+            candidate_emitter_tids.update(root_to_tids[absorber_logical])
+
+        matching_emits: list[EmitEvent] = []
+        for emitter_tid in candidate_emitter_tids:
+            matching_emits.extend(emits_by_emitter.get(emitter_tid, []))
+
+        matching_emits = [e for e in matching_emits if e.frame > ab.frame]
+        matching_emits.sort(key=lambda e: e.frame)
+
+        dead_track = registry.tracks.get(ab.dead_tid)
+        if dead_track is None or not dead_track.observations:
+            continue
+        dead_color = dead_track.color
+        dead_last_shape_key = dead_track.observations[-1].shape_key
+
+        for em in matching_emits:
+            born_track = registry.tracks.get(em.born_tid)
+            if born_track is None or not born_track.observations:
+                continue
+            born_color = born_track.color
+            born_first_shape_key = born_track.observations[0].shape_key
+
+            # Plausibility: color match OR shape match (under rotation)
+            color_match = born_color == dead_color
+            shape_compat, _ = shapes_compatible(dead_last_shape_key, born_first_shape_key)
+
+            if color_match or shape_compat:
+                mediated_links[ab.dead_tid] = em.born_tid
+                break
+
+    return mediated_links
+
+
 class Reconciler:
     """Stateful temporal successor: accumulates merge links across frames.
 
@@ -421,6 +649,7 @@ class Reconciler:
         self.config = config or ReconcilerConfig()
         self._merge_map: dict[int, int] = {}
         self._last_tinfo_count: int = 0
+        self._prev_registry: ObjectRegistry | None = None
 
     def reconcile(
         self,
@@ -447,6 +676,19 @@ class Reconciler:
             if dead_tid in self._merge_map:
                 continue  # already linked
             self._merge_map[dead_tid] = born_tid
+
+        # Absorb/emit chaining: D absorbed by A → A emits B ⟹ D↔B same root
+        if self._prev_registry is not None:
+            absorbs, emits = find_absorb_emit_events(
+                registry, self._prev_registry, self.config.absorb_emit
+            )
+            if absorbs and emits:
+                mediated = _chain_absorb_emit(absorbs, emits, registry, self._merge_map)
+                for dead_tid, born_tid in mediated.items():
+                    if dead_tid not in self._merge_map:
+                        self._merge_map[dead_tid] = born_tid
+
+        self._prev_registry = registry
 
         all_tids = list(registry.tracks.keys())
         logical_map = compute_logical_map(all_tids, self._merge_map)
