@@ -108,6 +108,13 @@ def main() -> None:
         help="Comma-separated list of tags for the scorecard (e.g., 'experiment,v1.0')",
         default=None,
     )
+    parser.add_argument(
+        "-m",
+        "--max-actions",
+        type=int,
+        default=None,
+        help="Override the agent's MAX_ACTIONS budget (default: agent-specific, e.g. 60 for llmcuriosityv2).",
+    )
 
     args = parser.parse_args()
 
@@ -185,6 +192,7 @@ def main() -> None:
         ROOT_URL,
         games,
         tags=tags,  # Pass tags as keyword argument
+        max_actions=args.max_actions,
     )
     agent_thread = threading.Thread(target=partial(run_agent, swarm))
     agent_thread.daemon = True  # die when the main thread dies

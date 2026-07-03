@@ -37,6 +37,7 @@ class Swarm:
         ROOT_URL: str,
         games: list[str],
         tags: list[str] = [],
+        max_actions: Optional[int] = None,
     ) -> None:
         from . import AVAILABLE_AGENTS
 
@@ -52,6 +53,7 @@ class Swarm:
             "Accept": "application/json",
         }
         self.tags = tags.copy() if tags is not None else []
+        self.max_actions = max_actions
         self._arc = Arcade()
 
         # Set up base tags for tracing
@@ -83,6 +85,7 @@ class Swarm:
                 record=True,
                 arc_env=self._arc.make(g, scorecard_id=self.card_id),
                 tags=self.tags,
+                max_actions=self.max_actions,
             )
             self.agents.append(a)
 

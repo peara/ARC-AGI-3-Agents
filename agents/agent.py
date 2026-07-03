@@ -48,6 +48,7 @@ class Agent(ABC):
         record: bool,
         arc_env: EnvironmentWrapper,
         tags: Optional[list[str]] = None,
+        max_actions: Optional[int] = None,
     ) -> None:
         self.ROOT_URL = ROOT_URL
         self.card_id = card_id
@@ -57,6 +58,8 @@ class Agent(ABC):
         self.tags = tags or []
         self.frames = [FrameData(levels_completed=0)]
         self._cleanup = True
+        if max_actions is not None:
+            self.MAX_ACTIONS = max_actions
         if record:
             self.start_recording()
         self.headers = {
