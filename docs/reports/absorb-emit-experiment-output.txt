@@ -1,0 +1,291 @@
+================================================================================
+ABSORB/EMIT DETECTION EXPERIMENT
+================================================================================
+Recording: wa30-ee6fef47.llmcuriosityv2.9a372f94-8aa0-4c80-b0eb-92731119786c.recording.jsonl
+Frames: 61
+Total absorbs: 9
+Total emits: 10
+Total chains: 9
+Reconciler merge_map entries: 45
+
+================================================================================
+RECONCILER MERGE MAP (head track succession)
+================================================================================
+  dead tid=20 (color=0) → born tid=22 (color=0)
+  dead tid=22 (color=0) → born tid=27 (color=0)
+  dead tid=27 (color=0) → born tid=30 (color=0)
+  dead tid=30 (color=0) → born tid=34 (color=0)
+  dead tid=43 (color=0) → born tid=45 (color=0)
+  dead tid=45 (color=0) → born tid=50 (color=0)
+  dead tid=50 (color=0) → born tid=53 (color=0)
+
+================================================================================
+PER-FRAME EVENTS
+================================================================================
+
+=== Frame 1 (action=1) ===
+  EMIT: tid=5 (color=7, role=static) emitted tid=12 (color=4, role=static)
+    size 64→63 (delta=-1), born_size=1, overlap_of_born=1.00, overlap_of_shed=1.00
+
+=== Frame 15 (action=5) ===
+  ABSORB: tid=22 (color=0, role=mover) absorbed tid=23 (color=3, role=transient)
+    size 4→16 (delta=+12), dead_size=12, overlap_of_dead=1.00, overlap_of_growth=1.00
+
+=== Frame 17 (action=5) ===
+  EMIT: tid=22 (color=0, role=mover) emitted tid=24 (color=3, role=transient)
+    size 16→4 (delta=-12), born_size=12, overlap_of_born=1.00, overlap_of_shed=1.00
+
+=== Frame 18 (action=5) ===
+  ABSORB: tid=22 (color=0, role=mover) absorbed tid=24 (color=3, role=transient)
+    size 4→16 (delta=+12), dead_size=12, overlap_of_dead=1.00, overlap_of_growth=1.00
+
+=== Frame 20 (action=5) ===
+  EMIT: tid=22 (color=0, role=mover) emitted tid=25 (color=3, role=transient)
+    size 16→4 (delta=-12), born_size=12, overlap_of_born=1.00, overlap_of_shed=1.00
+
+=== Frame 21 (action=5) ===
+  ABSORB: tid=22 (color=0, role=mover) absorbed tid=25 (color=3, role=transient)
+    size 4→16 (delta=+12), dead_size=12, overlap_of_dead=1.00, overlap_of_growth=1.00
+
+=== Frame 22 (action=5) ===
+  EMIT: tid=22 (color=0, role=mover) emitted tid=26 (color=3, role=transient)
+    size 16→4 (delta=-12), born_size=12, overlap_of_born=1.00, overlap_of_shed=1.00
+
+=== Frame 28 (action=5) ===
+  ABSORB: tid=30 (color=0, role=mover) absorbed tid=31 (color=3, role=transient)
+    size 4→16 (delta=+12), dead_size=12, overlap_of_dead=1.00, overlap_of_growth=1.00
+
+=== Frame 29 (action=5) ===
+  EMIT: tid=30 (color=0, role=mover) emitted tid=33 (color=3, role=transient)
+    size 16→4 (delta=-12), born_size=12, overlap_of_born=1.00, overlap_of_shed=1.00
+
+=== Frame 42 (action=1) ===
+  EMIT: tid=1 (color=2, role=static) emitted tid=44 (color=14, role=transient)
+    size 20→14 (delta=-6), born_size=12, overlap_of_born=0.50, overlap_of_shed=1.00
+  EMIT: tid=7 (color=9, role=static) emitted tid=44 (color=14, role=transient)
+    size 28→18 (delta=-10), born_size=12, overlap_of_born=0.50, overlap_of_shed=0.60
+
+=== Frame 43 (action=3) ===
+  ABSORB: tid=1 (color=2, role=static) absorbed tid=44 (color=14, role=transient)
+    size 14→20 (delta=+6), dead_size=12, overlap_of_dead=0.50, overlap_of_growth=1.00
+  ABSORB: tid=7 (color=9, role=static) absorbed tid=44 (color=14, role=transient)
+    size 18→28 (delta=+10), dead_size=12, overlap_of_dead=0.50, overlap_of_growth=0.60
+
+=== Frame 46 (action=5) ===
+  ABSORB: tid=45 (color=0, role=mover) absorbed tid=47 (color=3, role=transient)
+    size 4→16 (delta=+12), dead_size=12, overlap_of_dead=1.00, overlap_of_growth=1.00
+
+=== Frame 47 (action=5) ===
+  EMIT: tid=45 (color=0, role=mover) emitted tid=48 (color=3, role=transient)
+    size 16→4 (delta=-12), born_size=12, overlap_of_born=1.00, overlap_of_shed=1.00
+
+=== Frame 48 (action=5) ===
+  ABSORB: tid=45 (color=0, role=mover) absorbed tid=48 (color=3, role=transient)
+    size 4→16 (delta=+12), dead_size=12, overlap_of_dead=1.00, overlap_of_growth=1.00
+
+=== Frame 50 (action=5) ===
+  EMIT: tid=45 (color=0, role=mover) emitted tid=49 (color=3, role=transient)
+    size 16→4 (delta=-12), born_size=12, overlap_of_born=1.00, overlap_of_shed=1.00
+
+=== Frame 57 (action=5) ===
+  ABSORB: tid=53 (color=0, role=mover) absorbed tid=54 (color=3, role=transient)
+    size 4→16 (delta=+12), dead_size=12, overlap_of_dead=1.00, overlap_of_growth=1.00
+
+=== Frame 59 (action=5) ===
+  EMIT: tid=53 (color=0, role=mover) emitted tid=55 (color=3, role=transient)
+    size 16→4 (delta=-12), born_size=12, overlap_of_born=1.00, overlap_of_shed=1.00
+
+================================================================================
+CHAINS (absorb → emit)
+================================================================================
+Chain 1: tid=23 (color=3, role=transient, dies f15) →[absorbed by tid=22 (color=0, role=mover)]→ tid=22 (alive f15..f17) →[emitted to tid=24]→ tid=24 (color=3, role=transient, born f17, gap=2)
+         color_changed=False shape_exact=True
+Chain 2: tid=24 (color=3, role=transient, dies f18) →[absorbed by tid=22 (color=0, role=mover)]→ tid=22 (alive f18..f20) →[emitted to tid=25]→ tid=25 (color=3, role=transient, born f20, gap=2)
+         color_changed=False shape_exact=True
+Chain 3: tid=25 (color=3, role=transient, dies f21) →[absorbed by tid=22 (color=0, role=mover)]→ tid=22 (alive f21..f22) →[emitted to tid=26]→ tid=26 (color=3, role=transient, born f22, gap=1)
+         color_changed=False shape_exact=True
+Chain 4: tid=31 (color=3, role=transient, dies f28) →[absorbed by tid=30 (color=0, role=mover)]→ tid=30 (alive f28..f29) →[emitted to tid=33]→ tid=33 (color=3, role=transient, born f29, gap=1)
+         color_changed=False shape_exact=True
+Chain 5: tid=44 (color=14, role=transient, dies f43) →[absorbed by tid=1 (color=2, role=static)]→ NEVER RE-EMITTED (terminal absorption)
+Chain 6: tid=44 (color=14, role=transient, dies f43) →[absorbed by tid=7 (color=9, role=static)]→ NEVER RE-EMITTED (terminal absorption)
+Chain 7: tid=47 (color=3, role=transient, dies f46) →[absorbed by tid=45 (color=0, role=mover)]→ tid=45 (alive f46..f47) →[emitted to tid=48]→ tid=48 (color=3, role=transient, born f47, gap=1)
+         color_changed=False shape_exact=True
+Chain 8: tid=48 (color=3, role=transient, dies f48) →[absorbed by tid=45 (color=0, role=mover)]→ tid=45 (alive f48..f50) →[emitted to tid=49]→ tid=49 (color=3, role=transient, born f50, gap=2)
+         color_changed=False shape_exact=True
+Chain 9: tid=54 (color=3, role=transient, dies f57) →[absorbed by tid=53 (color=0, role=mover)]→ tid=53 (alive f57..f59) →[emitted to tid=55]→ tid=55 (color=3, role=transient, born f59, gap=2)
+         color_changed=False shape_exact=True
+
+================================================================================
+LOGICAL ENTITY GROUPS (absorb→emit chains + reconciler merge map)
+================================================================================
+  Entity (root=52): tid=1(c=2,f0-60,static), tid=7(c=9,f0-60,static), tid=42(c=14,f39-41,static), tid=44(c=14,f42-42,transient), tid=46(c=14,f43-50,mover), tid=52(c=14,f51-60,mover)
+  Entity (root=56): tid=4(c=4,f0-13,static), tid=20(c=0,f13-13,transient), tid=22(c=0,f14-22,mover), tid=23(c=3,f14-14,transient), tid=24(c=3,f17-17,transient), tid=25(c=3,f20-20,transient), tid=26(c=3,f22-22,transient), tid=27(c=0,f23-25,mover), tid=28(c=4,f23-25,static), tid=30(c=0,f26-29,mover), tid=31(c=3,f26-27,transient), tid=33(c=3,f29-29,transient), tid=34(c=0,f30-31,transient), tid=35(c=4,f30-43,static), tid=37(c=0,f32-34,static), tid=39(c=0,f35-38,static), tid=41(c=0,f39-41,static), tid=43(c=0,f42-42,transient), tid=45(c=0,f43-50,mover), tid=47(c=3,f44-45,transient), tid=48(c=3,f47-47,transient), tid=49(c=3,f50-50,transient), tid=50(c=0,f51-55,static), tid=51(c=4,f51-55,static), tid=53(c=0,f56-60,mover), tid=54(c=3,f56-56,transient), tid=55(c=3,f59-59,transient), tid=56(c=4,f60-60,transient)
+
+================================================================================
+Z1 SHELL TRACKING
+================================================================================
+
+Candidate z1 shell tracks (color=3/4, size=12, n_obs<=5): 14
+  tid=23 color=3 frames=14..14 alive=False n_obs=1 role=transient
+  tid=24 color=3 frames=17..17 alive=False n_obs=1 role=transient
+  tid=25 color=3 frames=20..20 alive=False n_obs=1 role=transient
+  tid=26 color=3 frames=22..22 alive=False n_obs=1 role=transient
+  tid=28 color=4 frames=23..25 alive=False n_obs=3 role=static
+  tid=31 color=3 frames=26..27 alive=False n_obs=2 role=transient
+  tid=33 color=3 frames=29..29 alive=False n_obs=1 role=transient
+  tid=47 color=3 frames=44..45 alive=False n_obs=2 role=transient
+  tid=48 color=3 frames=47..47 alive=False n_obs=1 role=transient
+  tid=49 color=3 frames=50..50 alive=False n_obs=1 role=transient
+  tid=51 color=4 frames=51..55 alive=False n_obs=5 role=static
+  tid=54 color=3 frames=56..56 alive=False n_obs=1 role=transient
+  tid=55 color=3 frames=59..59 alive=False n_obs=1 role=transient
+  tid=56 color=4 frames=60..60 alive=True n_obs=1 role=transient
+
+Shell tids appearing in absorb/emit chains: [23, 24, 25, 26, 31, 33, 47, 48, 49, 54, 55]
+
+--- Full z1 shell entity chain ---
+
+  Entity (root=56): shell tids = [23, 24, 25, 26, 28, 31, 33, 47, 48, 49, 51, 54, 55, 56]
+  Chains involving this entity:
+    tid=23(c=3) --[absorbed by tid=22(c=0)]--> tid=22 --[emitted to tid=24(c=3)]--> tid=24 (gap=2)
+    tid=24(c=3) --[absorbed by tid=22(c=0)]--> tid=22 --[emitted to tid=25(c=3)]--> tid=25 (gap=2)
+    tid=25(c=3) --[absorbed by tid=22(c=0)]--> tid=22 --[emitted to tid=26(c=3)]--> tid=26 (gap=1)
+    tid=31(c=3) --[absorbed by tid=30(c=0)]--> tid=30 --[emitted to tid=33(c=3)]--> tid=33 (gap=1)
+    tid=47(c=3) --[absorbed by tid=45(c=0)]--> tid=45 --[emitted to tid=48(c=3)]--> tid=48 (gap=1)
+    tid=48(c=3) --[absorbed by tid=45(c=0)]--> tid=45 --[emitted to tid=49(c=3)]--> tid=49 (gap=2)
+    tid=54(c=3) --[absorbed by tid=53(c=0)]--> tid=53 --[emitted to tid=55(c=3)]--> tid=55 (gap=2)
+
+================================================================================
+FALSE POSITIVE ANALYSIS
+================================================================================
+
+Track roles summary:
+  tid=16 role=mover color=0 size_range=(4, 4) n_obs=8 lifespan=8
+  tid=17 role=mover color=14 size_range=(12, 12) n_obs=8 lifespan=8
+  tid=21 role=mover color=14 size_range=(12, 12) n_obs=10 lifespan=10
+  tid=22 role=mover color=0 size_range=(4, 16) n_obs=9 lifespan=9
+  tid=27 role=mover color=0 size_range=(4, 4) n_obs=3 lifespan=3
+  tid=29 role=mover color=14 size_range=(12, 12) n_obs=3 lifespan=3
+  tid=30 role=mover color=0 size_range=(4, 16) n_obs=4 lifespan=4
+  tid=45 role=mover color=0 size_range=(4, 16) n_obs=8 lifespan=8
+  tid=46 role=mover color=14 size_range=(12, 12) n_obs=8 lifespan=8
+  tid=52 role=mover color=14 size_range=(12, 12) n_obs=10 lifespan=10
+  tid=53 role=mover color=0 size_range=(4, 16) n_obs=5 lifespan=5
+
+--- Absorb events by role category ---
+  Frame 15: tid=22(mover,c=0) absorbed tid=23(transient,c=3) size 4→16 overlap_of_dead=1.00 overlap_of_growth=1.00
+  Frame 18: tid=22(mover,c=0) absorbed tid=24(transient,c=3) size 4→16 overlap_of_dead=1.00 overlap_of_growth=1.00
+  Frame 21: tid=22(mover,c=0) absorbed tid=25(transient,c=3) size 4→16 overlap_of_dead=1.00 overlap_of_growth=1.00
+  Frame 28: tid=30(mover,c=0) absorbed tid=31(transient,c=3) size 4→16 overlap_of_dead=1.00 overlap_of_growth=1.00
+  Frame 43: tid=1(static,c=2) absorbed tid=44(transient,c=14) size 14→20 overlap_of_dead=0.50 overlap_of_growth=1.00
+  Frame 43: tid=7(static,c=9) absorbed tid=44(transient,c=14) size 18→28 overlap_of_dead=0.50 overlap_of_growth=0.60
+  Frame 46: tid=45(mover,c=0) absorbed tid=47(transient,c=3) size 4→16 overlap_of_dead=1.00 overlap_of_growth=1.00
+  Frame 48: tid=45(mover,c=0) absorbed tid=48(transient,c=3) size 4→16 overlap_of_dead=1.00 overlap_of_growth=1.00
+  Frame 57: tid=53(mover,c=0) absorbed tid=54(transient,c=3) size 4→16 overlap_of_dead=1.00 overlap_of_growth=1.00
+
+--- Emit events by role category ---
+  Frame 1: tid=5(static,c=7) emitted tid=12(static,c=4) size 64→63 overlap_of_born=1.00 overlap_of_shed=1.00
+  Frame 17: tid=22(mover,c=0) emitted tid=24(transient,c=3) size 16→4 overlap_of_born=1.00 overlap_of_shed=1.00
+  Frame 20: tid=22(mover,c=0) emitted tid=25(transient,c=3) size 16→4 overlap_of_born=1.00 overlap_of_shed=1.00
+  Frame 22: tid=22(mover,c=0) emitted tid=26(transient,c=3) size 16→4 overlap_of_born=1.00 overlap_of_shed=1.00
+  Frame 29: tid=30(mover,c=0) emitted tid=33(transient,c=3) size 16→4 overlap_of_born=1.00 overlap_of_shed=1.00
+  Frame 42: tid=1(static,c=2) emitted tid=44(transient,c=14) size 20→14 overlap_of_born=0.50 overlap_of_shed=1.00
+  Frame 42: tid=7(static,c=9) emitted tid=44(transient,c=14) size 28→18 overlap_of_born=0.50 overlap_of_shed=0.60
+  Frame 47: tid=45(mover,c=0) emitted tid=48(transient,c=3) size 16→4 overlap_of_born=1.00 overlap_of_shed=1.00
+  Frame 50: tid=45(mover,c=0) emitted tid=49(transient,c=3) size 16→4 overlap_of_born=1.00 overlap_of_shed=1.00
+  Frame 59: tid=53(mover,c=0) emitted tid=55(transient,c=3) size 16→4 overlap_of_born=1.00 overlap_of_shed=1.00
+
+True absorb events (mover absorbs mover): 7
+  Frame 15: tid=22(c=0) absorbed tid=23(c=3) size 4→16
+  Frame 18: tid=22(c=0) absorbed tid=24(c=3) size 4→16
+  Frame 21: tid=22(c=0) absorbed tid=25(c=3) size 4→16
+  Frame 28: tid=30(c=0) absorbed tid=31(c=3) size 4→16
+  Frame 46: tid=45(c=0) absorbed tid=47(c=3) size 4→16
+  Frame 48: tid=45(c=0) absorbed tid=48(c=3) size 4→16
+  Frame 57: tid=53(c=0) absorbed tid=54(c=3) size 4→16
+
+False positive absorb events: 2
+  Frame 43: tid=1(static,c=2) absorbed tid=44(transient,c=14) size 14→20
+  Frame 43: tid=7(static,c=9) absorbed tid=44(transient,c=14) size 18→28
+
+True emit events (mover emits mover): 7
+  Frame 17: tid=22(c=0) emitted tid=24(c=3) size 16→4
+  Frame 20: tid=22(c=0) emitted tid=25(c=3) size 16→4
+  Frame 22: tid=22(c=0) emitted tid=26(c=3) size 16→4
+  Frame 29: tid=30(c=0) emitted tid=33(c=3) size 16→4
+  Frame 47: tid=45(c=0) emitted tid=48(c=3) size 16→4
+  Frame 50: tid=45(c=0) emitted tid=49(c=3) size 16→4
+  Frame 59: tid=53(c=0) emitted tid=55(c=3) size 16→4
+
+False positive emit events: 3
+  Frame 1: tid=5(static,c=7) emitted tid=12(static,c=4) size 64→63
+  Frame 42: tid=1(static,c=2) emitted tid=44(transient,c=14) size 20→14
+  Frame 42: tid=7(static,c=9) emitted tid=44(transient,c=14) size 28→18
+
+================================================================================
+SUMMARY AND RECOMMENDATIONS
+================================================================================
+
+Total absorb events: 9
+Total emit events: 10
+Total chains: 9
+Mover-only chains (true positives): 7
+Shell-related chains: 7
+False positive chains: 2
+Shell tracks identified: 14
+
+--- Z1 shell complete chain ---
+Shell tids with carry-cycle positions:
+  tid=23 color=3 frames=14..14 n_obs=1 role=transient alive=False
+  tid=24 color=3 frames=17..17 n_obs=1 role=transient alive=False
+  tid=25 color=3 frames=20..20 n_obs=1 role=transient alive=False
+  tid=26 color=3 frames=22..22 n_obs=1 role=transient alive=False
+  tid=28 color=4 frames=23..25 n_obs=3 role=static alive=False
+  tid=31 color=3 frames=26..27 n_obs=2 role=transient alive=False
+  tid=33 color=3 frames=29..29 n_obs=1 role=transient alive=False
+  tid=47 color=3 frames=44..45 n_obs=2 role=transient alive=False
+  tid=48 color=3 frames=47..47 n_obs=1 role=transient alive=False
+  tid=49 color=3 frames=50..50 n_obs=1 role=transient alive=False
+  tid=51 color=4 frames=51..55 n_obs=5 role=static alive=False
+  tid=54 color=3 frames=56..56 n_obs=1 role=transient alive=False
+  tid=55 color=3 frames=59..59 n_obs=1 role=transient alive=False
+  tid=56 color=4 frames=60..60 n_obs=1 role=transient alive=True
+
+✓ ALL 14 shell tids belong to ONE logical entity (root=56)
+  Full entity tids: [4, 20, 22, 23, 24, 25, 26, 27, 28, 30, 31, 33, 34, 35, 37, 39, 41, 43, 45, 47, 48, 49, 50, 51, 53, 54, 55, 56]
+
+RECOMMENDATIONS FOR PRODUCTIONIZING:
+
+1. ABSORB/EMIT EDGE TYPES: Add two new edge types to the DAG:
+   - `absorb`: dead_tid → absorber_tid (track A grows by B's cells, B dies)
+   - `emit`: emitter_tid → born_tid (track A shrinks, cells become new track B)
+
+2. CHAINING LOGIC: A dead→born link can be recovered through the path:
+   dead_tid --[absorbed_by]→ absorber_tid --[emitted_to]→ born_tid
+   This gives: dead_tid and born_tid are the SAME logical entity.
+
+3. ABSORBER SUCCESSION: When the absorber track itself dies and is reborn
+   (e.g. player head rotates), use the existing Reconciler merge_map to
+   link absorber_tid(old) → absorber_tid(new). This enables cross-cycle
+   linking even when the head track changes tids.
+
+4. ROLE FILTERING: Only apply absorb/emit detection to mover tracks
+   (role="mover"). Structure and counter tracks produce false positives.
+   The step counter (color 7↔4) and structure depletion events should be
+   excluded.
+
+5. SIZE THRESHOLD: Structural tracks are size 200+. Carry absorptions
+   always involve a size delta matching the absorbed track's size exactly
+   (±0 cells). Use this as an additional filter.
+
+6. COLOR PATTERN: In wa30, carry absorptions follow the pattern
+   color=0 (head) absorbs color=3 (active shell) or color=4 (ready shell).
+   This game-specific pattern can be a tiebreaker but should not be the
+   primary signal.
+
+7. CHAIN VERIFICATION: The z1 shell chain should be:
+   23(dies f15) → 24(born f17) → 25(born f20) → 26(born f22) →
+   31(born f28) → 33(born f29) → 47(born f46) → 48(born f47) →
+   49(born f50) → 54(born f57) → 55(born f59)
+   All linked through absorber succession (head tids: 22, 30, 45, 53).
+   The chain covers 11 shell tids, all with color=3, size=12.
