@@ -473,3 +473,115 @@ proposer over the fallback probe.
 5. **GroupingEngine connection.** ~~Is `GroupingEngine` already wired to
    `RuleFirstPolicy`, or does it need integration?~~ Still open — not yet
    checked. This is a prerequisite for workstream 3.
+
+---
+
+## Investigation: per-member prediction from compound rules (2026-07-06)
+
+### Problem
+
+The prediction-veto mechanism in `EntityBuilder._apply_compound_grouping()`
+uses `predict()` to check whether a compound entity's movement is known. When
+prediction returns a known result, the compound is preserved even when
+co-movement detection fails (e.g., track rotation). This reduced compound ID
+changes from 18→14 on wa30.
+
+However, the veto has a **stale-members bug**: it preserves the old compound
+membership even when members have genuinely left. At frame 47, the compound
+changed from `{0,1,7,10}` to `{0,10}` but the veto kept `{0,1,7,10}` because
+`predict()` said the compound entity had a known position.
+
+### Investigation: can rules predict per-member positions?
+
+The logs from a 200-frame wa30 run reveal the following about the rule system:
+
+**Multi-effect (rotational) movement rules DO exist.** The LLM proposer
+generates rules with different deltas for different members:
+
+```
+action 2: e0.pos delta=(7, 0),  e10.pos delta=(3, 0)   — head moves 7, body moves 3
+action 3: e0.pos delta=(-1, -6), e10.pos delta=(1, -4)  — head and body diverge
+action 1: e0.pos delta=(-4, 0),  e10.pos delta=(-4, 0)  — same delta (translation)
+```
+
+These are confirmed rules (support=2 for action 2/3, support=12 for action 1).
+
+**But they're effectively dead.** The rules target entity IDs `e0` and `e10`,
+which are **singleton entities** that existed before compound formation. Once
+the compound forms at frame ~11, `e0` and `e10` become `MERGED` members and
+are excluded from `SceneState` (which only includes `active` entities). The
+compound entity gets a new ID (e12, e14, etc.), so rules targeting e0/e10
+can never fire again — `state.pos(0)` returns `None`.
+
+**After compound formation, only single-effect rules survive.** The LLM
+proposer sees the compound ID in the scene bundle and proposes
+single-delta rules like `e12.posdelta(-4, 0)`. These get confirmed (support
+>10) but give only ONE position delta for the whole compound — no per-member
+information.
+
+**Per-member prediction hit rate: 0%.** In the 200-frame replay, `predict()`
+was called 596 times for compound members. All returned `no_pos_for_member`
+because member IDs don't exist in `SceneState`.
+
+### Root cause: two separate problems
+
+1. **MERGED members vanish from SceneState.** `_build_scene_state()` only
+   includes `lifecycle=active` entities. When members merge into a compound,
+   they become `MERGED` and disappear. Any rule targeting their ID can't find
+   them in the state.
+
+2. **The LLM proposer never sees individual members after compound formation.**
+   The scene bundle presents the compound as a single entity. The proposer
+   can only emit single-effect rules for the compound ID. It cannot propose
+   per-member rotational rules because it doesn't know the members exist.
+
+### Solution paths (not yet implemented)
+
+**Path A: Include MERGED members in SceneState alongside the compound.**
+Both the compound and its members would appear in `SceneState`. Rules
+targeting e0/e10 would find their positions and fire again. However, this
+creates a duplication: the compound's centroid position coexists with the
+members' individual positions. Rules that currently target the compound ID
+would still work, AND rotational rules targeting member IDs would reactivate.
+
+**Path B: Replace compound entries with member entries in SceneState.**
+Remove the compound entity from `SceneState` and add each member individually.
+This breaks compound-level rules but fixes member-level rules. Requires
+migrating all rule references from compound IDs to member IDs.
+
+**Path C: Store per-member deltas in compound-level rules.**
+New rule structure: instead of `Effect("pos", compound_id, "delta", (dr,dc))`,
+emit `Effect("pos", compound_id, "member_delta", {0: (dr1,dc1), 10: (dr2,dc2)})`.
+This requires a new Effect op and changes to predict(). The LLM proposer
+would need to see member offsets in the bundle.
+
+**Path D: Apply compound delta to each member position.**
+Simplest but wrong for rotation. `member_new_pos = member_old_pos + compound_delta`
+only works for translation (all members move the same). For rotation, members
+move different amounts relative to the compound centroid.
+
+**Recommended: Path A** — it's the least invasive and reactivates existing
+rotational rules without schema changes. The key change would be in
+`_build_scene_state()`: include `MERGED` entities alongside `ACTIVE` ones,
+using their actual track positions (not the compound centroid). This needs
+careful handling: the compound entity still needs to be in the state for
+compound-level rules to fire, and we'd have duplicate position entries
+(compound centroid + member positions). The `predict()` function would then
+find positions for both the compound ID and member IDs, allowing both types
+of rules to fire.
+
+### Prediction-veto implementation notes (2026-07-06)
+
+The prediction-veto was implemented in `entity/builder.py`:
+- `_is_prediction_known()`: calls `predict()` on previous scene state/action
+  with the current `EffectContext`. Returns True if prediction is known AND
+  the compound entity has a predicted position.
+- `_apply_compound_grouping()`: two branches use prediction veto:
+  1. No confirmed co-movement + prediction known → preserve compound with
+     `reuse_id=True`
+  2. Confirmed members are a subset of previous compound + prediction known →
+     reject false-positive subset
+- `_build_scene_state()`: builds `SceneState` from ACTIVE entities only.
+- **Known limitation**: stale-members bug — prediction veto preserves old
+  membership without verifying members still exist. Path A (including MERGED
+  members in SceneState) would enable per-member existence checks.

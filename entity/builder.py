@@ -25,6 +25,9 @@ from dataclasses import dataclass
 from typing import cast
 
 from entity.roles import assign_roles
+from effects.context import EffectContext
+from effects.predict import predict
+from effects.state import SceneState
 from grouping.features import extract_features
 from grouping.heuristics import co_movement
 from perception.entities import Entity, EntityCatalog, LifecycleState, build_entities
@@ -72,13 +75,24 @@ class EntityBuilder:
         self._compound_original_ids: dict[int, list[int]] = {}
         self._compound_signature_map: dict[frozenset[int], int] = {}
         self._prev_controllable_id: int | None = None
+        # Prediction-veto state: previous frame's SceneState and action,
+        # plus the EffectContext for predict() checks.
+        self._prev_scene: SceneState | None = None
+        self._prev_action: int | None = None
+        self._effect_context: EffectContext | None = None
 
     def update(
         self,
         registry: ObjectRegistry,
         action_ids: list[int],
+        effect_context: EffectContext | None = None,
     ) -> tuple[LogicalRegistry, EntityCatalog]:
-        """Re-identify tracks, build entities, group compounds, assign roles."""
+        """Re-identify tracks, build entities, group compounds, assign roles.
+
+        If *effect_context* is provided, the builder uses confirmed movement
+        rules to veto compound dissolution when predict() returns a known
+        result for the compound entity.
+        """
         frame_idx = registry.frame_idx
         prev_t2e = dict(self._track_to_entity)
         prev_next_id = self._next_entity_id
@@ -152,7 +166,7 @@ class EntityBuilder:
 
         # 4. Compound grouping: merge co-moving entities into one compound
         catalog = self._apply_compound_grouping(
-            self._logical_registry, catalog, action_ids
+            self._logical_registry, catalog, action_ids, effect_context
         )
 
         # 5. Dormant / DEAD lifecycle transitions
@@ -206,6 +220,12 @@ class EntityBuilder:
             self._next_entity_id = max(
                 self._next_entity_id, max(self._catalog.entities.keys()) + 1
             )
+
+        # Save scene state and action for next frame's predict() check.
+        self._prev_scene = self._build_scene_state()
+        self._prev_action = action_ids[-1] if action_ids else None
+        self._effect_context = effect_context
+
         log.info(
             "frame=%d persist: next_id=%d t2e=%s",
             frame_idx,
@@ -272,12 +292,19 @@ class EntityBuilder:
         logical_reg: LogicalRegistry,
         catalog: EntityCatalog,
         action_ids: list[int],
+        effect_context: EffectContext | None = None,
     ) -> EntityCatalog:
         """Find co-moving entities, merge into a compound entity.
 
         Only alive entities are considered for new proposals — dead
         entities retain stale features that produce spurious matches.
         Multiple confirmed proposals are merged into one compound.
+
+        If *effect_context* is provided and a previous SceneState is
+        available, predict() is called to check whether the compound
+        entity's movement is known.  When predict() returns a known
+        result, the compound is preserved even when co-movement fails
+        to find it (e.g. because a track died during rotation).
         """
         features = extract_features(
             cast(ObjectRegistry, logical_reg), catalog, action_ids
@@ -311,8 +338,19 @@ class EntityBuilder:
                 continue
             confirmed.append(p.member_ids)
 
+        # Check whether predict() knows the compound's movement.
+        prediction_known = self._is_prediction_known(effect_context)
+
         if not confirmed:
             if self._compound_members is not None:
+                if prediction_known:
+                    log.info(
+                        "compound preserved (prediction known): members=%s",
+                        sorted(self._compound_members),
+                    )
+                    return self._merge_into_compound(
+                        catalog, self._compound_members, reuse_id=True
+                    )
                 log.info(
                     "compound dissolved: members=%s",
                     sorted(self._compound_members),
@@ -329,6 +367,24 @@ class EntityBuilder:
 
         if not all_member_ids:
             return catalog
+
+        # When co-movement finds a subset of the previous compound members
+        # but prediction says the compound should persist, reject the
+        # false-positive subset and keep the previous compound instead.
+        if (
+            self._compound_members is not None
+            and prediction_known
+            and frozenset(all_member_ids) != self._compound_members
+            and frozenset(all_member_ids).issubset(self._compound_members)
+        ):
+            log.info(
+                "compound subset rejected (prediction known): proposed=%s previous=%s",
+                sorted(all_member_ids),
+                sorted(self._compound_members),
+            )
+            return self._merge_into_compound(
+                catalog, self._compound_members, reuse_id=True
+            )
 
         prev_members = self._compound_members
         self._compound_members = frozenset(all_member_ids)
@@ -551,6 +607,52 @@ class EntityBuilder:
                 self._dormant_frames[eid] = 1
 
         return EntityCatalog(entities=merged)
+
+    def _build_scene_state(self) -> SceneState | None:
+        """Build a SceneState from the current catalog for predict().
+
+        Currently includes only ACTIVE entities. MERGED members (those inside
+        a compound) are excluded, which means rules targeting their singleton IDs
+        (e.g., e0, e10) cannot fire after compound formation. See
+        docs/brainstorms/rule-engine-v2.md "Investigation: per-member
+        prediction" for details and proposed fix (Path A: include MERGED members).
+        """
+        if self._logical_registry is None or self._catalog is None:
+            return None
+        relevant: list[tuple[int, tuple[str, object]]] = []
+        for eid in sorted(self._catalog.entities):
+            ent = self._catalog.entities[eid]
+            if ent.lifecycle.value not in ("active",):
+                continue
+            for tid in ent.members:
+                track = self._logical_registry.tracks.get(tid)
+                if track and track.alive and track.observations:
+                    last_obs = track.observations[-1]
+                    relevant.append((eid, ("pos", last_obs.centroid)))
+                    relevant.append((eid, ("size", last_obs.size)))
+                    break
+        if not relevant:
+            return None
+        relevant.sort(key=lambda t: (t[0], t[1][0]))
+        return SceneState(relevant=tuple(relevant))
+
+    def _is_prediction_known(self, ctx: EffectContext | None) -> bool:
+        """Return True if predict() returns a known result for the compound.
+
+        Known limitation: this only checks whether the compound entity has a
+        predicted position, not whether individual members still exist or can
+        be predicted. When members leave the compound, the veto may preserve
+        stale membership. See rule-engine-v2.md "Investigation: per-member
+        prediction" for the fix path (include MERGED members in SceneState).
+        """
+        if ctx is None or self._prev_scene is None or self._prev_action is None:
+            return False
+        if self._compound_entity_id is None:
+            return False
+        result = predict(self._prev_scene, self._prev_action, ctx)
+        if result.unknown:
+            return False
+        return result.state.pos(self._compound_entity_id) is not None
 
     @property
     def logical_registry(self) -> LogicalRegistry | None:

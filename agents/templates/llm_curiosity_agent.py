@@ -145,7 +145,8 @@ class LlmCuriosity(Agent):
         if latest_frame.frame and id(latest_frame) != self._last_observed_frame_id:
             self.session.ingest(latest_frame.frame, self._last_action_id)
             logical_registry, catalog = self._entity_builder.update(
-                self.session.registry, self.session.action_ids
+                self.session.registry, self.session.action_ids,
+                effect_context=self.policy.context,
             )
             self._scene = SceneSnapshot(
                 frame_idx=self.session.registry.frame_idx,
