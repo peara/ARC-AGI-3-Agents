@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Literal, Protocol, cast
 
 from .guard_parse import evaluate_guard, parse_guard_clauses
-from .state import Pos, SceneState, Terminal
+from .state import Orientation, Pos, SceneState, Terminal
 
 # ---------------------------------------------------------------------------
 # Canonical helpers for Rule.key()
@@ -138,15 +138,38 @@ class Rule:
             if effect.op == "revert":
                 if state_before is None:
                     continue
-                old_pos = state_before.pos(effect.of)
-                if old_pos is not None:
-                    result = result.with_pos(effect.of, old_pos)
+                if effect.dim == "pos":
+                    old_pos = state_before.pos(effect.of)
+                    if old_pos is not None:
+                        result = result.with_pos(effect.of, old_pos)
+                elif effect.dim == "cells":
+                    old_cells = state_before.cells(effect.of)
+                    if old_cells is not None:
+                        result = result.with_cells(effect.of, old_cells)
+                elif effect.dim == "orientation":
+                    old_orient = state_before.orientation(effect.of)
+                    if old_orient is not None:
+                        result = result.with_orientation(effect.of, old_orient)
+                elif effect.dim == "cells":
+                    old_cells = state_before.cells(effect.of)
+                    if old_cells is not None:
+                        result = result.with_cells(effect.of, old_cells)
+                else:
+                    old_val = state_before.get(effect.of, effect.dim)
+                    if old_val is not None:
+                        result = result.set_dim(effect.of, effect.dim, old_val)
             elif effect.op == "delta":
                 if effect.dim == "pos" and isinstance(effect.value, tuple):
                     cur = result.pos(effect.of)
                     if cur is not None:
                         new_pos = (cur[0] + effect.value[0], cur[1] + effect.value[1])
                         result = result.with_pos(effect.of, new_pos)
+                elif effect.dim == "orientation":
+                    cur = result.orientation(effect.of)
+                    if cur is not None:
+                        result = result.with_orientation(
+                            effect.of, (cur + int(effect.value)) % 4
+                        )
                 else:
                     if not isinstance(effect.value, int):
                         raise TypeError(
@@ -158,7 +181,10 @@ class Rule:
             elif effect.dim == "terminal":
                 result = result.with_terminal(cast(Terminal, effect.value))
             else:
-                result = result.set_dim(effect.of, effect.dim, effect.value)
+                if effect.dim == "orientation":
+                    result = result.with_orientation(effect.of, int(effect.value))
+                else:
+                    result = result.set_dim(effect.of, effect.dim, effect.value)
         return result
 
     def key(self) -> tuple[str, tuple[object, ...], tuple[object, ...]]:

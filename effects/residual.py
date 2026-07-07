@@ -25,7 +25,11 @@ def compute_residual(
     dims: tuple[str, ...],
     include_terminal: bool = False,
 ) -> tuple[ResidualEntry, ...]:
-    """Diff ``predicted`` vs ``observed`` on projected entity dims (+ terminal)."""
+    """Diff ``predicted`` vs ``observed`` on projected entity dims (+ terminal).
+
+    For ``cells`` dimension, the residual captures the full pixel-set difference
+    (predicted vs observed). For ``orientation``, it captures integer mismatches.
+    """
     out: list[ResidualEntry] = []
     for eid in entity_ids:
         for dim in dims:
