@@ -7,6 +7,7 @@ from typing import Protocol
 
 from effects.kinematics import (
     entity_exists_at,
+    entity_orientation_at,
     entity_pos_at,
     entity_size_at,
 )
@@ -42,10 +43,17 @@ def _read_size(
     return entity_size_at(reg, catalog, entity_id, frame_idx)
 
 
+def _read_orientation(
+    reg: ObjectRegistry, catalog: EntityCatalog, entity_id: int, frame_idx: int
+) -> object | None:
+    return entity_orientation_at(reg, catalog, entity_id, frame_idx)
+
+
 DIM_READERS: dict[str, DimReader] = {
     "pos": _read_pos,
     "exists": _read_exists,
     "size": _read_size,
+    "orientation": _read_orientation,
 }
 
 
@@ -57,7 +65,11 @@ def snapshot_from_registry(
     *,
     terminal: Terminal = TERMINAL_ALIVE,
 ) -> SceneState | None:
-    """Project registry/catalog into a ``SceneState`` for one frame."""
+    """Project registry/catalog into a ``SceneState`` for one frame.
+
+    Skips dimensions that return ``None`` (e.g., ``orientation`` for singletons)
+    instead of discarding the entire state.
+    """
     relevant: list[tuple[int, tuple[str, object]]] = []
     for eid in spec.entities:
         for dim in spec.dims:
@@ -66,8 +78,10 @@ def snapshot_from_registry(
                 raise ValueError(f"unsupported dim: {dim!r}")
             val = reader(reg, catalog, eid, frame_idx)
             if val is None:
-                return None
+                continue
             relevant.append((eid, (dim, val)))
+    if not relevant:
+        return None
     relevant.sort(key=lambda t: (t[0], t[1][0]))
     term = terminal if spec.include_terminal else TERMINAL_ALIVE
     return SceneState(relevant=tuple(relevant), terminal=term)

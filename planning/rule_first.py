@@ -108,19 +108,25 @@ class RuleFirstPolicy:
         return sorted(ids)
 
     def _engine_plan_spec(self, scene: SceneSnapshot) -> PlanSpec:
-        """Projection for residual-driven rule learning (all rule-tracked entities).
+        """Projection for residual-driven rule learning.
 
-        Always includes ``pos`` so the LLM rule proposer can observe position
-        changes even on the very first frame (before any movement rules exist).
-        Without this, the cold-start path only tracks ``size``, so the proposer
-        never sees movement and can't propose movement rules.
+        All tracked entities get ``pos``. Compound entities also get
+        ``orientation`` so the engine can detect rotation that isn't
+        captured by centroid movement alone. ``cells`` is internal data
+        stored in SceneState by the builder but not used as a rule dim.
         """
+        from perception.entities import LifecycleState
+
         rule_ids = self._rule_entity_ids()
         entities: list[int] = list(rule_ids)
         dims: list[str] = ["pos"]
-        # Add entities with observable sizes for size tracking
         for eid in sorted(scene.catalog.entities):
+            ent = scene.catalog.entities[eid]
+            if ent.lifecycle.value not in ("active",):
+                continue
             if eid in entities:
+                if ent.composition == "compound":
+                    dims.append("orientation")
                 continue
             if (
                 entity_size_at(scene.registry, scene.catalog, eid, scene.frame_idx)

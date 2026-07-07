@@ -31,6 +31,7 @@ from effects.state import SceneState
 from grouping.features import extract_features
 from grouping.heuristics import co_movement
 from perception.entities import Entity, EntityCatalog, LifecycleState, build_entities
+from perception.orientation import extract_orientation
 from perception.registry import ObjectRegistry, Track
 
 from .logical_registry import LogicalRegistry
@@ -444,14 +445,10 @@ class EntityBuilder:
         if reuse_id and self._compound_entity_id is not None:
             new_id = self._compound_entity_id
         else:
-            # Signature-based reuse: same logical-track member set → same id
-            if self._logical_registry is not None:
-                signature = frozenset(
-                    self._logical_registry.raw_to_logical(tid)
-                    for tid in all_members
-                )
-            else:
-                signature = frozenset(all_members)
+            # Signature-based reuse: same entity-ID member set → same compound id.
+            # Entity IDs are stable (propagated through reconciler links), unlike
+            # logical track IDs which shift when tracks rotate or change colour.
+            signature = frozenset(member_entity_ids)
             existing_id = self._compound_signature_map.get(signature)
             if existing_id is not None:
                 new_id = existing_id
@@ -611,11 +608,9 @@ class EntityBuilder:
     def _build_scene_state(self) -> SceneState | None:
         """Build a SceneState from the current catalog for predict().
 
-        Currently includes only ACTIVE entities. MERGED members (those inside
-        a compound) are excluded, which means rules targeting their singleton IDs
-        (e.g., e0, e10) cannot fire after compound formation. See
-        docs/brainstorms/rule-engine-v2.md "Investigation: per-member
-        prediction" for details and proposed fix (Path A: include MERGED members).
+        Compound entities get (pos, size, cells, orientation). Singletons get
+        (pos, size) as before. MERGED members are excluded — their cells are
+        included via the compound.
         """
         if self._logical_registry is None or self._catalog is None:
             return None
@@ -624,13 +619,38 @@ class EntityBuilder:
             ent = self._catalog.entities[eid]
             if ent.lifecycle.value not in ("active",):
                 continue
-            for tid in ent.members:
-                track = self._logical_registry.tracks.get(tid)
-                if track and track.alive and track.observations:
-                    last_obs = track.observations[-1]
-                    relevant.append((eid, ("pos", last_obs.centroid)))
-                    relevant.append((eid, ("size", last_obs.size)))
-                    break
+
+            if ent.composition == "compound":
+                all_cells: set[tuple[int, int]] = set()
+                member_tracks: list[Track] = []
+                for tid in ent.members:
+                    track = self._logical_registry.tracks.get(tid)
+                    if track and track.alive and track.observations:
+                        last_obs = track.observations[-1]
+                        all_cells.update(last_obs.cells)
+                        member_tracks.append(track)
+
+                if not all_cells:
+                    continue
+
+                cr = sum(r for r, c in all_cells) / len(all_cells)
+                cc = sum(c for r, c in all_cells) / len(all_cells)
+                relevant.append((eid, ("pos", (round(cr), round(cc)))))
+                relevant.append((eid, ("size", len(all_cells))))
+                relevant.append((eid, ("cells", frozenset(all_cells))))
+
+                orient = extract_orientation(member_tracks)
+                if orient is not None:
+                    relevant.append((eid, ("orientation", orient)))
+            else:
+                for tid in ent.members:
+                    track = self._logical_registry.tracks.get(tid)
+                    if track and track.alive and track.observations:
+                        last_obs = track.observations[-1]
+                        relevant.append((eid, ("pos", last_obs.centroid)))
+                        relevant.append((eid, ("size", last_obs.size)))
+                        break
+
         if not relevant:
             return None
         relevant.sort(key=lambda t: (t[0], t[1][0]))

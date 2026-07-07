@@ -89,6 +89,13 @@ An effect dict specifies what the rule does when its guard is satisfied:
 given dimension of entity EID. N must be non-zero.
 - **Terminal effect**: `{"dim": "terminal", "of": EID, "terminal": "win"}` \
 or `{"dim": "terminal", "of": EID, "terminal": "game_over"}`.
+- **Orientation effect**: `{"dim": "orientation", "of": EID, "op": "set", \
+"value": "N"}` — set entity EID's facing direction to a compass value \
+("N"=North, "E"=East, "S"=South, "W"=West). Use `"set"` for orientation \
+because actions in grid games set the facing direction absolutely (e.g., \
+pressing UP always faces North), not relatively. You may also use `"delta"` \
+with an integer (1=90° CW, 2=180°, 3=270° CW) but prefer `"set"` with \
+compass letters.
 - **Generic**: any `dim` string is allowed; `op` is `"delta"` (add) or `"set"` \
 (overwrite).
 
@@ -286,6 +293,17 @@ def validate_proposal(proposal: dict, scene_entities: dict[int, dict]) -> Rule |
                 return None
             for key in ("dim", "of", "op", "value"):
                 if key not in eff:
+                    return None
+            # Normalize compass letters in orientation effects
+            if eff.get("dim") == "orientation" and isinstance(eff.get("value"), str):
+                from effects.state import COMPASS_TO_ORIENT
+                compass = eff["value"].upper()
+                if compass in COMPASS_TO_ORIENT:
+                    eff["value"] = COMPASS_TO_ORIENT[compass]
+                else:
+                    log.debug(
+                        "validate_proposal: reject unknown compass value=%r", eff["value"]
+                    )
                     return None
         referenced_ids = _extract_entity_ids(guard)
         for eff in effects:

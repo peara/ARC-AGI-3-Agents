@@ -8,7 +8,7 @@ from effects.context import EffectContext
 from effects.dsl import rule_to_dsl
 from effects.residual import ResidualEntry
 from effects.rules import Rule
-from effects.state import SceneState
+from effects.state import ORIENT_TO_COMPASS, SceneState
 from perception.session import SceneSnapshot
 
 
@@ -120,15 +120,19 @@ class QueryInterface:
     def _build_residual(self) -> list[dict[str, object]]:
         if self._residual is None:
             return []
-        return [
-            {
+        out: list[dict[str, object]] = []
+        for r in self._residual:
+            entry: dict[str, object] = {
                 "dim": r.dim,
                 "entity_id": r.entity_id,
-                "predicted": r.predicted,
-                "observed": r.observed,
             }
-            for r in self._residual
-        ]
+            for key, val in [("predicted", r.predicted), ("observed", r.observed)]:
+                if r.dim == "orientation" and isinstance(val, int):
+                    entry[key] = ORIENT_TO_COMPASS.get(val, val)
+                else:
+                    entry[key] = val
+            out.append(entry)
+        return out
 
     def _build_pruned_rules(self) -> list[dict[str, object]]:
         if self._pruned_rules is None:
