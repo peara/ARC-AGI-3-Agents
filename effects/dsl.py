@@ -8,6 +8,7 @@ from perception.entities import CONTROLLABLE_ENTITY_ID
 
 from .guard_parse import parse_guard_clauses
 from .rules import Effect, Rule
+from .state import COMPASS_TO_ORIENT, ORIENT_TO_COMPASS
 
 # TypedDict-style aliases for clarity (plain dicts at runtime).
 DslRule = dict[str, Any]
@@ -33,7 +34,11 @@ def rule_to_dsl(rule: Rule) -> DslRule:
                 "dim": e.dim,
                 "of": e.of,
                 "op": e.op,
-                "value": list(e.value) if isinstance(e.value, tuple) else e.value,
+                "value": (
+                    ORIENT_TO_COMPASS.get(e.value, e.value)
+                    if e.dim == "orientation" and e.op == "set" and isinstance(e.value, int)
+                    else (list(e.value) if isinstance(e.value, tuple) else e.value)
+                ),
             }
             for e in rule.effects
         ]
@@ -51,7 +56,13 @@ def rule_to_dsl(rule: Rule) -> DslRule:
                 "of": e.of,
                 "op": e.op,
                 **(
-                    {"value": list(e.value) if isinstance(e.value, tuple) else e.value}
+                    {
+                        "value": (
+                            ORIENT_TO_COMPASS.get(e.value, e.value)
+                            if e.dim == "orientation" and e.op == "set" and isinstance(e.value, int)
+                            else (list(e.value) if isinstance(e.value, tuple) else e.value)
+                        )
+                    }
                     if e.op != "revert"
                     else {"value": ""}
                 ),
@@ -106,6 +117,8 @@ def dsl_to_rule(dsl: DslRule) -> Rule:
             value = e["value"]
             if isinstance(value, list):
                 value = tuple(value)
+            elif e.get("dim") == "orientation" and isinstance(value, str):
+                value = COMPASS_TO_ORIENT.get(value.upper(), value)
             parsed_effects.append(Effect(e["dim"], e["of"], e["op"], value))
         return Rule(
             guard_spec=guard,
@@ -122,6 +135,8 @@ def dsl_to_rule(dsl: DslRule) -> Rule:
             value = e.get("value", "")
             if op != "revert" and isinstance(value, list):
                 value = tuple(value)
+            elif e.get("dim") == "orientation" and isinstance(value, str):
+                value = COMPASS_TO_ORIENT.get(value.upper(), value)
             parsed_effects.append(Effect(e["dim"], e["of"], op, value))
         return Rule(
             guard_spec=guard,
