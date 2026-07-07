@@ -745,8 +745,8 @@ class TestCompoundSignatureMap:
         builder._compound_members = None
         builder._compound_entity_id = None
 
-        # Verify signature map still has the entry
-        sig = frozenset({10, 20})
+        # Verify signature map still has the entry (entity IDs, not track IDs)
+        sig = frozenset({0, 1})
         assert sig in builder._compound_signature_map
         assert builder._compound_signature_map[sig] == first_id
 

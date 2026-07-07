@@ -135,6 +135,75 @@ class TestRuleEngineSynthetic:
 
 
 @pytest.mark.unit
+class TestPhantomEntityRules:
+    """Rules targeting entities that no longer exist should not be confirmed."""
+
+    def test_phantom_entity_rule_not_confirmed(self):
+        """Movement rule for entity absent from observed state must not
+        accumulate support via vacuous None==None confirmation."""
+        phantom_rule = Rule(
+            guard_spec={"action": 5},
+            effects=(Effect("pos", 15, "delta", (0, 2)),),
+            support=5,
+            kind="movement",
+        )
+        ctx = EffectContext(
+            movement_rules=(phantom_rule,),
+            available_actions=(1, 2, 3, 4, 5),
+            confirm_threshold=2,
+        )
+        before = SceneState(relevant=((16, ("pos", (28, 28))),))
+        observed = SceneState(relevant=((16, ("pos", (28, 27))),))
+        ctx = confirm_rules(ctx, before, 5, observed)
+        bumped = [r for r in ctx.movement_rules if r.key() == phantom_rule.key()]
+        assert len(bumped) == 1
+        assert bumped[0].support == 5, "phantom entity rule should NOT gain support"
+
+    def test_phantom_entity_rule_pruned(self):
+        """Rules targeting phantom entities should be pruned."""
+        phantom_rule = Rule(
+            guard_spec={"action": 5},
+            effects=(Effect("pos", 15, "delta", (0, 2)),),
+            support=5,
+            kind="movement",
+        )
+        ctx = EffectContext(
+            movement_rules=(phantom_rule,),
+            available_actions=(1, 2, 3, 4, 5),
+            confirm_threshold=2,
+        )
+        before = SceneState(relevant=((16, ("pos", (28, 28))),))
+        observed = SceneState(relevant=((16, ("pos", (28, 27))),))
+        predicted = predict(before, 5, ctx)
+        residual = compute_residual(
+            predicted.state, observed, entity_ids=(16,), dims=("pos",)
+        )
+        ctx = prune_rules(ctx, before, 5, observed, residual)
+        remaining = [r for r in ctx.movement_rules if r.key() == phantom_rule.key()]
+        assert len(remaining) == 0, "phantom entity rule should be pruned"
+
+    def test_real_entity_rule_still_confirmed(self):
+        """Rules targeting entities that DO exist should still be confirmed."""
+        real_rule = Rule(
+            guard_spec={"action": 5},
+            effects=(Effect("pos", 16, "delta", (0, 2)),),
+            support=5,
+            kind="movement",
+        )
+        ctx = EffectContext(
+            movement_rules=(real_rule,),
+            available_actions=(1, 2, 3, 4, 5),
+            confirm_threshold=2,
+        )
+        before = SceneState(relevant=((16, ("pos", (28, 28))),))
+        observed = SceneState(relevant=((16, ("pos", (28, 30))),))
+        ctx = confirm_rules(ctx, before, 5, observed)
+        bumped = [r for r in ctx.movement_rules if r.key() == real_rule.key()]
+        assert len(bumped) == 1
+        assert bumped[0].support == 6, "real entity rule should gain support"
+
+
+@pytest.mark.unit
 class TestLs20CounterPropose:
     def test_entity_17_decrease_proposed_with_size_in_spec(self):
         cases = [c for c in load_manifest() if c.recording.name == "ls20-random-legal"]
@@ -748,3 +817,101 @@ class TestEngineLogCollisionKind:
         after_ctx = EffectContext(collision_rules=(col_rule,), confirm_threshold=2)
         lines = diff_effect_context(before_ctx, after_ctx)
         assert any("proposed→collision" in line for line in lines)
+
+
+@pytest.mark.unit
+class TestOrientationSetRules:
+    """Orientation SET rules: action sets facing direction absolutely."""
+
+    def test_set_orientation_applies_absolute(self):
+        rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("orientation", 0, "set", 0),),
+            support=1,
+            kind="movement",
+        )
+        ctx = EffectContext(
+            movement_rules=(rule,),
+            available_actions=(1,),
+            confirm_threshold=2,
+        )
+        before = SceneState(relevant=((0, ("orientation", 2)),))
+        nxt = predict(before, 1, ctx)
+        assert nxt.state.get(0, "orientation") == 0
+
+    def test_set_orientation_confirms_and_promotes(self):
+        rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("orientation", 0, "set", 0),),
+            support=1,
+            kind="movement",
+        )
+        ctx = EffectContext(
+            movement_rules=(rule,),
+            available_actions=(1,),
+            confirm_threshold=2,
+        )
+        before = SceneState(relevant=((0, ("orientation", 2)),))
+        observed = SceneState(relevant=((0, ("orientation", 0)),))
+        ctx = confirm_rules(ctx, before, 1, observed)
+        assert rule.key() in {r.key() for r in ctx.movement_rules}
+        bumped = [r for r in ctx.movement_rules if r.key() == rule.key()]
+        assert bumped[0].support == 2
+
+    def test_set_orientation_overrides_delta(self):
+        """When both set and delta exist for same action, set takes the
+        absolute value regardless of previous orientation."""
+        set_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("orientation", 0, "set", 3),),
+            support=2,
+            kind="movement",
+        )
+        ctx = EffectContext(
+            movement_rules=(set_rule,),
+            available_actions=(1,),
+            confirm_threshold=2,
+        )
+        for start_orient in (0, 1, 2, 3):
+            before = SceneState(relevant=((0, ("orientation", start_orient)),))
+            nxt = predict(before, 1, ctx)
+            assert nxt.state.get(0, "orientation") == 3, (
+                f"set=3 should override start={start_orient}"
+            )
+
+    def test_set_orientation_proposed_from_residual(self):
+        """Classical proposer should propose orientation set rules from residual."""
+        proposed = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("orientation", 0, "set", 0),),
+            support=1,
+            kind="movement",
+        )
+        ctx = EffectContext(
+            proposed_rules=(proposed,),
+            available_actions=(1,),
+            confirm_threshold=2,
+        )
+        before = SceneState(relevant=((0, ("orientation", 2)),))
+        observed = SceneState(relevant=((0, ("orientation", 0)),))
+        predicted = SceneState(relevant=((0, ("orientation", 2)),))
+        residual = compute_residual(
+            predicted, observed, entity_ids=(0,), dims=("orientation",)
+        )
+        assert len(residual) == 1
+        assert residual[0].observed == 0
+
+    def test_set_orientation_dsl_round_trip(self):
+        """Compass letters in DSL should round-trip through serialization."""
+        from effects.dsl import dsl_to_rule, rule_to_dsl
+
+        dsl = {
+            "kind": "movement",
+            "guard": {"action": 1},
+            "effects": [{"dim": "orientation", "of": 0, "op": "set", "value": "N"}],
+            "support": 2,
+        }
+        rule = dsl_to_rule(dsl)
+        assert rule.effects[0].value == 0, "N should map to 0"
+        roundtrip_dsl = rule_to_dsl(rule)
+        assert roundtrip_dsl["effects"][0]["value"] == "N", "0 should serialize back to N"
