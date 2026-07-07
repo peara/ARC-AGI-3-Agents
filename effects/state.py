@@ -6,12 +6,19 @@ from dataclasses import dataclass
 from typing import Literal
 
 Pos = tuple[int, int]
+Cells = frozenset[tuple[int, int]]  # pixel positions of an entity
 Terminal = Literal["alive", "game_over", "win"]
 EntityDim = tuple[int, tuple[str, object]]
 
 TERMINAL_ALIVE: Terminal = "alive"
 TERMINAL_GAME_OVER: Terminal = "game_over"
 TERMINAL_WIN: Terminal = "win"
+
+# Orientation encoding: 0=N, 1=E, 2=S, 3=W (clockwise from north).
+Orientation = int
+
+ORIENT_TO_COMPASS: dict[int, str] = {0: "N", 1: "E", 2: "S", 3: "W"}
+COMPASS_TO_ORIENT: dict[str, int] = {"N": 0, "E": 1, "S": 2, "W": 3}
 
 
 def terminal_from_state_name(
@@ -30,6 +37,12 @@ class SceneState:
 
     ``relevant`` holds per-entity ``(dim_name, value)`` pairs; ``dim_name`` is an
     open string (observed or latent). ``terminal`` is global game outcome metadata.
+
+    Supported dimensions:
+        pos         – (row, col) centroid
+        size        – int, number of cells
+        cells       – frozenset[(row, col)], absolute pixel positions
+        orientation – int (0=N, 1=E, 2=S, 3=W) for compound entities
     """
 
     relevant: tuple[EntityDim, ...]
@@ -82,3 +95,24 @@ class SceneState:
 
     def with_pos(self, entity_id: int, pos: Pos) -> SceneState:
         return self.set_dim(entity_id, "pos", pos)
+
+    def cells(self, entity_id: int) -> Cells | None:
+        val = self.get(entity_id, "cells")
+        if val is None:
+            return None
+        return val  # type: ignore[return-value]
+
+    def with_cells(self, entity_id: int, cells: Cells) -> SceneState:
+        return self.set_dim(entity_id, "cells", cells)
+
+    def orientation(self, entity_id: int) -> Orientation | None:
+        val = self.get(entity_id, "orientation")
+        if val is None:
+            return None
+        return val  # type: ignore[return-value]
+
+    def with_orientation(self, entity_id: int, orientation: Orientation) -> SceneState:
+        return self.set_dim(entity_id, "orientation", orientation)
+
+    def entity_ids_with_dim(self, dim: str) -> tuple[int, ...]:
+        return tuple(eid for eid, (name, _) in self.relevant if name == dim)

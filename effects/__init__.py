@@ -24,6 +24,7 @@ from .engine_log import (  # noqa: F401
 from .guard_parse import GuardClause, evaluate_guard, parse_guard_clauses
 from .kinematics import (
     entity_exists_at,
+    entity_orientation_at,
     entity_pos_at,
     entity_size_at,
 )
@@ -32,12 +33,15 @@ from .learn_multi import learn_counter_rules_action_only, learn_effect_context_m
 from .predict import Prediction, is_terminal_dead_end, predict, replay_predicted
 from .residual import ResidualEntry, compute_residual
 from .rules import Effect, Rule
-from .state import Pos, SceneState, Terminal, terminal_from_state_name
+from .state import Orientation, ORIENT_TO_COMPASS, COMPASS_TO_ORIENT, Pos, SceneState, Terminal, terminal_from_state_name
 from .transition_history import Transition, TransitionHistory
 
 __all__ = [
+    "COMPASS_TO_ORIENT",
     "Effect",
     "GuardClause",
+    "Orientation",
+    "ORIENT_TO_COMPASS",
     "dsl_to_rule",
     "rule_to_dsl",
     "EffectContext",
@@ -52,6 +56,7 @@ __all__ = [
     "confirm_rules",
     "engine_step",
     "entity_exists_at",
+    "entity_orientation_at",
     "entity_pos_at",
     "entity_size_at",
     "frame_meta_from_steps",
