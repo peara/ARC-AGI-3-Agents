@@ -161,9 +161,16 @@ def _rule_matches_observation(
             if after.terminal != observed.terminal:
                 return False
         else:
-            if after.get(effect.of, effect.dim) != observed.get(
-                effect.of, effect.dim
-            ):
+            obs_val = observed.get(effect.of, effect.dim)
+            pred_val = after.get(effect.of, effect.dim)
+            # If the entity doesn't exist in the observed state (None),
+            # the rule cannot be verified — treat as a mismatch rather
+            # than vacuously confirming. This prevents "phantom entity"
+            # rules (e.g., movement rules for entities that merged into
+            # compound entities) from accumulating support indefinitely.
+            if obs_val is None and pred_val is None:
+                return False
+            if pred_val != obs_val:
                 return False
     return True
 
@@ -177,6 +184,16 @@ def _rule_mispredicted(
 ) -> bool:
     if not rule.guard(state_before, action):
         return False
+    # Phantom entity check: if any effect targets an entity absent from
+    # both the predicted and observed states, the rule is unverifiable
+    # and should be pruned.
+    for effect in rule.effects:
+        if effect.dim == "terminal":
+            continue
+        obs_val = observed.get(effect.of, effect.dim)
+        pred_val = rule.apply(state_before, action).get(effect.of, effect.dim)
+        if obs_val is None and pred_val is None:
+            return True
     relevant_dims = {e.dim for e in rule.effects}
     for entry in residual:
         if entry.dim not in relevant_dims:
@@ -262,6 +279,48 @@ def propose_rules(
                 continue
             proposed.append(candidate)
             proposed_keys.add(candidate.key())
+        elif entry.dim == "orientation" and entry.entity_id is not None:
+            if entry.observed is None:
+                continue
+            observed_orient = int(entry.observed)
+            if entry.predicted is not None:
+                predicted_orient = int(entry.predicted)
+                delta_orient = (observed_orient - predicted_orient) % 4
+                if delta_orient != 0:
+                    candidate = Rule(
+                        guard_spec={"action": action},
+                        effects=(
+                            Effect("orientation", entry.entity_id, "delta", delta_orient),
+                        ),
+                        support=0,
+                        kind="movement",
+                    )
+                    if candidate.key() not in relational_keys | proposed_keys:
+                        proposed.append(candidate)
+                        proposed_keys.add(candidate.key())
+                set_candidate = Rule(
+                    guard_spec={"action": action},
+                    effects=(
+                        Effect("orientation", entry.entity_id, "set", observed_orient),
+                    ),
+                    support=0,
+                    kind="movement",
+                )
+                if set_candidate.key() not in relational_keys | proposed_keys:
+                    proposed.append(set_candidate)
+                    proposed_keys.add(set_candidate.key())
+            else:
+                candidate = Rule(
+                    guard_spec={"action": action},
+                    effects=(
+                        Effect("orientation", entry.entity_id, "set", observed_orient),
+                    ),
+                    support=0,
+                    kind="movement",
+                )
+            if candidate.key() not in relational_keys | proposed_keys:
+                proposed.append(candidate)
+                proposed_keys.add(candidate.key())
         elif entry.dim == "terminal" and controllable_id is not None:
             pos = state_before.pos(controllable_id)
             if pos is None:
