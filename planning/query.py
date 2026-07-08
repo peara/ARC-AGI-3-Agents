@@ -9,6 +9,7 @@ from effects.dsl import rule_to_dsl
 from effects.residual import ResidualEntry
 from effects.rules import Rule
 from effects.state import SceneState
+from grouping import ConfirmedGroup
 from perception.session import SceneSnapshot
 
 
@@ -34,6 +35,7 @@ class QueryInterface:
         pruned_rules: tuple[Rule, ...] | list[Rule] | None = None,
         unknowns: tuple[UnknownAction, ...] | None = None,
         observed_transition: tuple[SceneState, int, SceneState] | None = None,
+        confirmed_groups: list[ConfirmedGroup] | None = None,
     ) -> None:
         self._scene = scene
         self._ctx = ctx
@@ -43,6 +45,7 @@ class QueryInterface:
         self._pruned_rules = pruned_rules
         self._unknowns = unknowns
         self._observed_transition = observed_transition
+        self._confirmed_groups = confirmed_groups
 
     def bundle(
         self,
@@ -76,9 +79,88 @@ class QueryInterface:
         result["residual"] = self._build_residual()
         result["pruned_rules"] = self._build_pruned_rules()
         result["observed_transition"] = self._build_observed_transition()
+        result["confirmed_groups"] = self._build_groups()
+        result["coverage_gaps"] = self._build_coverage_gaps()
         return result
 
     # -- field builders -------------------------------------------------------
+
+    MAX_GROUPS = 3
+    MAX_GAP_ENTITIES = 5
+
+    def _build_groups(self) -> list[dict[str, object]]:
+        if not self._confirmed_groups:
+            return []
+        out: list[dict[str, object]] = []
+        for group in self._confirmed_groups[: self.MAX_GROUPS]:
+            out.append(
+                {
+                    "member_ids": sorted(group.member_ids),
+                    "relation": group.relation,
+                    "heuristic": group.heuristic,
+                    "confidence": group.confidence,
+                    "members": [
+                        {
+                            "entity_id": m.entity_id,
+                            "role": m.role,
+                            "label": m.label,
+                        }
+                        for m in group.members
+                    ],
+                }
+            )
+        return out
+
+    def _build_coverage_gaps(self) -> list[dict[str, object]]:
+        if self._ctx is None:
+            return []
+        all_rules = (
+            self._ctx.movement_rules
+            + self._ctx.collision_rules
+            + self._ctx.proposed_rules
+        )
+        movement_eids: set[int] = set()
+        orientation_eids: set[int] = set()
+        covered_actions: dict[int, set[int]] = {}
+        for rule in all_rules:
+            action_val = rule.guard_spec.get("action")
+            if not isinstance(action_val, int):
+                continue
+            for eff in rule.effects:
+                if eff.dim == "pos":
+                    movement_eids.add(eff.of)
+                    covered_actions.setdefault(eff.of, set()).add(action_val)
+                elif eff.dim == "orientation":
+                    orientation_eids.add(eff.of)
+                    covered_actions.setdefault(eff.of, set()).add(action_val)
+
+        gap_entities = movement_eids - orientation_eids
+        if not gap_entities:
+            return []
+
+        all_actions = set(self._ctx.available_actions)
+        gaps: list[dict[str, object]] = []
+        for eid in sorted(gap_entities):
+            if len(gaps) >= self.MAX_GAP_ENTITIES:
+                break
+            ent = self._scene.catalog.entities.get(eid)
+            if ent is None or ent.composition != "compound":
+                continue
+            if "orientation" not in ent.meta:
+                continue
+            actions_covered = covered_actions.get(eid, set())
+            actions_unknown = sorted(all_actions - actions_covered) if all_actions else []
+            gaps.append(
+                {
+                    "entity_id": eid,
+                    "has_movement_rules": True,
+                    "has_orientation_rules": False,
+                    "actions_covered": sorted(actions_covered),
+                    "actions_unknown": actions_unknown,
+                    "note": "compound entity with pos rules but no orientation rules",
+                }
+            )
+        return gaps
 
     def _build_action_legend(self) -> dict[int, str] | dict[str, str]:
         if self._action_legend is None:

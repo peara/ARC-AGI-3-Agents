@@ -142,6 +142,39 @@ positional guard.
 position-specific). For movement rules, a generic action-only guard is \
 preferred unless the movement only applies at that position.
 
+## Confirmed groups
+
+The scene bundle may include a `confirmed_groups` list. Each entry describes
+a semantic group of entities that have been observed to move together, share
+shape, be adjacent, or have a containment relationship:
+
+- `relation`: "merge" (become one entity), "nest" (container+contents),
+  "sibling" (parallel peers)
+- `members`: each has `entity_id`, `role` (player, obstacle, goal, key,
+  container, cosmetic, hud, counter, dynamic, unknown), and `label`
+  (descriptive text)
+- `confidence`: how many times this grouping was confirmed
+
+Use this to understand which entities are parts of the same physical object.
+When proposing movement rules for a compound entity, you can reference both
+the compound entity ID and its member entity IDs.
+
+## Rule coverage gaps
+
+The scene bundle may include a `coverage_gaps` list. Each entry describes an
+entity that has incomplete rule coverage:
+
+- `has_movement_rules`: whether any movement rules exist for this entity
+- `has_orientation_rules`: whether any orientation rules exist
+- `actions_covered`: actions with confirmed or proposed rules
+- `actions_unknown`: actions with no rules at all
+- `note`: human-readable explanation of the gap
+
+Use this to prioritize which rules to propose. If an entity has orientation
+changes in the residual but `has_orientation_rules: false`, propose an
+orientation rule. If an entity has `actions_unknown`, the observed transition
+likely involves one of those actions.
+
 ## Output format
 
 Respond with a single JSON object:
