@@ -24,7 +24,7 @@ from typing import Any, Callable, Protocol
 
 log = logging.getLogger(__name__)
 
-MAX_CONTENT_CHARS = 20_000
+MAX_CONTENT_CHARS = 40_000
 
 
 class LlmCallable(Protocol):
