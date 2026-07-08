@@ -45,7 +45,7 @@ def entity_exists_at(
         return None
     if ent.lifecycle in (LifecycleState.DEAD, LifecycleState.DORMANT):
         return False
-    if ent.lifecycle not in (LifecycleState.DEAD, LifecycleState.DORMANT):
+    if ent.lifecycle == LifecycleState.ACTIVE:
         return True
     for tid in ent.members:
         track = reg.tracks.get(tid)
@@ -105,8 +105,6 @@ def entity_orientation_at(
     Uses the smallest member as 'head' and largest as 'body'.
     Returns 0-3 (N/E/S/W) or None for singletons / missing data.
     """
-    import math
-
     from perception.orientation import extract_orientation
 
     ent = catalog.entities.get(entity_id)

@@ -24,10 +24,10 @@ import logging
 from dataclasses import dataclass
 from typing import cast
 
-from entity.roles import assign_roles
 from effects.context import EffectContext
 from effects.predict import predict
 from effects.state import SceneState
+from entity.roles import assign_roles
 from grouping.features import extract_features
 from grouping.heuristics import co_movement
 from perception.entities import (
@@ -101,7 +101,6 @@ class EntityBuilder:
         result for the compound entity.
         """
         frame_idx = registry.frame_idx
-        prev_t2e = dict(self._track_to_entity)
         prev_next_id = self._next_entity_id
 
         # 1. Re-identify: link dead→born tracks
