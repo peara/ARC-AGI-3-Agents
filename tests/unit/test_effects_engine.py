@@ -887,12 +887,12 @@ class TestOrientationSetRules:
             support=1,
             kind="movement",
         )
-        ctx = EffectContext(
+        _ctx = EffectContext(
             proposed_rules=(proposed,),
             available_actions=(1,),
             confirm_threshold=2,
         )
-        before = SceneState(relevant=((0, ("orientation", 2)),))
+        _before = SceneState(relevant=((0, ("orientation", 2)),))
         observed = SceneState(relevant=((0, ("orientation", 0)),))
         predicted = SceneState(relevant=((0, ("orientation", 2)),))
         residual = compute_residual(
@@ -902,9 +902,10 @@ class TestOrientationSetRules:
         assert residual[0].observed == 0
 
     def test_set_orientation_dsl_round_trip(self):
-        """Compass letters in DSL should round-trip through serialization."""
+        """Orientation values round-trip as integers in DSL serialization."""
         from effects.dsl import dsl_to_rule, rule_to_dsl
 
+        # Compass string input is accepted for backward compat, parsed to int.
         dsl = {
             "kind": "movement",
             "guard": {"action": 1},
@@ -914,4 +915,4 @@ class TestOrientationSetRules:
         rule = dsl_to_rule(dsl)
         assert rule.effects[0].value == 0, "N should map to 0"
         roundtrip_dsl = rule_to_dsl(rule)
-        assert roundtrip_dsl["effects"][0]["value"] == "N", "0 should serialize back to N"
+        assert roundtrip_dsl["effects"][0]["value"] == 0, "orientation should serialize as integer, not compass letter"

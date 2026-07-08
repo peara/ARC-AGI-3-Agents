@@ -90,12 +90,14 @@ given dimension of entity EID. N must be non-zero.
 - **Terminal effect**: `{"dim": "terminal", "of": EID, "terminal": "win"}` \
 or `{"dim": "terminal", "of": EID, "terminal": "game_over"}`.
 - **Orientation effect**: `{"dim": "orientation", "of": EID, "op": "set", \
-"value": "N"}` — set entity EID's facing direction to a compass value \
-("N"=North, "E"=East, "S"=South, "W"=West). Use `"set"` for orientation \
-because actions in grid games set the facing direction absolutely (e.g., \
-pressing UP always faces North), not relatively. You may also use `"delta"` \
-with an integer (1=90° CW, 2=180°, 3=270° CW) but prefer `"set"` with \
-compass letters.
+"value": N}` — set entity EID's orientation to N (an integer 0-3). Use `"set"` \
+when the action sets an absolute orientation (e.g., action 1 always makes the \
+entity face direction 0). Use `"delta"` with an integer (1=90° clockwise, \
+2=180°, 3=270° clockwise) when the action rotates relative to the current \
+orientation. Choose `set` or `delta` based on what you observe: if the same \
+action always produces the same absolute orientation regardless of starting \
+orientation, use `set`. If the orientation change is relative to the starting \
+orientation, use `delta`.
 - **Generic**: any `dim` string is allowed; `op` is `"delta"` (add) or `"set"` \
 (overwrite).
 
@@ -182,6 +184,12 @@ For `delta` and `terminal` kinds, use `"effect"` (singular) instead of \
 4. Pressing action 3 increments entity 5's size by 1 (observed 4 times):
 ```json
 {"kind": "delta", "guard": {"action": 3}, "effect": {"dim": "size", "of": 5, "delta": 1}, "support": 4}
+```
+
+5. Action 1 sets entity 0's orientation to 0 (always faces direction 0, \
+regardless of starting orientation):
+```json
+{"kind": "movement", "guard": {"action": 1}, "effects": [{"dim": "orientation", "of": 0, "op": "set", "value": 0}], "support": 3}
 ```
 """
 
