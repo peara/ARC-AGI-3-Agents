@@ -167,22 +167,35 @@ def build_entities(
     inherit = prev_track_to_entity or {}
     entities: dict[int, Entity] = {}
     next_id = next_id_start
+    frame_idx = reg.frame_idx
 
     for tid in sorted(reg.tracks):
         eid = inherit.get(tid, next_id)
         if eid not in entities:
+            members = frozenset({tid})
+            centroid, size, cells, bbox = compute_entity_aggregates(reg, members, frame_idx)
             entities[eid] = Entity(
                 id=eid,
-                members=frozenset({tid}),
+                members=members,
                 composition="singleton",
+                centroid=centroid,
+                size=size,
+                cells=cells,
+                bbox=bbox,
             )
             if eid >= next_id:
                 next_id = eid + 1
         else:
+            members = frozenset({tid})
+            centroid, size, cells, bbox = compute_entity_aggregates(reg, members, frame_idx)
             entities[next_id] = Entity(
                 id=next_id,
-                members=frozenset({tid}),
+                members=members,
                 composition="singleton",
+                centroid=centroid,
+                size=size,
+                cells=cells,
+                bbox=bbox,
             )
             next_id += 1
 

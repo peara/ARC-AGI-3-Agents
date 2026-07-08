@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from perception.entities import EntityCatalog
+from perception.entities import EntityCatalog, LifecycleState
 from perception.registry import ObjectRegistry, Track
 
 from .state import Cells, Orientation, Pos
@@ -21,6 +21,8 @@ def entity_pos_at(
     ent = catalog.entities.get(entity_id)
     if ent is None:
         return None
+    if ent.centroid is not None:
+        return ent.centroid
     cents: list[tuple[float, float]] = []
     for tid in ent.members:
         track = reg.tracks.get(tid)
@@ -41,6 +43,10 @@ def entity_exists_at(
     ent = catalog.entities.get(entity_id)
     if ent is None:
         return None
+    if ent.lifecycle in (LifecycleState.DEAD, LifecycleState.DORMANT):
+        return False
+    if ent.lifecycle not in (LifecycleState.DEAD, LifecycleState.DORMANT):
+        return True
     for tid in ent.members:
         track = reg.tracks.get(tid)
         if track is None or not track.alive:
@@ -56,6 +62,8 @@ def entity_size_at(
     ent = catalog.entities.get(entity_id)
     if ent is None:
         return None
+    if ent.size is not None:
+        return ent.size
     total = 0
     for tid in ent.members:
         track = reg.tracks.get(tid)
@@ -75,6 +83,8 @@ def entity_cells_at(
     ent = catalog.entities.get(entity_id)
     if ent is None:
         return None
+    if ent.cells is not None:
+        return ent.cells
     all_cells: set[tuple[int, int]] = set()
     for tid in ent.members:
         track = reg.tracks.get(tid)

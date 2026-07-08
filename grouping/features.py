@@ -38,6 +38,8 @@ def extract_features(
     for tid, eid in track_to_entity.items():
         entity_tracks[eid].append(tid)
 
+    current_frame = len(action_ids) - 1 if action_ids else -1
+
     features: dict[int, EntityFeature] = {}
     for eid, ent in catalog.entities.items():
         member_tids = entity_tracks.get(eid, [])
@@ -56,10 +58,17 @@ def extract_features(
             if track is None:
                 continue
             for obs in track.observations:
-                all_positions.append(obs.centroid)
-                all_bboxes.append(obs.bbox)
-                all_sizes.append(obs.size)
-                all_cell_counts.append(len(obs.cells))
+                is_current = obs.frame_idx == current_frame
+
+                # Historical per-observation spatial data (needed for adjacency,
+                # static_bounded, shape analysis across frames).
+                # Current-frame centroid/bbox/size/cells come from entity fields
+                # below; only historical observations use the registry path.
+                if not is_current:
+                    all_positions.append(obs.centroid)
+                    all_bboxes.append(obs.bbox)
+                    all_sizes.append(obs.size)
+                    all_cell_counts.append(len(obs.cells))
                 all_shape_keys.append(obs.shape_key)
                 has_observation = True
 
@@ -75,6 +84,18 @@ def extract_features(
                     all_displacements.append(cur.displacement)
                 else:
                     all_displacements.append(None)
+
+        # Current-frame entity-level aggregates (authoritative for compound
+        # entities where per-track observations don't yield correct aggregates).
+        if ent.centroid is not None:
+            all_positions.append(ent.centroid)
+            has_observation = True
+        if ent.bbox is not None:
+            all_bboxes.append(ent.bbox)
+        if ent.size is not None:
+            all_sizes.append(ent.size)
+        if ent.cells is not None:
+            all_cell_counts.append(len(ent.cells))
 
         if not has_observation:
             continue

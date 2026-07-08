@@ -50,22 +50,37 @@ class SceneSnapshot:
         return ent.id if ent else None
 
     def controllable_pos(self) -> Pos | None:
+        ctrl = self.controllable()
+        if ctrl is not None and ctrl.centroid is not None:
+            return ctrl.centroid
         eid = self.controllable_id()
         if eid is None:
             return None
         return entity_pos_at(self.registry, self.catalog, eid, self.frame_idx)
 
     def entity_pos(self, entity_id: int) -> Pos | None:
+        ent = self.catalog.entities.get(entity_id)
+        if ent is not None and ent.centroid is not None:
+            return ent.centroid
         return entity_pos_at(
             self.registry, self.catalog, entity_id, self.frame_idx
         )
 
     def entity_exists(self, entity_id: int) -> bool | None:
+        ent = self.catalog.entities.get(entity_id)
+        if ent is not None:
+            if ent.lifecycle in (LifecycleState.DEAD, LifecycleState.DORMANT):
+                return False
+            if ent.lifecycle == LifecycleState.ACTIVE:
+                return True
         return entity_exists_at(
             self.registry, self.catalog, entity_id, self.frame_idx
         )
 
     def entity_size(self, entity_id: int) -> int | None:
+        ent = self.catalog.entities.get(entity_id)
+        if ent is not None and ent.size is not None:
+            return ent.size
         return entity_size_at(
             self.registry, self.catalog, entity_id, self.frame_idx
         )
@@ -73,6 +88,8 @@ class SceneSnapshot:
     def _entity_bbox(self, entity_id: int) -> list[int] | None:
         """Bounding box [rmin, cmin, rmax, cmax] of entity at current frame."""
         ent = self.catalog.entities.get(entity_id)
+        if ent is not None and ent.bbox is not None:
+            return list(ent.bbox)
         if ent is None:
             return None
         bboxes: list[tuple[int, int, int, int]] = []
@@ -170,7 +187,13 @@ class SceneSnapshot:
         for eid, ent in sorted(self.catalog.entities.items()):
             if ent.lifecycle in (LifecycleState.DORMANT, LifecycleState.DEAD):
                 continue
-            pos = self.entity_pos(eid)
+            pos_raw = ent.centroid or self.entity_pos(eid)
+            pos = list(pos_raw) if pos_raw is not None else None
+            bbox = (
+                list(ent.bbox)
+                if ent.bbox is not None
+                else self._entity_bbox(eid)
+            )
             traj = self._entity_trajectory(eid)
             member_roles = [
                 track_roles[tid]["role"]
@@ -186,8 +209,8 @@ class SceneSnapshot:
                     "members": sorted(ent.members),
                     "member_track_roles": member_roles,
                     "affordances": dict(ent.affordances),
-                    "pos": list(pos) if pos is not None else None,
-                    "bbox": self._entity_bbox(eid),
+                    "pos": pos,
+                    "bbox": bbox,
                     "trajectory": traj,
                     "meta": {
                         k: v

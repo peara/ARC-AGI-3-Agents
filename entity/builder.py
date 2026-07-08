@@ -30,7 +30,13 @@ from effects.predict import predict
 from effects.state import SceneState
 from grouping.features import extract_features
 from grouping.heuristics import co_movement
-from perception.entities import Entity, EntityCatalog, LifecycleState, build_entities
+from perception.entities import (
+    Entity,
+    EntityCatalog,
+    LifecycleState,
+    build_entities,
+    compute_entity_aggregates,
+)
 from perception.orientation import extract_orientation
 from perception.registry import ObjectRegistry, Track
 
@@ -427,6 +433,14 @@ class EntityBuilder:
             if ent is not None:
                 all_members.update(ent.members)
 
+        frame_idx = self._logical_registry.frame_idx if self._logical_registry is not None else 0
+        reg = cast(ObjectRegistry, self._logical_registry) if self._logical_registry is not None else None
+        compound_centroid, compound_size, compound_cells, compound_bbox = (
+            compute_entity_aggregates(reg, frozenset(all_members), frame_idx)
+            if reg is not None
+            else (None, None, None, None)
+        )
+
         kept: dict[int, Entity] = {}
         for eid, ent in catalog.entities.items():
             if eid in member_entity_ids:
@@ -435,6 +449,10 @@ class EntityBuilder:
                     members=ent.members,
                     composition=ent.composition,
                     role=ent.role,
+                    centroid=ent.centroid,
+                    size=ent.size,
+                    cells=ent.cells,
+                    bbox=ent.bbox,
                     affordances=ent.affordances,
                     meta=ent.meta,
                     lifecycle=LifecycleState.MERGED,
@@ -461,6 +479,10 @@ class EntityBuilder:
             id=new_id,
             members=frozenset(all_members),
             composition="compound",
+            centroid=compound_centroid,
+            size=compound_size,
+            cells=compound_cells,
+            bbox=compound_bbox,
             lifecycle=LifecycleState.ACTIVE,
         )
         self._compound_entity_id = new_id
@@ -483,12 +505,19 @@ class EntityBuilder:
 
         original_ids = self._compound_original_ids.get(compound_id, [])
 
+        frame_idx = self._logical_registry.frame_idx if self._logical_registry is not None else 0
+        reg = cast(ObjectRegistry, self._logical_registry) if self._logical_registry is not None else None
+
         # Mark the compound entity as DEAD
         kept: dict[int, Entity] = dict(catalog.entities)
         kept[compound_id] = Entity(
             id=compound_id,
             members=compound_ent.members,
             composition=compound_ent.composition,
+            centroid=compound_ent.centroid,
+            size=compound_ent.size,
+            cells=compound_ent.cells,
+            bbox=compound_ent.bbox,
             role=compound_ent.role,
             affordances=compound_ent.affordances,
             meta=compound_ent.meta,
@@ -508,10 +537,20 @@ class EntityBuilder:
             if not tracks_for_member:
                 continue
 
+            member_frozen = frozenset(tracks_for_member)
+            centroid, size, cells, bbox = (
+                compute_entity_aggregates(reg, member_frozen, frame_idx)
+                if reg is not None
+                else (None, None, None, None)
+            )
             kept[orig_id] = Entity(
                 id=orig_id,
-                members=frozenset(tracks_for_member),
+                members=member_frozen,
                 composition="singleton",
+                centroid=centroid,
+                size=size,
+                cells=cells,
+                bbox=bbox,
                 lifecycle=LifecycleState.ACTIVE,
             )
 
@@ -547,26 +586,38 @@ class EntityBuilder:
             if prev_lifecycle == LifecycleState.DEAD:
                 merged[eid] = Entity(
                     id=ent.id, members=ent.members,
-                    composition=ent.composition, lifecycle=LifecycleState.DEAD,
+                    composition=ent.composition,
+                    centroid=ent.centroid, size=ent.size,
+                    cells=ent.cells, bbox=ent.bbox,
+                    lifecycle=LifecycleState.DEAD,
                 )
             elif prev_lifecycle == LifecycleState.DORMANT or eid in self._dormant_frames:
                 frames = self._dormant_frames.get(eid, 0) + 1
                 if frames > self._dormant_ttl:
                     merged[eid] = Entity(
                         id=ent.id, members=ent.members,
-                        composition=ent.composition, lifecycle=LifecycleState.DEAD,
+                        composition=ent.composition,
+                        centroid=ent.centroid, size=ent.size,
+                        cells=ent.cells, bbox=ent.bbox,
+                        lifecycle=LifecycleState.DEAD,
                     )
                     self._dormant_frames.pop(eid, None)
                 else:
                     merged[eid] = Entity(
                         id=ent.id, members=ent.members,
-                        composition=ent.composition, lifecycle=LifecycleState.DORMANT,
+                        composition=ent.composition,
+                        centroid=ent.centroid, size=ent.size,
+                        cells=ent.cells, bbox=ent.bbox,
+                        lifecycle=LifecycleState.DORMANT,
                     )
                     self._dormant_frames[eid] = frames
             else:
                 merged[eid] = Entity(
                     id=ent.id, members=ent.members,
-                    composition=ent.composition, lifecycle=LifecycleState.DORMANT,
+                    composition=ent.composition,
+                    centroid=ent.centroid, size=ent.size,
+                    cells=ent.cells, bbox=ent.bbox,
+                    lifecycle=LifecycleState.DORMANT,
                 )
                 self._dormant_frames[eid] = 1
 
@@ -580,26 +631,38 @@ class EntityBuilder:
             if prev_ent.lifecycle == LifecycleState.DEAD:
                 merged[eid] = Entity(
                     id=prev_ent.id, members=prev_ent.members,
-                    composition=prev_ent.composition, lifecycle=LifecycleState.DEAD,
+                    composition=prev_ent.composition,
+                    centroid=prev_ent.centroid, size=prev_ent.size,
+                    cells=prev_ent.cells, bbox=prev_ent.bbox,
+                    lifecycle=LifecycleState.DEAD,
                 )
             elif prev_ent.lifecycle == LifecycleState.DORMANT or eid in self._dormant_frames:
                 frames = self._dormant_frames.get(eid, 0) + 1
                 if frames > self._dormant_ttl:
                     merged[eid] = Entity(
                         id=prev_ent.id, members=prev_ent.members,
-                        composition=prev_ent.composition, lifecycle=LifecycleState.DEAD,
+                        composition=prev_ent.composition,
+                        centroid=prev_ent.centroid, size=prev_ent.size,
+                        cells=prev_ent.cells, bbox=prev_ent.bbox,
+                        lifecycle=LifecycleState.DEAD,
                     )
                     self._dormant_frames.pop(eid, None)
                 else:
                     merged[eid] = Entity(
                         id=prev_ent.id, members=prev_ent.members,
-                        composition=prev_ent.composition, lifecycle=LifecycleState.DORMANT,
+                        composition=prev_ent.composition,
+                        centroid=prev_ent.centroid, size=prev_ent.size,
+                        cells=prev_ent.cells, bbox=prev_ent.bbox,
+                        lifecycle=LifecycleState.DORMANT,
                     )
                     self._dormant_frames[eid] = frames
             else:
                 merged[eid] = Entity(
                     id=prev_ent.id, members=prev_ent.members,
-                    composition=prev_ent.composition, lifecycle=LifecycleState.DORMANT,
+                    composition=prev_ent.composition,
+                    centroid=prev_ent.centroid, size=prev_ent.size,
+                    cells=prev_ent.cells, bbox=prev_ent.bbox,
+                    lifecycle=LifecycleState.DORMANT,
                 )
                 self._dormant_frames[eid] = 1
 
@@ -621,35 +684,26 @@ class EntityBuilder:
                 continue
 
             if ent.composition == "compound":
-                all_cells: set[tuple[int, int]] = set()
+                if ent.centroid is None or ent.size is None or ent.cells is None:
+                    continue
+
+                relevant.append((eid, ("pos", ent.centroid)))
+                relevant.append((eid, ("size", ent.size)))
+                relevant.append((eid, ("cells", ent.cells)))
+
                 member_tracks: list[Track] = []
                 for tid in ent.members:
                     track = self._logical_registry.tracks.get(tid)
                     if track and track.alive and track.observations:
-                        last_obs = track.observations[-1]
-                        all_cells.update(last_obs.cells)
                         member_tracks.append(track)
-
-                if not all_cells:
-                    continue
-
-                cr = sum(r for r, c in all_cells) / len(all_cells)
-                cc = sum(c for r, c in all_cells) / len(all_cells)
-                relevant.append((eid, ("pos", (round(cr), round(cc)))))
-                relevant.append((eid, ("size", len(all_cells))))
-                relevant.append((eid, ("cells", frozenset(all_cells))))
-
                 orient = extract_orientation(member_tracks)
                 if orient is not None:
                     relevant.append((eid, ("orientation", orient)))
             else:
-                for tid in ent.members:
-                    track = self._logical_registry.tracks.get(tid)
-                    if track and track.alive and track.observations:
-                        last_obs = track.observations[-1]
-                        relevant.append((eid, ("pos", last_obs.centroid)))
-                        relevant.append((eid, ("size", last_obs.size)))
-                        break
+                if ent.centroid is None or ent.size is None:
+                    continue
+                relevant.append((eid, ("pos", ent.centroid)))
+                relevant.append((eid, ("size", ent.size)))
 
         if not relevant:
             return None
