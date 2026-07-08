@@ -9,6 +9,7 @@ import pytest
 
 from effects import Effect, EffectContext, Rule
 from effects.residual import ResidualEntry
+from grouping import ConfirmedGroup, MemberLabel
 from planning.query import QueryInterface
 
 
@@ -250,3 +251,125 @@ class TestQueryInterface:
         entities = bundle["scene"]["entities"]
         assert entities[0]["orientation"] == 2
         assert entities[1]["orientation"] is None
+
+    def test_build_groups_empty(self):
+        scene = _make_scene()
+        qi = QueryInterface(scene, confirmed_groups=None)
+        assert qi._build_groups() == []
+        qi = QueryInterface(scene, confirmed_groups=[])
+        assert qi._build_groups() == []
+
+    def test_build_groups_with_data(self):
+        scene = _make_scene()
+        groups = [
+            ConfirmedGroup(
+                member_ids=frozenset({1, 2}),
+                relation="merge",
+                heuristic="co_movement",
+                members=(
+                    MemberLabel(entity_id=1, role="player", label="head"),
+                    MemberLabel(entity_id=2, role="cosmetic", label="hat"),
+                ),
+                confidence=5,
+            )
+        ]
+        qi = QueryInterface(scene, confirmed_groups=groups)
+        res = qi._build_groups()
+        assert len(res) == 1
+        assert res[0] == {
+            "member_ids": [1, 2],
+            "relation": "merge",
+            "heuristic": "co_movement",
+            "confidence": 5,
+            "members": [
+                {"entity_id": 1, "role": "player", "label": "head"},
+                {"entity_id": 2, "role": "cosmetic", "label": "hat"},
+            ],
+        }
+
+    def test_build_groups_cap(self):
+        scene = _make_scene()
+        groups = [
+            ConfirmedGroup(frozenset({i}), "none", "test", (), 1)
+            for i in range(5)
+        ]
+        qi = QueryInterface(scene, confirmed_groups=groups)
+        res = qi._build_groups()
+        assert len(res) == QueryInterface.MAX_GROUPS
+        assert len(res) == 3
+
+    def test_build_coverage_gaps_no_context(self):
+        scene = _make_scene()
+        qi = QueryInterface(scene, ctx=None)
+        assert qi._build_coverage_gaps() == []
+
+    def test_build_coverage_gaps_with_gap(self):
+        scene = _make_scene()
+        entity = MagicMock()
+        entity.composition = "compound"
+        entity.meta = {"orientation": True}
+        scene.catalog.entities = {10: entity}
+
+        rule_pos = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 10, "delta", (1, 0)),),
+            support=1,
+        )
+        ctx = EffectContext(
+            movement_rules=(rule_pos,),
+            available_actions=(1, 2),
+        )
+        qi = QueryInterface(scene, ctx=ctx)
+        gaps = qi._build_coverage_gaps()
+        
+        assert len(gaps) == 1
+        gap = gaps[0]
+        assert gap["entity_id"] == 10
+        assert gap["has_movement_rules"] is True
+        assert gap["has_orientation_rules"] is False
+        assert gap["actions_covered"] == [1]
+        assert gap["actions_unknown"] == [2]
+
+    def test_build_coverage_gaps_no_gap(self):
+        scene = _make_scene()
+        entity = MagicMock()
+        entity.composition = "compound"
+        entity.meta = {"orientation": True}
+        scene.catalog.entities = {10: entity}
+
+        rule_pos = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 10, "delta", (1, 0)),),
+            support=1,
+        )
+        rule_ori = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("orientation", 10, "set", 2),),
+            support=1,
+        )
+        ctx = EffectContext(
+            movement_rules=(rule_pos,),
+            proposed_rules=(rule_ori,),
+            available_actions=(1,),
+        )
+        qi = QueryInterface(scene, ctx=ctx)
+        assert qi._build_coverage_gaps() == []
+
+    def test_build_coverage_gaps_non_compound(self):
+        scene = _make_scene()
+        entity = MagicMock()
+        entity.composition = "singleton"
+        entity.meta = {"orientation": True}
+        scene.catalog.entities = {10: entity}
+
+        rule_pos = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 10, "delta", (1, 0)),),
+            support=1,
+        )
+        ctx = EffectContext(
+            movement_rules=(rule_pos,),
+            available_actions=(1,),
+        )
+        qi = QueryInterface(scene, ctx=ctx)
+        assert qi._build_coverage_gaps() == []
