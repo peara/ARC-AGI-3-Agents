@@ -37,7 +37,7 @@ from perception.entities import (
     build_entities,
     compute_entity_aggregates,
 )
-from perception.orientation import extract_orientation
+from perception.orientation import detect_rotation
 from perception.registry import ObjectRegistry, Track
 
 from .logical_registry import LogicalRegistry
@@ -82,6 +82,9 @@ class EntityBuilder:
         self._compound_original_ids: dict[int, list[int]] = {}
         self._compound_signature_map: dict[frozenset[int], int] = {}
         self._prev_controllable_id: int | None = None
+        # Orientation tracking: cell-based rotation detection per entity.
+        self._prev_cells_by_entity: dict[int, frozenset[tuple[int, int]]] = {}
+        self._orientation_by_entity: dict[int, int] = {}
         # Prediction-veto state: previous frame's SceneState and action,
         # plus the EffectContext for predict() checks.
         self._prev_scene: SceneState | None = None
@@ -231,6 +234,21 @@ class EntityBuilder:
         self._prev_scene = self._build_scene_state()
         self._prev_action = action_ids[-1] if action_ids else None
         self._effect_context = effect_context
+
+        # Persist cell snapshots for orientation tracking.
+        self._prev_cells_by_entity = {
+            eid: ent.cells
+            for eid, ent in self._catalog.entities.items()
+            if ent.lifecycle == LifecycleState.ACTIVE and ent.cells is not None
+        }
+        # Remove orientation for DEAD entities (not dormant — dormant may reactivate).
+        dead_eids = {
+            eid for eid, ent in self._catalog.entities.items()
+            if ent.lifecycle == LifecycleState.DEAD
+        }
+        for eid in dead_eids:
+            self._orientation_by_entity.pop(eid, None)
+            self._prev_cells_by_entity.pop(eid, None)
 
         log.info(
             "frame=%d persist: next_id=%d t2e=%s",
@@ -575,6 +593,8 @@ class EntityBuilder:
             if any(tid in alive_tids for tid in ent.members):
                 if eid in self._dormant_frames:
                     del self._dormant_frames[eid]
+                    self._orientation_by_entity[eid] = 0
+                    self._prev_cells_by_entity.pop(eid, None)
                 continue
 
             prev_lifecycle = LifecycleState.ACTIVE
@@ -670,9 +690,9 @@ class EntityBuilder:
     def _build_scene_state(self) -> SceneState | None:
         """Build a SceneState from the current catalog for predict().
 
-        Compound entities get (pos, size, cells, orientation). Singletons get
-        (pos, size) as before. MERGED members are excluded — their cells are
-        included via the compound.
+        Both singletons and compounds get (pos, size). Entities with >= 2
+        cells also get (cells, orientation). MERGED members are excluded —
+        their cells are included via the compound.
         """
         if self._logical_registry is None or self._catalog is None:
             return None
@@ -681,28 +701,28 @@ class EntityBuilder:
             ent = self._catalog.entities[eid]
             if ent.lifecycle.value not in ("active",):
                 continue
+            if ent.centroid is None or ent.size is None:
+                continue
 
-            if ent.composition == "compound":
-                if ent.centroid is None or ent.size is None or ent.cells is None:
-                    continue
+            relevant.append((eid, ("pos", ent.centroid)))
+            relevant.append((eid, ("size", ent.size)))
 
-                relevant.append((eid, ("pos", ent.centroid)))
-                relevant.append((eid, ("size", ent.size)))
+            if ent.cells is not None and len(ent.cells) >= 2:
+                if eid not in self._orientation_by_entity:
+                    self._orientation_by_entity[eid] = 0
+
+                if eid in self._prev_cells_by_entity:
+                    rot = detect_rotation(
+                        self._prev_cells_by_entity[eid], ent.cells
+                    )
+                    if rot is not None:
+                        self._orientation_by_entity[eid] = (
+                            self._orientation_by_entity[eid] + rot
+                        ) % 4
+
+                ent.meta["orientation"] = self._orientation_by_entity[eid]
                 relevant.append((eid, ("cells", ent.cells)))
-
-                member_tracks: list[Track] = []
-                for tid in ent.members:
-                    track = self._logical_registry.tracks.get(tid)
-                    if track and track.alive and track.observations:
-                        member_tracks.append(track)
-                orient = extract_orientation(member_tracks)
-                if orient is not None:
-                    relevant.append((eid, ("orientation", orient)))
-            else:
-                if ent.centroid is None or ent.size is None:
-                    continue
-                relevant.append((eid, ("pos", ent.centroid)))
-                relevant.append((eid, ("size", ent.size)))
+                relevant.append((eid, ("orientation", self._orientation_by_entity[eid])))
 
         if not relevant:
             return None
