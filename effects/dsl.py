@@ -8,7 +8,7 @@ from perception.entities import CONTROLLABLE_ENTITY_ID
 
 from .guard_parse import parse_guard_clauses
 from .rules import Effect, Rule
-from .state import COMPASS_TO_ORIENT, ORIENT_TO_COMPASS
+from .state import COMPASS_TO_ORIENT
 
 # TypedDict-style aliases for clarity (plain dicts at runtime).
 DslRule = dict[str, Any]
@@ -35,10 +35,9 @@ def rule_to_dsl(rule: Rule) -> DslRule:
                 "of": e.of,
                 "op": e.op,
                 "value": (
-                    ORIENT_TO_COMPASS.get(e.value, e.value)
-                    if e.dim == "orientation" and e.op == "set" and isinstance(e.value, int)
-                    else (list(e.value) if isinstance(e.value, tuple) else e.value)
+                    list(e.value) if isinstance(e.value, tuple) else e.value
                 ),
+
             }
             for e in rule.effects
         ]
@@ -58,10 +57,9 @@ def rule_to_dsl(rule: Rule) -> DslRule:
                 **(
                     {
                         "value": (
-                            ORIENT_TO_COMPASS.get(e.value, e.value)
-                            if e.dim == "orientation" and e.op == "set" and isinstance(e.value, int)
-                            else (list(e.value) if isinstance(e.value, tuple) else e.value)
+                            list(e.value) if isinstance(e.value, tuple) else e.value
                         )
+
                     }
                     if e.op != "revert"
                     else {"value": ""}

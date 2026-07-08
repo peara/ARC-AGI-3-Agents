@@ -8,7 +8,7 @@ from effects.context import EffectContext
 from effects.dsl import rule_to_dsl
 from effects.residual import ResidualEntry
 from effects.rules import Rule
-from effects.state import ORIENT_TO_COMPASS, SceneState
+from effects.state import SceneState
 from perception.session import SceneSnapshot
 
 
@@ -127,10 +127,7 @@ class QueryInterface:
                 "entity_id": r.entity_id,
             }
             for key, val in [("predicted", r.predicted), ("observed", r.observed)]:
-                if r.dim == "orientation" and isinstance(val, int):
-                    entry[key] = ORIENT_TO_COMPASS.get(val, val)
-                else:
-                    entry[key] = val
+                entry[key] = val
             out.append(entry)
         return out
 
