@@ -136,6 +136,13 @@ class SceneSnapshot:
             out["shape_key_cells"] = shape_keys[-1]
         return out
 
+    def _entity_orientation(self, entity_id: int) -> int | None:
+        """Get orientation from Entity.meta if present."""
+        ent = self.catalog.entities.get(entity_id)
+        if ent is not None and "orientation" in ent.meta:
+            return int(ent.meta["orientation"])
+        return None
+
     def _registry_events(self) -> list[dict[str, object]]:
         events: list[dict[str, object]] = []
         for ev in self.registry.events:
@@ -210,6 +217,7 @@ class SceneSnapshot:
                     "member_track_roles": member_roles,
                     "affordances": dict(ent.affordances),
                     "pos": pos,
+                    "orientation": self._entity_orientation(eid),
                     "bbox": bbox,
                     "trajectory": traj,
                     "meta": {

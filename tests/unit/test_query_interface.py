@@ -233,3 +233,20 @@ class TestQueryInterface:
         assert dsl["kind"] == "delta"
         assert dsl["guard"] == {"action": 2}
         assert dsl["effect"]["of"] == 10
+
+    def test_bundle_scene_summary_orientation(self):
+        """Verify orientation field is present in scene summary."""
+        summary = {
+            "frame_idx": 0,
+            "n_observed": 2,
+            "entities": [
+                {"id": 1, "orientation": 2},
+                {"id": 2, "orientation": None},
+            ],
+        }
+        scene = _make_scene(summary_dict=summary)
+        qi = QueryInterface(scene)
+        bundle = qi.bundle()
+        entities = bundle["scene"]["entities"]
+        assert entities[0]["orientation"] == 2
+        assert entities[1]["orientation"] is None
