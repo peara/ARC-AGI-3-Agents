@@ -39,11 +39,67 @@ class Entity:
     members: frozenset[int]
     composition: str  # "singleton" | "compound" | "container" (later)
     role: str | None = None
+    centroid: tuple[int, int] | None = None
+    size: int | None = None
+    cells: frozenset[tuple[int, int]] | None = None
+    bbox: tuple[int, int, int, int] | None = None
     affordances: dict[str, bool | None] = field(
         default_factory=lambda: dict(DEFAULT_AFFORDANCES)
     )
     meta: dict[str, object] = field(default_factory=dict)
     lifecycle: LifecycleState = LifecycleState.ACTIVE
+
+
+def compute_entity_aggregates(
+    reg: ObjectRegistry,
+    members: frozenset[int],
+    frame_idx: int,
+) -> tuple[
+    tuple[int, int] | None,
+    int | None,
+    frozenset[tuple[int, int]] | None,
+    tuple[int, int, int, int] | None,
+]:
+    """Compute aggregated spatial properties for an entity's members at a frame."""
+    if not members:
+        return None, None, None, None
+
+    member_obs = []
+    for tid in members:
+        track = reg.tracks.get(tid)
+        if track is None:
+            return None, None, None, None
+        
+        # Inline observation_at logic to avoid circular import from effects.kinematics
+        obs = next((o for o in track.observations if o.frame_idx == frame_idx), None)
+        if obs is None:
+            return None, None, None, None
+        member_obs.append(obs)
+
+    # 1. Cells (Union of all member cells)
+    all_cells: set[tuple[int, int]] = set()
+    for obs in member_obs:
+        all_cells.update(obs.cells)
+    cells_frozen = frozenset(all_cells)
+
+    # 2. Size (Sum of member sizes)
+    total_size = sum(obs.size for obs in member_obs)
+
+    # 3. Centroid (Mean of member centroids, rounded to int)
+    sum_r = sum(obs.centroid[0] for obs in member_obs)
+    sum_c = sum(obs.centroid[1] for obs in member_obs)
+    count = len(member_obs)
+    centroid = (round(sum_r / count), round(sum_c / count))
+
+    # 4. BBox (min_r, min_c, max_r, max_c)
+    if not all_cells:
+        return None, None, None, None
+    
+    rs = [c[0] for c in all_cells]
+    cs = [c[1] for c in all_cells]
+    bbox = (min(rs), min(cs), max(rs), max(cs))
+
+    return centroid, total_size, cells_frozen, bbox
 
 
 @dataclass

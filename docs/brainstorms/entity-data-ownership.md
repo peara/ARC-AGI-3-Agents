@@ -125,5 +125,10 @@ computed from registry lookups via `kinematics.py`. After this refactor, they'd
 come directly from `Entity` — fewer registry hops, cleaner data flow.
 
 **Order**: Finish the cells/orientation experiment first, then do this refactor.
-The `Entity` dataclass change is additive (new optional fields), so it won't
-break existing code during the transition.
+
+## Concerns (review findings)
+
+1. **Aggregate consistency through lifecycle transitions**: `entity/builder.py` re-instantiates `Entity` at `_apply_lifecycle_transitions` to change `lifecycle`. Aggregates must be copied or recomputed at these sites, not just at `build_entities` and `_merge_into_compound`.
+2. **`cells` memory for compounds**: `frozenset[tuple[int,int]]` per entity is fine for singletons but compound/container entities on 64×64 grid could have hundreds of cells. Acceptable for now; flag as future concern if it bottlenecks.
+3. **`snapshot.py` `_entity_bbox` and `_entity_trajectory`**: Both also iterate `ent.members` into the registry. `bbox` is derivable from `cells` (min/max) — add it as a field. `_entity_trajectory` is inherently historical (size/shape_key range over frames) — stays registry-dependent cold path.
+4. **`roles.py` structural flag**: `roles.py:138` `_is_structural(tid, reg)` checks per-track properties. "Read structural flag from Entity" requires defining what that flag means at entity level. Out of scope for Option A; noted as future work.
