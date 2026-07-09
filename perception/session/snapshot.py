@@ -156,7 +156,6 @@ class SceneSnapshot:
                 }
             )
         seen_anim: set[int] = set()
-        seen_delta: set[int] = set()
         for step in self.step_observations:
             if step.frame_idx > self.frame_idx:
                 continue
@@ -167,15 +166,6 @@ class SceneSnapshot:
                         "frame_idx": step.frame_idx,
                         "kind": "animation",
                         "detail": {"n_subframes": step.n_subframes},
-                    }
-                )
-            if step.delta is not None and step.frame_idx not in seen_delta:
-                seen_delta.add(step.frame_idx)
-                events.append(
-                    {
-                        "frame_idx": step.frame_idx,
-                        "kind": "delta",
-                        "detail": dict(step.delta),
                     }
                 )
         return events
