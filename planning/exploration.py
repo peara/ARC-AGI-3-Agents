@@ -10,9 +10,7 @@ from effects import (
     Pos,
     ResidualEntry,
     SceneState,
-    compute_residual,
     diff_effect_context,
-    engine_step,
     entity_size_at,
     frame_meta_from_steps,
     inject_llm_proposals,
@@ -21,6 +19,7 @@ from effects import (
     predict,
     replay_predicted,
 )
+from effects.engine_step_result import run_engine_step
 from effects.rules import Rule
 from effects.transition_history import TransitionHistory
 from perception.session import RESET_ACTION, SceneSnapshot
@@ -141,30 +140,18 @@ class ExplorationPolicy:
             return
         step_label = f"f{scene.frame_idx} a{action}"
         before_ctx = self._engine_ctx
-        predicted = predict(self._engine_state_before, action, before_ctx)
-        if not predicted.unknown:
-            self._last_residual = compute_residual(
-                predicted.state,
-                observed,
-                entity_ids=tuple(spec.entities),
-                dims=spec.dims,
-                include_terminal=spec.include_terminal,
-            )
-            self._last_observed_transition = None
-        else:
-            self._last_residual = ()
-            self._last_observed_transition = (self._engine_state_before, action, observed)
-        self._engine_ctx = engine_step(
-            before_ctx,
+        result = run_engine_step(
+            self._engine_ctx,
             self._engine_state_before,
             action,
             observed,
-            entity_ids=tuple(spec.entities),
-            dims=spec.dims,
-            include_terminal=spec.include_terminal,
+            spec,
             controllable_id=scene.controllable_id(),
             history=self._history,
         )
+        self._last_residual = result.residual
+        self._last_observed_transition = result.observed_transition
+        self._engine_ctx = result.ctx
         if self._history is not None:
             self._history.append(
                 state_before=self._engine_state_before,

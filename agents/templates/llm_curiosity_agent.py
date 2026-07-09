@@ -22,6 +22,7 @@ from grouping import ConfirmedGroup, GroupingEngine
 from perception.session import RESET_ACTION, PerceptionSession, SceneSnapshot
 from planning.exploration import ExplorationPolicy
 from planning.fallback import build_fallback_goal, pick_fallback_unknown, tried_key
+from planning.frame_context import FrameContext
 from planning.heuristics import ExplorationConfig
 from planning.llm_planner import call_planner, call_rule_proposer
 from planning.llm_rule_proposer import (
@@ -184,11 +185,22 @@ class LlmCuriosity(Agent):
                 and self._rule_proposer is not NULL_RULE_PROPOSER
                 and (self.policy.last_residual or self.policy.last_observed_transition)
             ):
-                if self._llm_logger is not None:
-                    self._llm_logger.trigger = (
-                        "residual" if self.policy.last_residual else "observed_transition"
+                if self.policy.context is not None:
+                    fc = FrameContext(
+                        scene=self._scene,
+                        ctx=self.policy.context,
+                        residual=self.policy.last_residual,
+                        observed_transition=self.policy.last_observed_transition,
+                        unknowns=self.policy.last_unknowns,
+                        confirmed_groups=self._confirmed_groups,
+                        diverged=self.policy.status().diverged,
+                        spec=self.policy._engine_plan_spec(self._scene),
                     )
-                self._try_propose_rules()
+                    if self._llm_logger is not None:
+                        self._llm_logger.trigger = (
+                            "residual" if self.policy.last_residual else "observed_transition"
+                        )
+                    self._try_propose_rules(fc)
 
         scene = self._scene or self.session.snapshot()
 
@@ -356,22 +368,22 @@ class LlmCuriosity(Agent):
 
     # ── Helpers ──────────────────────────────────────────────────────────
 
-    def _try_propose_rules(self) -> None:
-        scene = self._scene or self.session.snapshot()
-        ctx = self.policy.context
+    def _try_propose_rules(self, fc: FrameContext) -> None:
+        scene = fc.scene or self.session.snapshot()
+        ctx = fc.ctx
         if ctx is None:
             return
-        residual = self.policy.last_residual
-        observed_transition = self.policy.last_observed_transition
+        residual = fc.residual
+        observed_transition = fc.observed_transition
         if not residual and not observed_transition:
             return
         bundle = QueryInterface(
             scene,
             ctx,
             residual=residual,
-            unknowns=self.policy.last_unknowns,
+            unknowns=fc.unknowns,
             observed_transition=observed_transition,
-            confirmed_groups=self._confirmed_groups,
+            confirmed_groups=fc.confirmed_groups,
         ).bundle()
         residual_dicts = [
             {

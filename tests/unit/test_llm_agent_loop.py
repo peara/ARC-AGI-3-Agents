@@ -639,8 +639,21 @@ class TestLlmCuriosityAgentLoop:
         ):
             mock_call_proposer.return_value = []
             mock_call_planner.return_value = None
+            
+            # Mock FrameContext
+            from planning.frame_context import FrameContext
+            fc = FrameContext(
+                scene=MagicMock(),
+                ctx=MagicMock(),
+                residual=(),
+                observed_transition=agent.policy.last_observed_transition,
+                unknowns=(),
+                confirmed_groups=[],
+                diverged=False,
+                spec=MagicMock(),
+            )
+            agent._try_propose_rules(fc)
 
-            agent._try_propose_rules()
 
         mock_call_proposer.assert_called_once()
 

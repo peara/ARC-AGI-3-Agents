@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-
-from planning.adapters import SnapshotProjection
+from typing import Protocol
 
 from .context import EffectContext
 from .engine import engine_step
@@ -10,6 +9,18 @@ from .predict import predict
 from .residual import ResidualEntry, compute_residual
 from .state import SceneState
 from .transition_history import TransitionHistory
+
+
+class _ProjectionSpec(Protocol):
+    """Minimal protocol for entity projection specs.
+
+    Satisfied by ``PlanSpec`` and ``SnapshotProjection`` — any object
+    with ``entities``, ``dims``, and ``include_terminal`` attributes.
+    """
+
+    entities: list[int]
+    dims: tuple[str, ...]
+    include_terminal: bool
 
 
 @dataclass(frozen=True)
@@ -24,7 +35,7 @@ def run_engine_step(
     state_before: SceneState,
     action: int,
     observed: SceneState,
-    spec: SnapshotProjection,
+    spec: _ProjectionSpec,
     controllable_id: int | None = None,
     history: TransitionHistory | None = None,
 ) -> EngineStepResult:

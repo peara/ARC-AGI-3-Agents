@@ -21,6 +21,7 @@ from .engine_log import (  # noqa: F401
     format_rule,
     log_effect_context_diff,
 )
+from .engine_step_result import EngineStepResult, run_engine_step
 from .guard_parse import GuardClause, evaluate_guard, parse_guard_clauses
 from .kinematics import (
     entity_exists_at,
@@ -33,12 +34,21 @@ from .learn_multi import learn_counter_rules_action_only, learn_effect_context_m
 from .predict import Prediction, is_terminal_dead_end, predict, replay_predicted
 from .residual import ResidualEntry, compute_residual
 from .rules import Effect, Rule
-from .state import Orientation, ORIENT_TO_COMPASS, COMPASS_TO_ORIENT, Pos, SceneState, Terminal, terminal_from_state_name
+from .state import (
+    COMPASS_TO_ORIENT,
+    ORIENT_TO_COMPASS,
+    Orientation,
+    Pos,
+    SceneState,
+    Terminal,
+    terminal_from_state_name,
+)
 from .transition_history import Transition, TransitionHistory
 
 __all__ = [
     "COMPASS_TO_ORIENT",
     "Effect",
+    "EngineStepResult",
     "GuardClause",
     "Orientation",
     "ORIENT_TO_COMPASS",
@@ -77,6 +87,7 @@ __all__ = [
     "parse_guard_clauses",
     "prune_rules",
     "replay_predicted",
+    "run_engine_step",
     "retroactive_test",
     "terminal_from_state_name",
     "Transition",
