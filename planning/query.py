@@ -76,11 +76,12 @@ class QueryInterface:
         result["context_note"] = "observation-only; effects rules are learned, not ground truth"
         if self._available_actions is not None:
             result["available_actions"] = list(self._available_actions)
+        # Small fields first — ensures they survive JSON truncation in LLM logs
+        result["confirmed_groups"] = self._build_groups()
+        result["coverage_gaps"] = self._build_coverage_gaps()
         result["residual"] = self._build_residual()
         result["pruned_rules"] = self._build_pruned_rules()
         result["observed_transition"] = self._build_observed_transition()
-        result["confirmed_groups"] = self._build_groups()
-        result["coverage_gaps"] = self._build_coverage_gaps()
         return result
 
     # -- field builders -------------------------------------------------------
