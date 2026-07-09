@@ -1,7 +1,7 @@
 # LLM Curiosity Agent — Design Document
 
 > Architecture and data flow for the `LlmCuriosity` agent.
-> Last updated: 2026-06-24
+> Last updated: 2026-07-09
 
 ---
 
@@ -84,6 +84,12 @@ flowchart TD
     style INGEST fill:#69d,stroke:#47a
     style LLM fill:#4a9,stroke:#286
 ```
+
+> **Refactor planned.** The current `choose_action` (lines 137-355 in
+> `llm_curiosity_agent.py`) is a 220-line monolith with 15 exit points. See
+> [§10 Refactor direction](#10-refactor-direction--explicit-per-frame-pipeline)
+> for the planned 5-stage pipeline (`_perceive` → `_verify` → `_learn` →
+> `_decide` → `_prepare`) with `FrameContext` as the per-frame carrier.
 
 ---
 
@@ -319,3 +325,147 @@ rule_proposer), `trigger`, `messages`, `response_raw`, `latency_ms`, `ok`,
 
 Module: `agents/templates/llm_logging.py` — `LlmCallLogger`, `wrap_llm_call`,
 `Recorder.llm_log_path()`.
+
+---
+
+## 10. Refactor direction — explicit per-frame pipeline
+
+> Status: **direction**. Not yet implemented. Captures the agreed plan for
+> refactoring `choose_action` into an explicit staged pipeline.
+
+### Problem
+
+`LlmCuriosity.choose_action` is a 220-line method with 15 early-return exit
+points. The actual per-frame pipeline — perceive → verify → learn → decide →
+prepare — is implicit, buried in nested `if` blocks and scattered `self._*`
+fields. Specific issues:
+
+1. **`compute_residual` is computed twice per step.** Once in the policy's
+   `_run_engine_step` (stored as `self.policy._last_residual`), once again
+   inside `engine_step` (for rule lifecycle). Same inputs, same result, two
+   call sites that can drift.
+
+2. **`_run_engine_step` is duplicated ~95%** between `ExplorationPolicy` and
+   `RuleFirstPolicy`. The only real difference is `controllable_id` handling
+   and `_engine_plan_spec` implementation.
+
+3. **`_record_and_return` is called from 15 exit points.** It does
+   `policy.record_step()` — which stores the pre-action `SceneState` for the
+   *next* frame's engine step. This couples "record action" with "prepare next
+   verify" — a hidden side effect spread across every return path.
+
+4. **Observe + learn are conflated.** The INGEST block (lines 152-191) does
+   perception, entity building, grouping, engine step (residual), AND LLM rule
+   proposal in one conditional block. These are distinct pipeline stages.
+
+5. **Per-frame state is scattered.** `self._scene`, `self.policy._engine_ctx`,
+   `self.policy._last_residual`, `self.policy._last_unknowns`,
+   `self._confirmed_groups`, `self._probe_plan`, etc. — no single struct
+   carries the per-frame context. Adding new state means threading new
+   parameters through every helper.
+
+### Target: explicit 5-stage pipeline
+
+```
+Frame
+  │
+  ├─ 1. PERCEIVE — ingest frame → entities → groups → SceneSnapshot
+  ├─ 2. VERIFY   — predict(prev) → compute_residual → engine_step
+  ├─ 3. LEARN    — LLM rule proposer (if residual/unknown transition)
+  ├─ 4. DECIDE   — phase gate → probe plan → LLM planner → fallback → action
+  └─ 5. PREPARE  — store pre-action state for next frame's verify
+```
+
+Each stage is a small method. `compute_residual` is computed once in stage 2,
+result shared with both `engine_step` (internal) and `_try_propose_rules`
+(stage 3).
+
+### FrameContext — extensible per-frame carrier
+
+A frozen dataclass carries all per-frame state through the pipeline:
+
+```python
+@dataclass(frozen=True)
+class FrameContext:
+    scene: SceneSnapshot
+    ctx: EffectContext
+    residual: tuple[ResidualEntry, ...]
+    observed_transition: tuple[SceneState, int, SceneState] | None
+    unknowns: tuple[UnknownAction, ...]
+    confirmed_groups: list[ConfirmedGroup]
+    diverged: bool
+    spec: PlanSpec                          # what was tracked this frame
+    next_spec: PlanSpec | None = None       # planner-chosen spec for next frame
+```
+
+**Why now:** today it carries 8 fields. Tomorrow we add `grouping_state`,
+`entity_roles`, `planner_decision`, whatever — one field on the dataclass, no
+signature changes upstream. Stages take `FrameContext` and return
+`FrameContext` (or action). New state flows through the context, not through
+new method parameters.
+
+### Engine plan spec — planner-decided (future)
+
+`_engine_plan_spec` decides which entities/dims to track for residuals. Today
+the policy provides a default. The plumbing will let the planner decide this:
+
+```
+Frame N:
+  _verify  → uses spec (policy default OR planner's choice from frame N-1)
+  _decide  → planner sees residual + scene, can emit next_spec for frame N+1
+  _prepare → stores next_spec (or falls back to policy default)
+```
+
+For now the planner doesn't choose specs — the policy default is used. But
+`FrameContext.spec` and `FrameContext.next_spec` are in place.
+
+### run_engine_step — extracted shared function
+
+Both policies' `_run_engine_step` delegate to one function:
+
+```python
+@dataclass(frozen=True)
+class EngineStepResult:
+    ctx: EffectContext
+    residual: tuple[ResidualEntry, ...]
+    observed_transition: tuple[SceneState, int, SceneState] | None
+
+def run_engine_step(
+    ctx, state_before, action, observed, spec, *,
+    controllable_id, history,
+) -> EngineStepResult: ...
+```
+
+The residual is a first-class return value — not a side effect on
+`self.policy._last_residual`.
+
+### Policies shrink
+
+After extraction, policies keep only:
+- `decide(scene, available_actions)` → action_id (random/BFS phase)
+- `record_step(scene, action_id)` → stores pre-action SceneState
+- `_engine_plan_spec(scene)` → PlanSpec provider (the one real difference)
+- `inject_llm_proposals(proposals)`
+
+`on_observed`, `_run_engine_step`, `last_residual`, `last_observed_transition`,
+`last_unknowns` properties all move up to the agent or become unnecessary
+(they live on `FrameContext`).
+
+### Incremental plan (4 PRs)
+
+| PR | Scope | Risk |
+|----|-------|------|
+| 1 | Extract `run_engine_step` + `EngineStepResult`; both policies delegate | Low — pure dedup |
+| 2 | Introduce `FrameContext` dataclass; agent builds it, passes to helpers | Low — additive |
+| 3 | Split `choose_action` into `_perceive` / `_verify` / `_try_propose_rules` / `_decide` / `_prepare_next`; `_try_propose_rules` reads `fc.residual` instead of `self.policy.last_residual` | Medium — big visible change |
+| 4 | Remove dead policy properties + `_run_engine_step` from policies | Low — cleanup after PR 3 |
+
+### What's NOT in scope
+
+- **`compute_residual` refactor.** The signature and logic stay as-is. The
+  refactor is about *where* it's called (once, in `_verify`) and *how* the
+  result flows (through `FrameContext`), not what it computes.
+- **Base `Agent.main` loop.** The `while not is_done` loop stays untouched.
+  The refactor is entirely inside `choose_action`.
+- **Merging the two policies.** They stay separate; only the shared
+  `_run_engine_step` is extracted.
