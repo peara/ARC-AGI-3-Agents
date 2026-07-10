@@ -138,20 +138,30 @@ class LlmCuriosity(Agent):
     def choose_action(
         self, frames: list[FrameData], latest_frame: FrameData
     ) -> GameAction:
-        # ── RESET gate ──────────────────────────────────────────────────
         if latest_frame.state in (GameState.NOT_PLAYED, GameState.GAME_OVER):
             return self._reset()
 
         self._frame_index += 1
+        fc = self._perceive(latest_frame)
+        if fc is None:
+            fc = self._current_frame_context()
+        
+        if fc is None:
+            fc = FrameContext(
+                scene=self.session.snapshot(),
+                ctx=None,
+                residual=(),
+                observed_transition=None,
+                unknowns=(),
+                confirmed_groups=[],
+                diverged=False,
+                spec=self.policy._engine_plan_spec(self.session.snapshot()),
+            )
 
-        # ── INGEST ─────────────────────────────────────────────────────
-        self._perceive(latest_frame)
+        fc = self._verify(fc)
+        action_id = self._decide(latest_frame.available_actions or None)
+        return self._prepare_next(action_id, fc)
 
-        scene = self._scene or self.session.snapshot()
-
-        available = latest_frame.available_actions or None
-        action_id = self._decide(available)
-        return self._record_and_return(action_id, scene)
 
     # ── Helpers ──────────────────────────────────────────────────────────
 
