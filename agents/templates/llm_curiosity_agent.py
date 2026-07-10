@@ -390,6 +390,11 @@ class LlmCuriosity(Agent):
             )
         return None
 
+    def _verify(self, fc: FrameContext) -> FrameContext:
+        if self.policy.status().diverged:
+            log.debug("State diverged from expectations")
+        return fc
+
     def _try_propose_rules(self, fc: FrameContext) -> None:
         scene = fc.scene or self.session.snapshot()
         ctx = fc.ctx
