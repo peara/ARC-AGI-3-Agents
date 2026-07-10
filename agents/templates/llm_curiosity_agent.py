@@ -140,13 +140,7 @@ class LlmCuriosity(Agent):
     ) -> GameAction:
         # ── RESET gate ──────────────────────────────────────────────────
         if latest_frame.state in (GameState.NOT_PLAYED, GameState.GAME_OVER):
-            self._probe_plan = None
-            self._failure_context = None
-            self._current_goal = None
-            self._last_action_id = RESET_ACTION
-            self._tried_fallback_unknowns.clear()
-            self._confirmed_groups = []
-            return GameAction.RESET
+            return self._reset()
 
         self._frame_index += 1
 
@@ -367,6 +361,16 @@ class LlmCuriosity(Agent):
         return self._record_and_return(action_id, scene)
 
     # ── Helpers ──────────────────────────────────────────────────────────
+
+    def _reset(self) -> GameAction:
+        """Clear agent state and return RESET action."""
+        self._probe_plan = None
+        self._failure_context = None
+        self._current_goal = None
+        self._last_action_id = RESET_ACTION
+        self._tried_fallback_unknowns.clear()
+        self._confirmed_groups = []
+        return GameAction.RESET
 
     def _try_propose_rules(self, fc: FrameContext) -> None:
         scene = fc.scene or self.session.snapshot()
