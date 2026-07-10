@@ -145,56 +145,7 @@ class LlmCuriosity(Agent):
         self._frame_index += 1
 
         # ── INGEST ─────────────────────────────────────────────────────
-        if latest_frame.frame and id(latest_frame) != self._last_observed_frame_id:
-            self.session.ingest(latest_frame.frame, self._last_action_id)
-            logical_registry, catalog = self._entity_builder.update(
-                self.session.registry, self.session.action_ids,
-                effect_context=self.policy.context,
-            )
-            self._confirmed_groups = self._grouping_engine.update(
-                self.session.registry, catalog, self._last_action_id,
-            )
-            self._scene = SceneSnapshot(
-                frame_idx=self.session.registry.frame_idx,
-                n_observed=self.session.n_observed,
-                registry=logical_registry,
-                catalog=catalog,
-                action_ids=tuple(self.session.action_ids),
-                grid_rows=self.session.grid_rows,
-                grid_cols=self.session.grid_cols,
-                last_step=(
-                    self.session.step_observations[-1]
-                    if self.session.step_observations
-                    else None
-                ),
-                step_observations=tuple(self.session.step_observations),
-                determinism_violations=tuple(self.session.determinism_violations),
-            )
-            self.policy.on_observed(self._scene)
-            self._last_observed_frame_id = id(latest_frame)
-
-            # ── Rule proposer (after engine step, before divergence/planner) ─
-            if (
-                self._phase == "llm_directed"
-                and self._rule_proposer is not NULL_RULE_PROPOSER
-                and (self.policy.last_residual or self.policy.last_observed_transition)
-            ):
-                if self.policy.context is not None:
-                    fc = FrameContext(
-                        scene=self._scene,
-                        ctx=self.policy.context,
-                        residual=self.policy.last_residual,
-                        observed_transition=self.policy.last_observed_transition,
-                        unknowns=self.policy.last_unknowns,
-                        confirmed_groups=self._confirmed_groups,
-                        diverged=self.policy.status().diverged,
-                        spec=self.policy._engine_plan_spec(self._scene),
-                    )
-                    if self._llm_logger is not None:
-                        self._llm_logger.trigger = (
-                            "residual" if self.policy.last_residual else "observed_transition"
-                        )
-                    self._try_propose_rules(fc)
+        self._perceive(latest_frame)
 
         scene = self._scene or self.session.snapshot()
 
@@ -371,6 +322,73 @@ class LlmCuriosity(Agent):
         self._tried_fallback_unknowns.clear()
         self._confirmed_groups = []
         return GameAction.RESET
+
+    def _perceive(self, latest_frame: FrameData) -> FrameContext | None:
+        if not latest_frame.frame or id(latest_frame) == self._last_observed_frame_id:
+            return None
+
+        self.session.ingest(latest_frame.frame, self._last_action_id)
+        logical_registry, catalog = self._entity_builder.update(
+            self.session.registry, self.session.action_ids,
+            effect_context=self.policy.context,
+        )
+        self._confirmed_groups = self._grouping_engine.update(
+            self.session.registry, catalog, self._last_action_id,
+        )
+        self._scene = SceneSnapshot(
+            frame_idx=self.session.registry.frame_idx,
+            n_observed=self.session.n_observed,
+            registry=logical_registry,
+            catalog=catalog,
+            action_ids=tuple(self.session.action_ids),
+            grid_rows=self.session.grid_rows,
+            grid_cols=self.session.grid_cols,
+            last_step=(
+                self.session.step_observations[-1]
+                if self.session.step_observations
+                else None
+            ),
+            step_observations=tuple(self.session.step_observations),
+            determinism_violations=tuple(self.session.determinism_violations),
+        )
+        self.policy.on_observed(self._scene)
+        self._last_observed_frame_id = id(latest_frame)
+
+        if (
+            self._phase == "llm_directed"
+            and self._rule_proposer is not NULL_RULE_PROPOSER
+            and (self.policy.last_residual or self.policy.last_observed_transition)
+        ):
+            if self.policy.context is not None:
+                fc = FrameContext(
+                    scene=self._scene,
+                    ctx=self.policy.context,
+                    residual=self.policy.last_residual,
+                    observed_transition=self.policy.last_observed_transition,
+                    unknowns=self.policy.last_unknowns,
+                    confirmed_groups=self._confirmed_groups,
+                    diverged=self.policy.status().diverged,
+                    spec=self.policy._engine_plan_spec(self._scene),
+                )
+                if self._llm_logger is not None:
+                    self._llm_logger.trigger = (
+                        "residual" if self.policy.last_residual else "observed_transition"
+                    )
+                self._try_propose_rules(fc)
+                return fc
+
+        if self.policy.context is not None:
+            return FrameContext(
+                scene=self._scene,
+                ctx=self.policy.context,
+                residual=self.policy.last_residual,
+                observed_transition=self.policy.last_observed_transition,
+                unknowns=self.policy.last_unknowns,
+                confirmed_groups=self._confirmed_groups,
+                diverged=self.policy.status().diverged,
+                spec=self.policy._engine_plan_spec(self._scene),
+            )
+        return None
 
     def _try_propose_rules(self, fc: FrameContext) -> None:
         scene = fc.scene or self.session.snapshot()
