@@ -149,166 +149,8 @@ class LlmCuriosity(Agent):
 
         scene = self._scene or self.session.snapshot()
 
-        # ── Available actions ───────────────────────────────────────────
         available = latest_frame.available_actions or None
-        actions = self._legal_actions(available)
-
-        # ── Phase gate ──────────────────────────────────────────────────
-        if self._phase == "random":
-            if self._policy_version == "v2":
-                if self.policy.context is not None:
-                    self._phase = "llm_directed"
-            else:
-                if scene.controllable_id() is not None and self.policy.context is not None:
-                    self._phase = "llm_directed"
-            if self._phase == "random":
-                action_id = self.policy.decide(scene, available)
-                return self._record_and_return(action_id, scene)
-
-        if self._phase == "llm_directed" and self.policy.context is None:
-            self._phase = "random"
-            action_id = self.policy.decide(scene, available)
-            return self._record_and_return(action_id, scene)
-
-        # ── Divergence check (runs every frame, before probe plan pop) ──────
-        if self.policy.status().diverged:
-            self._failure_context = {
-                "type": "rule_violation",
-                "last_action": self._last_action_id,
-                "previous_probe_reason": (
-                    self._current_goal.reason if self._current_goal else None
-                ),
-            }
-            self._probe_plan = None
-            self._current_goal = None
-
-        # ── Probe plan execution ─────────────────────────────────────────
-        if self._probe_plan is not None and len(self._probe_plan) > 0:
-            action_id = self._probe_plan.pop(0)
-            if len(self._probe_plan) == 0:
-                log.info(
-                    "Probe plan exhausted (goal=%s)",
-                    self._current_goal.reason if self._current_goal else "?",
-                )
-                self._failure_context = {
-                    "type": "probe_exhausted",
-                    "last_action": self._last_action_id,
-                    "previous_probe_reason": (
-                        self._current_goal.reason if self._current_goal else None
-                    ),
-                }
-                self._probe_plan = None
-                self._current_goal = None
-                return self._record_and_return(action_id, scene)
-            elif action_id not in actions:
-                log.info(
-                    "Probe action %d not in available actions, discarding plan",
-                    action_id,
-                )
-                self._probe_plan = None
-            else:
-                return self._record_and_return(action_id, scene)
-
-        # ── LLM call ────────────────────────────────────────────────────
-        if self._llm_cooldown > 0:
-            self._llm_cooldown -= 1
-            action_id = random.choice(actions)
-            return self._record_and_return(action_id, scene)
-
-        goal: ProbeGoal | None = None
-        try:
-            bundle = QueryInterface(
-                scene,
-                self.policy.context,
-                available_actions=actions,
-                confirmed_groups=self._confirmed_groups,
-            ).bundle()
-            if self._llm_logger is not None:
-                self._llm_logger.trigger = "planner_cycle"
-            goal = call_planner(
-                bundle,
-                actions,
-                self._planner_call,
-                failure_context=self._failure_context,
-            )
-            self._failure_context = None
-            if goal is not None:
-                log.info(
-                    "LLM goal: target=%s reason=%s",
-                    goal.target,
-                    goal.reason,
-                )
-            else:
-                log.info("LLM returned no valid goal")
-        except Exception:
-            log.exception("LLM call failed")
-            goal = None
-            self._llm_cooldown = 3
-
-        if goal is not None:
-            ctx = self.policy.context
-            if ctx is None:
-                # Lost context mid-flight — fall back to random
-                log.info("Goal set but context lost, falling back to random")
-                action_id = random.choice(actions)
-                return self._record_and_return(action_id, scene)
-            plan, unknowns = execute_probe(goal, scene, ctx, actions)
-            if plan is not None and len(plan) > 0:
-                log.info("Probe plan: %d actions for goal=%s", len(plan), goal.reason)
-                self._probe_plan = plan
-                self._current_goal = goal
-                action_id = self._probe_plan.pop(0)
-                return self._record_and_return(action_id, scene)
-            elif plan is not None and len(plan) == 0:
-                # Goal already met — execute goal.action directly or random
-                log.info("Goal already met: %s", goal.reason)
-                self._current_goal = goal
-                if goal.action is not None and goal.action in actions:
-                    return self._record_and_return(goal.action, scene)
-                action_id = random.choice(actions)
-                return self._record_and_return(action_id, scene)
-            else:
-                log.info("No path found for goal: %s", goal.reason)
-                self._failure_context = {
-                    "type": "unreachable",
-                    "unknowns": [
-                        {"action": ua.action, "state": ua.state.fingerprint()}
-                        for ua in unknowns[:5]
-                    ],
-                    "last_action": self._last_action_id,
-                    "previous_probe_reason": goal.reason if goal else None,
-                }
-                self._current_goal = None
-                if unknowns:
-                    ua = pick_fallback_unknown(
-                        unknowns, self._tried_fallback_unknowns, scene
-                    )
-                    if ua is not None:
-                        self._tried_fallback_unknowns.add(tried_key(ua))
-                        fallback = build_fallback_goal(ua)
-                        fb_plan, _fb_unknowns = execute_probe(
-                            fallback, scene, ctx, actions
-                        )
-                        if fb_plan is not None and len(fb_plan) > 0:
-                            log.info(
-                                "Fallback probe: %d actions for unknown action %d",
-                                len(fb_plan),
-                                ua.action,
-                            )
-                            self._probe_plan = fb_plan
-                            self._current_goal = fallback
-                            action_id = self._probe_plan.pop(0)
-                            return self._record_and_return(action_id, scene)
-                    else:
-                        log.info(
-                            "Fallback probe: all %d unknowns already tried, random",
-                            len(unknowns),
-                        )
-                action_id = random.choice(actions)
-                return self._record_and_return(action_id, scene)
-
-        self._llm_cooldown = max(self._llm_cooldown, 3) if goal is None else 0
-        action_id = random.choice(actions)
+        action_id = self._decide(available)
         return self._record_and_return(action_id, scene)
 
     # ── Helpers ──────────────────────────────────────────────────────────
@@ -394,6 +236,162 @@ class LlmCuriosity(Agent):
         if self.policy.status().diverged:
             log.debug("State diverged from expectations")
         return fc
+
+    def _decide(self, available: list[int] | None) -> int:
+        """Choose an action ID based on current agent state and phase."""
+        scene = self._scene or self.session.snapshot()
+        actions = self._legal_actions(available)
+
+        # ── Phase gate ──────────────────────────────────────────────────
+        if self._phase == "random":
+            if self._policy_version == "v2":
+                if self.policy.context is not None:
+                    self._phase = "llm_directed"
+            else:
+                if scene.controllable_id() is not None and self.policy.context is not None:
+                    self._phase = "llm_directed"
+            if self._phase == "random":
+                return self.policy.decide(scene, available)
+
+        if self._phase == "llm_directed" and self.policy.context is None:
+            self._phase = "random"
+            return self.policy.decide(scene, available)
+
+        # ── Divergence check (runs every frame, before probe plan pop) ──────
+        if self.policy.status().diverged:
+            self._failure_context = {
+                "type": "rule_violation",
+                "last_action": self._last_action_id,
+                "previous_probe_reason": (
+                    self._current_goal.reason if self._current_goal else None
+                ),
+            }
+            self._probe_plan = None
+            self._current_goal = None
+
+        # ── Probe plan execution ─────────────────────────────────────────
+        if self._probe_plan is not None and len(self._probe_plan) > 0:
+            action_id = self._probe_plan.pop(0)
+            if len(self._probe_plan) == 0:
+                log.info(
+                    "Probe plan exhausted (goal=%s)",
+                    self._current_goal.reason if self._current_goal else "?",
+                )
+                self._failure_context = {
+                    "type": "probe_exhausted",
+                    "last_action": self._last_action_id,
+                    "previous_probe_reason": (
+                        self._current_goal.reason if self._current_goal else None
+                    ),
+                }
+                self._probe_plan = None
+                self._current_goal = None
+                return action_id
+            elif action_id not in actions:
+                log.info(
+                    "Probe action %d not in available actions, discarding plan",
+                    action_id,
+                )
+                self._probe_plan = None
+            else:
+                return action_id
+
+        # ── LLM call ────────────────────────────────────────────────────
+        if self._llm_cooldown > 0:
+            self._llm_cooldown -= 1
+            return random.choice(actions)
+
+        goal: ProbeGoal | None = None
+        try:
+            bundle = QueryInterface(
+                scene,
+                self.policy.context,
+                available_actions=actions,
+                confirmed_groups=self._confirmed_groups,
+            ).bundle()
+            if self._llm_logger is not None:
+                self._llm_logger.trigger = "planner_cycle"
+            goal = call_planner(
+                bundle,
+                actions,
+                self._planner_call,
+                failure_context=self._failure_context,
+            )
+            self._failure_context = None
+            if goal is not None:
+                log.info(
+                    "LLM goal: target=%s reason=%s",
+                    goal.target,
+                    goal.reason,
+                )
+            else:
+                log.info("LLM returned no valid goal")
+        except Exception:
+            log.exception("LLM call failed")
+            goal = None
+            self._llm_cooldown = 3
+
+        if goal is not None:
+            ctx = self.policy.context
+            if ctx is None:
+                # Lost context mid-flight — fall back to random
+                log.info("Goal set but context lost, falling back to random")
+                return random.choice(actions)
+            plan, unknowns = execute_probe(goal, scene, ctx, actions)
+            if plan is not None and len(plan) > 0:
+                log.info("Probe plan: %d actions for goal=%s", len(plan), goal.reason)
+                self._probe_plan = plan
+                self._current_goal = goal
+                action_id = self._probe_plan.pop(0)
+                return action_id
+            elif plan is not None and len(plan) == 0:
+                # Goal already met — execute goal.action directly or random
+                log.info("Goal already met: %s", goal.reason)
+                self._current_goal = goal
+                if goal.action is not None and goal.action in actions:
+                    return goal.action
+                return random.choice(actions)
+            else:
+                log.info("No path found for goal: %s", goal.reason)
+                self._failure_context = {
+                    "type": "unreachable",
+                    "unknowns": [
+                        {"action": ua.action, "state": ua.state.fingerprint()}
+                        for ua in unknowns[:5]
+                    ],
+                    "last_action": self._last_action_id,
+                    "previous_probe_reason": goal.reason if goal else None,
+                }
+                self._current_goal = None
+                if unknowns:
+                    ua = pick_fallback_unknown(
+                        unknowns, self._tried_fallback_unknowns, scene
+                    )
+                    if ua is not None:
+                        self._tried_fallback_unknowns.add(tried_key(ua))
+                        fallback = build_fallback_goal(ua)
+                        fb_plan, _fb_unknowns = execute_probe(
+                            fallback, scene, ctx, actions
+                        )
+                        if fb_plan is not None and len(fb_plan) > 0:
+                            log.info(
+                                "Fallback probe: %d actions for unknown action %d",
+                                len(fb_plan),
+                                ua.action,
+                            )
+                            self._probe_plan = fb_plan
+                            self._current_goal = fallback
+                            action_id = self._probe_plan.pop(0)
+                            return action_id
+                    else:
+                        log.info(
+                            "Fallback probe: all %d unknowns already tried, random",
+                            len(unknowns),
+                        )
+                return random.choice(actions)
+
+        self._llm_cooldown = max(self._llm_cooldown, 3) if goal is None else 0
+        return random.choice(actions)
 
     def _try_propose_rules(self, fc: FrameContext) -> None:
         scene = fc.scene or self.session.snapshot()
