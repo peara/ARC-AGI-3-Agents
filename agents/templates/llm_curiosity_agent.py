@@ -393,6 +393,26 @@ class LlmCuriosity(Agent):
         self._llm_cooldown = max(self._llm_cooldown, 3) if goal is None else 0
         return random.choice(actions)
 
+    def _prepare_next(self, action_id: int, fc: FrameContext) -> GameAction:
+        """Wrap action_id in GameAction and record the step."""
+        scene = fc.scene or self.session.snapshot()
+        return self._record_and_return(action_id, scene)
+
+    def _current_frame_context(self) -> FrameContext | None:
+        """Build FrameContext from cached scene (for duplicate frames)."""
+        if self.policy.context is not None:
+            return FrameContext(
+                scene=self._scene,
+                ctx=self.policy.context,
+                residual=self.policy.last_residual,
+                observed_transition=self.policy.last_observed_transition,
+                unknowns=self.policy.last_unknowns,
+                confirmed_groups=self._confirmed_groups,
+                diverged=self.policy.status().diverged,
+                spec=self.policy._engine_plan_spec(self._scene),
+            )
+        return None
+
     def _try_propose_rules(self, fc: FrameContext) -> None:
         scene = fc.scene or self.session.snapshot()
         ctx = fc.ctx
