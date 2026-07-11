@@ -16,10 +16,11 @@ from typing import Any
 from arcengine import FrameData, GameAction, GameState
 
 from agents.llm_client import LLMClient
-from effects.transition_history import TransitionHistory
+from effects.engine_step_result import EngineStepResult, run_engine_step
 from entity import EntityBuilder
 from grouping import ConfirmedGroup, GroupingEngine
 from perception.session import RESET_ACTION, PerceptionSession, SceneSnapshot
+from planning.adapters import snapshot_from_scene
 from planning.exploration import ExplorationPolicy
 from planning.fallback import build_fallback_goal, pick_fallback_unknown, tried_key
 from planning.frame_context import FrameContext
@@ -61,19 +62,16 @@ class LlmCuriosity(Agent):
         self._policy_version = policy_version
         self.session = PerceptionSession()
         self._entity_builder = EntityBuilder()
-        self.history = TransitionHistory()
         action_space = [a.value for a in GameAction if a is not GameAction.RESET]
         if policy_version == "v2":
             self.policy = RuleFirstPolicy(
                 action_space=action_space,
                 config=ExplorationConfig(seed=seed, log_engine=True),
-                history=self.history,
             )
         else:
             self.policy = ExplorationPolicy(
                 action_space=action_space,
                 config=ExplorationConfig(seed=seed, log_engine=True),
-                history=self.history,
             )
 
         # LLM client
@@ -132,6 +130,9 @@ class LlmCuriosity(Agent):
         # state in a loop. Cleared on game reset.
         self._tried_fallback_unknowns: set[tuple[object, ...]] = set()
 
+        self._engine_step_pending: tuple | None = None
+        self._last_engine_result: EngineStepResult | None = None
+
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
         return latest_frame.state is GameState.WIN
 
@@ -173,6 +174,8 @@ class LlmCuriosity(Agent):
         self._last_action_id = RESET_ACTION
         self._tried_fallback_unknowns.clear()
         self._confirmed_groups = []
+        self._engine_step_pending = None
+        self._last_engine_result = None
         return GameAction.RESET
 
     def _perceive(self, latest_frame: FrameData) -> FrameContext | None:
@@ -206,25 +209,47 @@ class LlmCuriosity(Agent):
         self.policy.on_observed(self._scene)
         self._last_observed_frame_id = id(latest_frame)
 
+        # Run engine step to compare prediction with observation
+        if self._engine_step_pending is not None and self.policy.context is not None:
+            state_before, spec, action = self._engine_step_pending
+            observed = snapshot_from_scene(self._scene, spec)
+            if observed is not None:
+                ctrl_id = self._scene.controllable_id() if self._policy_version != "v2" else None
+                result = run_engine_step(
+                    ctx=self.policy.context,
+                    state_before=state_before,
+                    action=action,
+                    observed=observed,
+                    spec=spec,
+                    controllable_id=ctrl_id,
+                )
+                self._last_engine_result = result
+                self.policy.update_context(result.ctx)
+            self._engine_step_pending = None
+
+        _residual = self._last_engine_result.residual if self._last_engine_result else ()
+        _observed_transition = self._last_engine_result.observed_transition if self._last_engine_result else None
+        _unknowns = self._last_engine_result.unknowns if self._last_engine_result else ()
+
         if (
             self._phase == "llm_directed"
             and self._rule_proposer is not NULL_RULE_PROPOSER
-            and (self.policy.last_residual or self.policy.last_observed_transition)
+            and (_residual or _observed_transition)
         ):
             if self.policy.context is not None:
                 fc = FrameContext(
                     scene=self._scene,
                     ctx=self.policy.context,
-                    residual=self.policy.last_residual,
-                    observed_transition=self.policy.last_observed_transition,
-                    unknowns=self.policy.last_unknowns,
+                    residual=_residual,
+                    observed_transition=_observed_transition,
+                    unknowns=_unknowns,
                     confirmed_groups=self._confirmed_groups,
                     diverged=self.policy.status().diverged,
                     spec=self.policy._engine_plan_spec(self._scene),
                 )
                 if self._llm_logger is not None:
                     self._llm_logger.trigger = (
-                        "residual" if self.policy.last_residual else "observed_transition"
+                        "residual" if _residual else "observed_transition"
                     )
                 self._try_propose_rules(fc)
                 return fc
@@ -233,9 +258,9 @@ class LlmCuriosity(Agent):
             return FrameContext(
                 scene=self._scene,
                 ctx=self.policy.context,
-                residual=self.policy.last_residual,
-                observed_transition=self.policy.last_observed_transition,
-                unknowns=self.policy.last_unknowns,
+                residual=_residual,
+                observed_transition=_observed_transition,
+                unknowns=_unknowns,
                 confirmed_groups=self._confirmed_groups,
                 diverged=self.policy.status().diverged,
                 spec=self.policy._engine_plan_spec(self._scene),
@@ -414,9 +439,9 @@ class LlmCuriosity(Agent):
             return FrameContext(
                 scene=self._scene,
                 ctx=self.policy.context,
-                residual=self.policy.last_residual,
-                observed_transition=self.policy.last_observed_transition,
-                unknowns=self.policy.last_unknowns,
+                residual=self._last_engine_result.residual if self._last_engine_result else (),
+                observed_transition=self._last_engine_result.observed_transition if self._last_engine_result else None,
+                unknowns=self._last_engine_result.unknowns if self._last_engine_result else (),
                 confirmed_groups=self._confirmed_groups,
                 diverged=self.policy.status().diverged,
                 spec=self.policy._engine_plan_spec(self._scene),
@@ -466,11 +491,17 @@ class LlmCuriosity(Agent):
         return list(self.policy.action_space)
 
     def _record_and_return(self, action_id: int, scene: SceneSnapshot) -> GameAction:
-        """Record last action, track prediction for engine learning, and return."""
+        """Record last action, save engine step state for next frame, and return."""
         self._last_action_id = action_id
         action = GameAction.from_id(action_id)
         if action.is_complex():
             action.set_data({"x": random.randint(0, 63), "y": random.randint(0, 63)})
+        # Save state bridge for next frame's engine step
+        if self.policy.context is not None and scene is not None:
+            spec = self.policy._engine_plan_spec(scene)
+            state_before = snapshot_from_scene(scene, spec)
+            if state_before is not None:
+                self._engine_step_pending = (state_before, spec, action_id)
         # Wire prediction tracking so the effect engine learns from every action,
         # including probe plan steps and LLM-directed fallbacks.  During the
         # "random" phase, policy.decide() already calls record_step internally.

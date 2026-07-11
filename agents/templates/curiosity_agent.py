@@ -11,12 +11,14 @@ from typing import Any
 
 from arcengine import FrameData, GameAction, GameState
 
+from effects.engine_step_result import run_engine_step
 from perception.session import RESET_ACTION, PerceptionSession, SceneSnapshot
 from planning import (
     ExplorationConfig,
     ExplorationPolicy,
     PlannerStatus,
 )
+from planning.adapters import snapshot_from_scene
 
 from ..agent import Agent
 
@@ -38,6 +40,7 @@ class Curiosity(Agent):
         self._last_action_id = RESET_ACTION
         self._last_observed_frame_id: int | None = None
         self._scene: SceneSnapshot | None = None
+        self._engine_step_pending: tuple | None = None
 
     @property
     def name(self) -> str:
@@ -51,6 +54,7 @@ class Curiosity(Agent):
     ) -> GameAction:
         if latest_frame.state in (GameState.NOT_PLAYED, GameState.GAME_OVER):
             self._last_action_id = RESET_ACTION
+            self._engine_step_pending = None
             return GameAction.RESET
 
         if latest_frame.frame and id(latest_frame) != self._last_observed_frame_id:
@@ -58,9 +62,31 @@ class Curiosity(Agent):
             self.policy.on_observed(self._scene)
             self._last_observed_frame_id = id(latest_frame)
 
+            if self._engine_step_pending is not None and self.policy.context is not None:
+                state_before, spec, action = self._engine_step_pending
+                observed = snapshot_from_scene(self._scene, spec)
+                if observed is not None:
+                    result = run_engine_step(
+                        ctx=self.policy.context,
+                        state_before=state_before,
+                        action=action,
+                        observed=observed,
+                        spec=spec,
+                        controllable_id=self._scene.controllable_id(),
+                    )
+                    self.policy.update_context(result.ctx)
+                self._engine_step_pending = None
+
         scene = self._scene or self.session.snapshot()
         available = latest_frame.available_actions or None
         action_id = self.policy.decide(scene, available)
+
+        if self.policy.context is not None and scene is not None:
+            spec = self.policy._engine_plan_spec(scene)
+            state_before = snapshot_from_scene(scene, spec)
+            if state_before is not None:
+                self._engine_step_pending = (state_before, spec, action_id)
+
         action = GameAction.from_id(action_id)
         self._last_action_id = action_id
 
