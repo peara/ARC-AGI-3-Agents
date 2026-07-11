@@ -622,12 +622,19 @@ class TestLlmCuriosityAgentLoop:
         agent._scene = scene
         agent.policy.context = MagicMock()
         agent.policy.status.return_value.diverged = False
-        agent.policy.last_observed_transition = (
+
+        obs_transition = (
             SceneState(relevant=((0, ("pos", (47, 26))),)),
             1,
             SceneState(relevant=((0, ("pos", (47, 26))),)),
         )
-        agent.policy.last_residual = ()
+        from effects.engine_step_result import EngineStepResult
+        agent._last_engine_result = EngineStepResult(
+            ctx=MagicMock(),
+            residual=(),
+            observed_transition=obs_transition,
+            unknowns=(),
+        )
 
         with (
             patch(
@@ -639,14 +646,14 @@ class TestLlmCuriosityAgentLoop:
         ):
             mock_call_proposer.return_value = []
             mock_call_planner.return_value = None
-            
+
             # Mock FrameContext
             from planning.frame_context import FrameContext
             fc = FrameContext(
                 scene=MagicMock(),
                 ctx=MagicMock(),
                 residual=(),
-                observed_transition=agent.policy.last_observed_transition,
+                observed_transition=obs_transition,
                 unknowns=(),
                 confirmed_groups=[],
                 diverged=False,
