@@ -2,15 +2,11 @@
 
 from __future__ import annotations
 
-import logging
 import random
 
 from effects import (
     EffectContext,
     Pos,
-    ResidualEntry,
-    SceneState,
-    diff_effect_context,
     entity_size_at,
     frame_meta_from_steps,
     inject_llm_proposals,
@@ -19,9 +15,7 @@ from effects import (
     predict,
     replay_predicted,
 )
-from effects.engine_step_result import run_engine_step
 from effects.rules import Rule
-from effects.transition_history import TransitionHistory
 from perception.session import RESET_ACTION, SceneSnapshot
 
 from .adapters import snapshot_from_scene
@@ -32,10 +26,7 @@ from .heuristics import (
     within,
 )
 from .protocol import PlannerStatus
-from .query import UnknownAction
 from .search import PlanSpec, plan_bfs
-
-_engine_logger = logging.getLogger("effects.engine")
 
 
 class ExplorationPolicy:
@@ -51,13 +42,11 @@ class ExplorationPolicy:
         config: ExplorationConfig | None = None,
         grid_rows: int = 64,
         grid_cols: int = 64,
-        history: TransitionHistory | None = None,
     ) -> None:
         self.action_space = [a for a in action_space if a != RESET_ACTION]
         self.cfg = config or ExplorationConfig()
         self.grid_rows = grid_rows
         self.grid_cols = grid_cols
-        self._history = history
 
         self.visited: set[Pos] = set()
         self.reached_targets: set[Pos] = set()
@@ -67,14 +56,9 @@ class ExplorationPolicy:
         self._engine_ctx: EffectContext | None = None
 
         self._expect: tuple[Pos, int, Pos] | None = None
-        self._engine_state_before: SceneState | None = None
-        self._pending_action: int | None = None
         self._last_scene: SceneSnapshot | None = None
         self._last_phase = "init"
         self._last_diverged = False
-        self._last_residual: tuple[ResidualEntry, ...] = ()
-        self._last_unknowns: tuple[UnknownAction, ...] = ()
-        self._last_observed_transition: tuple[SceneState, int, SceneState] | None = None
         self.rng = random.Random(self.cfg.seed)
 
     def on_observed(self, scene: SceneSnapshot) -> None:
@@ -94,12 +78,6 @@ class ExplorationPolicy:
                 self._last_diverged = True
                 self.plan = []
             self._expect = None
-
-        if self._pending_action is not None:
-            self._run_engine_step(scene, self._pending_action)
-
-        self._engine_state_before = None
-        self._pending_action = None
 
     def _engine_plan_spec(self, scene: SceneSnapshot) -> PlanSpec:
         """Projection for residual-driven rule learning (pos + tracked sizes)."""
@@ -126,49 +104,6 @@ class ExplorationPolicy:
             dims=tuple(dims) if dims else ("pos",),
             goal=lambda s: False,
         )
-
-    def _run_engine_step(self, scene: SceneSnapshot, action: int) -> None:
-        if (
-            self._engine_ctx is None
-            or self._engine_state_before is None
-            or scene.controllable_id() is None
-        ):
-            return
-        spec = self._engine_plan_spec(scene)
-        observed = snapshot_from_scene(scene, spec)
-        if observed is None:
-            return
-        step_label = f"f{scene.frame_idx} a{action}"
-        before_ctx = self._engine_ctx
-        result = run_engine_step(
-            self._engine_ctx,
-            self._engine_state_before,
-            action,
-            observed,
-            spec,
-            controllable_id=scene.controllable_id(),
-            history=self._history,
-        )
-        self._last_residual = result.residual
-        self._last_observed_transition = result.observed_transition
-        self._engine_ctx = result.ctx
-        if self._history is not None:
-            self._history.append(
-                state_before=self._engine_state_before,
-                action=action,
-                state_after=observed,
-                frame_idx=scene.frame_idx,
-            )
-        self._ctx = self._engine_ctx
-        if not self.cfg.log_engine:
-            return
-        lines = diff_effect_context(before_ctx, self._engine_ctx)
-        prefix = f"{step_label} | "
-        if lines:
-            for line in lines:
-                _engine_logger.info("%s%s", prefix, line)
-        else:
-            _engine_logger.info("%sengine step (no rule change)", prefix)
 
     def decide(
         self,
@@ -222,16 +157,10 @@ class ExplorationPolicy:
         controllable_id: int | None,
         action: int,
     ) -> int:
-        """Remember pre-action state for verify + rule engine on next observe."""
+        """Track divergence expectation for the next observe."""
         self._expect = None
-        self._engine_state_before = None
-        self._pending_action = None
         if controllable_id is None or self._ctx is None:
             return action
-
-        spec = self._engine_plan_spec(scene)
-        self._engine_state_before = snapshot_from_scene(scene, spec)
-        self._pending_action = action
 
         verify_state = self._snapshot_state(scene, controllable_id)
         if verify_state is None:
@@ -239,10 +168,6 @@ class ExplorationPolicy:
         nxt = predict(verify_state, action, self._ctx)
         before = verify_state.pos(controllable_id)
         after = nxt.state.pos(controllable_id) if not nxt.unknown else None
-        if nxt.unknown:
-            self._last_unknowns = (UnknownAction(action=action, state=verify_state),)
-        else:
-            self._last_unknowns = ()
         if before is not None and after is not None:
             self._expect = (before, action, after)
         return action
@@ -312,7 +237,8 @@ class ExplorationPolicy:
 
     def _snapshot_state(
         self, scene: SceneSnapshot, controllable_id: int
-    ) -> SceneState | None:
+    ) -> object | None:
+        """Narrow projection for divergence detection (controllable-only)."""
         return snapshot_from_scene(
             scene,
             PlanSpec(entities=[controllable_id], goal=lambda s: False),
@@ -329,17 +255,10 @@ class ExplorationPolicy:
     def context(self) -> EffectContext | None:
         return self._ctx
 
-    @property
-    def last_residual(self) -> tuple[ResidualEntry, ...]:
-        return self._last_residual
-
-    @property
-    def last_unknowns(self) -> tuple[UnknownAction, ...]:
-        return self._last_unknowns
-
-    @property
-    def last_observed_transition(self) -> tuple[SceneState, int, SceneState] | None:
-        return self._last_observed_transition
+    def update_context(self, ctx: EffectContext) -> None:
+        """Feed an updated EffectContext back from the agent's engine step."""
+        self._ctx = ctx
+        self._engine_ctx = ctx
 
     def inject_llm_proposals(self, proposals: tuple[Rule, ...]) -> None:
         """Inject LLM-proposed rules into the context immediately.

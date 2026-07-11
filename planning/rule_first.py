@@ -2,33 +2,23 @@
 
 from __future__ import annotations
 
-import logging
 import random
 
 from effects import (
     EffectContext,
     Pos,
-    ResidualEntry,
-    SceneState,
     entity_size_at,
     inject_llm_proposals,
     learn_effect_context_multi,
     merge_effect_context,
-    predict,
 )
-from effects.engine_log import diff_effect_context
-from effects.engine_step_result import run_engine_step
 from effects.rules import Rule
-from effects.transition_history import TransitionHistory
 from perception.session import RESET_ACTION, SceneSnapshot
 
 from .adapters import snapshot_from_scene
 from .heuristics import ExplorationConfig
 from .protocol import PlannerStatus
-from .query import UnknownAction
 from .search import PlanSpec, plan_bfs
-
-_engine_logger = logging.getLogger("effects.engine")
 
 
 class RuleFirstPolicy:
@@ -46,13 +36,11 @@ class RuleFirstPolicy:
         config: ExplorationConfig | None = None,
         grid_rows: int = 64,
         grid_cols: int = 64,
-        history: TransitionHistory | None = None,
     ) -> None:
         self.action_space = [a for a in action_space if a != RESET_ACTION]
         self.cfg = config or ExplorationConfig()
         self.grid_rows = grid_rows
         self.grid_cols = grid_cols
-        self._history = history
 
         self.visited: set[tuple[object, ...]] = set()
         self.plan: list[int] = []
@@ -60,14 +48,9 @@ class RuleFirstPolicy:
         self._ctx: EffectContext | None = None
         self._engine_ctx: EffectContext | None = None
 
-        self._engine_state_before: SceneState | None = None
-        self._pending_action: int | None = None
         self._last_scene: SceneSnapshot | None = None
         self._last_phase = "init"
         self._last_diverged = False
-        self._last_residual: tuple[ResidualEntry, ...] = ()
-        self._last_unknowns: tuple[UnknownAction, ...] = ()
-        self._last_observed_transition: tuple[SceneState, int, SceneState] | None = None
         self.rng = random.Random(self.cfg.seed)
 
     # ------------------------------------------------------------------
@@ -77,22 +60,12 @@ class RuleFirstPolicy:
     def on_observed(self, scene: SceneSnapshot) -> None:
         """Verify last prediction and update exploration bookkeeping."""
         self._last_scene = scene
-        self._verify_expectation(scene)
         state = self._snapshot_state(scene)
         if state is not None:
             self.visited.add(state.fingerprint())
 
-    def _verify_expectation(self, scene: SceneSnapshot) -> None:
-        self._last_diverged = False
-
-        if self._pending_action is not None:
-            self._run_engine_step(scene, self._pending_action)
-
-        self._engine_state_before = None
-        self._pending_action = None
-
     # ------------------------------------------------------------------
-    # Engine step
+    # Engine step helpers
     # ------------------------------------------------------------------
 
     def _rule_entity_ids(self) -> list[int]:
@@ -144,50 +117,6 @@ class RuleFirstPolicy:
             dims=tuple(unique_dims) if unique_dims else ("pos",),
             goal=lambda s: False,
         )
-
-    def _run_engine_step(self, scene: SceneSnapshot, action: int) -> None:
-        if (
-            self._engine_ctx is None
-            or self._engine_state_before is None
-        ):
-            return
-        spec = self._engine_plan_spec(scene)
-        observed = snapshot_from_scene(scene, spec)
-        if observed is None:
-            return
-        step_label = f"f{scene.frame_idx} a{action}"
-        before_ctx = self._engine_ctx
-
-        result = run_engine_step(
-            self._engine_ctx,
-            self._engine_state_before,
-            action,
-            observed,
-            spec,
-            controllable_id=None,
-            history=self._history,
-        )
-        self._last_residual = result.residual
-        self._last_observed_transition = result.observed_transition
-        self._engine_ctx = result.ctx
-
-        if self._history is not None:
-            self._history.append(
-                state_before=self._engine_state_before,
-                action=action,
-                state_after=observed,
-                frame_idx=scene.frame_idx,
-            )
-        self._ctx = self._engine_ctx
-        if not self.cfg.log_engine:
-            return
-        lines = diff_effect_context(before_ctx, self._engine_ctx)
-        prefix = f"{step_label} | "
-        if lines:
-            for line in lines:
-                _engine_logger.info("%s%s", prefix, line)
-        else:
-            _engine_logger.info("%sengine step (no rule change)", prefix)
 
     # ------------------------------------------------------------------
     # Decision
@@ -248,24 +177,7 @@ class RuleFirstPolicy:
         scene: SceneSnapshot,
         action: int,
     ) -> int:
-        """Remember pre-action state for verify + rule engine on next observe."""
-        self._engine_state_before = None
-        self._pending_action = None
-        if self._ctx is None:
-            return action
-
-        spec = self._engine_plan_spec(scene)
-        self._engine_state_before = snapshot_from_scene(scene, spec)
-        self._pending_action = action
-
-        verify_state = self._snapshot_state(scene)
-        if verify_state is None:
-            return action
-        nxt = predict(verify_state, action, self._ctx)
-        if nxt.unknown:
-            self._last_unknowns = (UnknownAction(action=action, state=verify_state),)
-        else:
-            self._last_unknowns = ()
+        """Record action for next observe (no-op — engine step moved to agent)."""
         return action
 
     # ------------------------------------------------------------------
@@ -311,16 +223,10 @@ class RuleFirstPolicy:
         self._last_phase = phase
         return self.rng.choice(actions)
 
-    def _snapshot_state(self, scene: SceneSnapshot) -> SceneState | None:
+    def _snapshot_state(self, scene: SceneSnapshot) -> object | None:
         """Build SceneState covering all rule-tracked entities."""
-        entities = list(self._rule_entity_ids()) if self._ctx else []
-        if not entities:
-            # Fall back to all catalog entities with pos data
-            entities = sorted(scene.catalog.entities)
-        return snapshot_from_scene(
-            scene,
-            PlanSpec(entities=entities, goal=lambda s: False),
-        )
+        spec = self._engine_plan_spec(scene)
+        return snapshot_from_scene(scene, spec)
 
     def _legal_actions(self, available: list[int] | None) -> list[int]:
         if available:
@@ -337,17 +243,10 @@ class RuleFirstPolicy:
     def context(self) -> EffectContext | None:
         return self._ctx
 
-    @property
-    def last_residual(self) -> tuple[ResidualEntry, ...]:
-        return self._last_residual
-
-    @property
-    def last_unknowns(self) -> tuple[UnknownAction, ...]:
-        return self._last_unknowns
-
-    @property
-    def last_observed_transition(self) -> tuple[SceneState, int, SceneState] | None:
-        return self._last_observed_transition
+    def update_context(self, ctx: EffectContext) -> None:
+        """Feed an updated EffectContext back from the agent's engine step."""
+        self._ctx = ctx
+        self._engine_ctx = ctx
 
     def inject_llm_proposals(self, proposals: tuple[Rule, ...]) -> None:
         """Inject LLM-proposed rules into the context immediately."""
