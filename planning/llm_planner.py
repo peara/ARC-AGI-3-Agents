@@ -11,13 +11,13 @@ import logging
 import re
 from typing import Any, Callable
 
-from vision.render import make_multimodal_user_message
 from effects.context import EffectContext
-from effects.counter_evidence import CounterEvidence, format_counter_evidence
+from effects.counter_evidence import format_counter_evidence
 from effects.dsl import dsl_to_rule
 from effects.engine import _ProjectionSpec, validate_rules_against_history
 from effects.rules import Rule
 from effects.transition_history import TransitionHistory
+from vision.render import make_multimodal_user_message
 
 from .llm_rule_proposer import SYSTEM_PROMPT, parse_proposals, validate_proposal
 from .probe import ProbeGoal

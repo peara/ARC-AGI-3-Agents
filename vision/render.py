@@ -2,7 +2,9 @@ import base64
 import io
 import logging
 from typing import Any, Sequence
+
 from PIL import Image
+
 from vision.palette import ARCADE_PALETTE
 
 logger = logging.getLogger(__name__)
