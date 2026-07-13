@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal, overload
 
 from .context import EffectContext
+from .rules import Rule
 from .state import TERMINAL_GAME_OVER, SceneState
 
 
@@ -21,13 +23,36 @@ class Prediction:
     unknown: bool = False
 
 
+@overload
+def predict(
+    state: SceneState,
+    action: int,
+    ctx: EffectContext,
+    *,
+    entity_cells: dict[int, frozenset[tuple[int, int]]] | None = ...,
+    return_fired: Literal[False] = ...,
+) -> Prediction: ...
+
+
+@overload
+def predict(
+    state: SceneState,
+    action: int,
+    ctx: EffectContext,
+    *,
+    entity_cells: dict[int, frozenset[tuple[int, int]]] | None = ...,
+    return_fired: Literal[True] = ...,
+) -> tuple[Prediction, list[Rule]]: ...
+
+
 def predict(
     state: SceneState,
     action: int,
     ctx: EffectContext,
     *,
     entity_cells: dict[int, frozenset[tuple[int, int]]] | None = None,
-) -> Prediction:
+    return_fired: bool = False,
+) -> Prediction | tuple[Prediction, list[Rule]]:
     """Predict the next symbolic state after ``action``.
 
     Rules-only path: confirmed and proposed movement rules propose candidate
@@ -43,39 +68,51 @@ def predict(
     before the movement, and ``op="revert"`` restores that position.
     Effects with ``op="revert"`` restore values from ``state_before``.
     """
-
     nxt: SceneState = state
     any_fired = False
+    fired_rules: list[Rule] = []
+
     for rule in ctx.movement_rules:
         if rule.guard(state, action):
             nxt = rule.apply(nxt, action, state_before=state, entity_cells=entity_cells)
             any_fired = True
+            fired_rules.append(rule)
     for rule in ctx.proposed_rules:
         if rule.kind == "movement" and rule.guard(state, action):
             nxt = rule.apply(nxt, action, state_before=state, entity_cells=entity_cells)
             any_fired = True
+            fired_rules.append(rule)
     if not any_fired:
-        return Prediction(state, unknown=True)
+        pred = Prediction(state, unknown=True)
+        return (pred, fired_rules) if return_fired else pred
 
     for rule in ctx.collision_rules:
         if rule.guard(state, action, entity_cells=entity_cells):
             nxt = rule.apply(nxt, action, state_before=state, entity_cells=entity_cells)
+            fired_rules.append(rule)
     for rule in ctx.proposed_rules:
         if rule.kind == "collision" and rule.guard(state, action, entity_cells=entity_cells):
             nxt = rule.apply(nxt, action, state_before=state, entity_cells=entity_cells)
+            fired_rules.append(rule)
     for rule in ctx.terminal_rules:
         if rule.guard(state, action):
             nxt = rule.apply(nxt, action, state_before=state, entity_cells=entity_cells)
+            fired_rules.append(rule)
     for rule in ctx.proposed_rules:
         if rule.kind == "terminal" and rule.guard(state, action):
             nxt = rule.apply(nxt, action, state_before=state, entity_cells=entity_cells)
+            fired_rules.append(rule)
     for rule in ctx.relational_rules:
         if rule.guard(state, action):
             nxt = rule.apply(nxt, action, state_before=state, entity_cells=entity_cells)
+            fired_rules.append(rule)
     for rule in ctx.proposed_rules:
         if rule.kind == "delta" and rule.guard(state, action):
             nxt = rule.apply(nxt, action, state_before=state, entity_cells=entity_cells)
-    return Prediction(nxt, unknown=False)
+            fired_rules.append(rule)
+    
+    pred = Prediction(nxt, unknown=False)
+    return (pred, fired_rules) if return_fired else pred
 
 
 def replay_predicted(

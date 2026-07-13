@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .dsl import rule_to_dsl
 from .rules import Rule
+
+MAX_REFUTED_RULES = 10
 
 
 @dataclass(frozen=True)
@@ -67,6 +69,7 @@ class EffectContext:
     proposed_rules: tuple[Rule, ...] = ()
     movement_rules: tuple[Rule, ...] = ()
     collision_rules: tuple[Rule, ...] = ()
+    refuted_rules: tuple[Rule, ...] = ()
     available_actions: tuple[int, ...] = ()
     confirm_threshold: int = 2
     latent_defaults: dict[tuple[int, str], object] = field(default_factory=dict)
@@ -78,6 +81,7 @@ class EffectContext:
             "proposed_rules": [r.to_dict() for r in self.proposed_rules],
             "movement_rules": [rule_to_dsl(r) for r in self.movement_rules],
             "collision_rules": [rule_to_dsl(r) for r in self.collision_rules],
+            "refuted_rules": [rule_to_dsl(r) for r in self.refuted_rules],
             "available_actions": list(self.available_actions),
             "confirm_threshold": self.confirm_threshold,
         }
@@ -122,7 +126,16 @@ def merge_effect_context(base: EffectContext, engine: EffectContext) -> EffectCo
         proposed_rules=engine.proposed_rules,
         movement_rules=tuple(merged_movement_rules),
         collision_rules=tuple(merged_collision_rules),
+        refuted_rules=engine.refuted_rules,
         available_actions=merged_available_actions,
         confirm_threshold=engine.confirm_threshold,
         latent_defaults=base.latent_defaults,
     )
+
+
+def add_refuted_rule(ctx: EffectContext, rule: Rule) -> EffectContext:
+    """Add a rule to refuted_rules, evicting oldest if over capacity."""
+    new_rules = ctx.refuted_rules + (rule,)
+    if len(new_rules) > MAX_REFUTED_RULES:
+        new_rules = new_rules[-MAX_REFUTED_RULES:]
+    return replace(ctx, refuted_rules=new_rules)
