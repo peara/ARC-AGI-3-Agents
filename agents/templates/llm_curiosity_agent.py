@@ -9,6 +9,7 @@ active or the LLM fails.
 from __future__ import annotations
 
 import logging
+import os
 import random
 import time
 from typing import Any
@@ -77,6 +78,7 @@ class LlmCuriosity(Agent):
         # LLM client
         self._llm_client = LLMClient()
         self.llm_call = self._llm_client.chat
+        self._vision_enabled: bool = os.environ.get("LLM_VISION", "").lower() in ("true", "1", "yes")
 
         # Frame counter for LLM call logging (correlates calls to frame events).
         self._frame_index = -1
@@ -351,6 +353,8 @@ class LlmCuriosity(Agent):
                 actions,
                 self._planner_call,
                 failure_context=self._failure_context,
+                vision=self._vision_enabled,
+                grid=self._scene.grid if self._scene else None,
             )
             self._failure_context = None
             if goal is not None:
