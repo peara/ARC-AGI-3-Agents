@@ -11,8 +11,12 @@ import logging
 import re
 from typing import Callable
 
+from effects.context import EffectContext
+from effects.counter_evidence import CounterEvidence, format_counter_evidence
 from effects.dsl import dsl_to_rule
+from effects.engine import _ProjectionSpec, validate_rules_against_history
 from effects.rules import Rule
+from effects.transition_history import TransitionHistory
 
 from .llm_rule_proposer import SYSTEM_PROMPT, parse_proposals, validate_proposal
 from .probe import ProbeGoal
@@ -428,8 +432,21 @@ def call_rule_proposer(
     residual: list[dict[str, object]],
     llm_call: Callable[[list[dict[str, str]]], str],
     failure_context: dict[str, object] | None = None,
+    history: TransitionHistory | None = None,
+    ctx: EffectContext | None = None,
+    spec: _ProjectionSpec | None = None,
 ) -> list[Rule]:
     """Orchestrate LLM-based rule proposal: build prompt → call LLM → parse → validate → dedup.
+
+    When *history*, *ctx*, and *spec* are all provided, proposed rules are
+    validated against historical transitions via
+    ``validate_rules_against_history``.  If counter-evidence is found, the
+    LLM is called again with the counter-evidence appended to the
+    conversation (max 3 total attempts = 1 initial + 2 retries).  After
+    max retries, only rules that passed validation are returned.
+
+    When any of *history*, *ctx*, *spec* is ``None``, the validation loop
+    is skipped and the function behaves as before (backward compat).
 
     Parameters
     ----------
@@ -442,6 +459,16 @@ def call_rule_proposer(
         response string.
     failure_context:
         Optional dict describing why a previous proposal round failed.
+    history:
+        Optional transition history for validating proposed rules against
+        historical observations.  When provided alongside *ctx* and *spec*,
+        a validation loop runs after the initial LLM call.
+    ctx:
+        Optional EffectContext for rule validation. Required if *history* is
+        provided.
+    spec:
+        Optional projection spec (entities, dims, include_terminal) for
+        validation. Required if *history* is provided.
 
     Returns
     -------
@@ -485,18 +512,200 @@ def call_rule_proposer(
                 len(proposals),
                 raw,
             )
-        for rule in unique:
-            parts = [rule.kind]
-            for e in rule.effects:
-                val = e.value
-                if isinstance(val, int):
-                    parts.append(f"e{e.of}.{e.dim}{e.op}{val:+d}")
-                else:
-                    parts.append(f"e{e.of}.{e.dim}{e.op}{val}")
-            if rule.is_positional_guard:
-                parts.append(f"guard={rule.guard_spec}")
-            parts.append(f"support={rule.support}")
-            log.info("rule_proposer: + %s", " ".join(parts))
+
+        # --- Validation loop ---
+        # Only enter if all three validation parameters are provided.
+        can_validate = history is not None and ctx is not None and spec is not None
+
+        if not can_validate or not unique:
+            # Backward compat: skip validation, return unique directly.
+            for rule in unique:
+                parts = [rule.kind]
+                for e in rule.effects:
+                    val = e.value
+                    if isinstance(val, int):
+                        parts.append(f"e{e.of}.{e.dim}{e.op}{val:+d}")
+                    else:
+                        parts.append(f"e{e.of}.{e.dim}{e.op}{val}")
+                if rule.is_positional_guard:
+                    parts.append(f"guard={rule.guard_spec}")
+                parts.append(f"support={rule.support}")
+                log.info("rule_proposer: + %s", " ".join(parts))
+            return unique
+
+        # --- Validation loop: max 3 total attempts (1 initial + 2 retries) ---
+        # Type narrowing: we only enter this block when all three are not None.
+        assert history is not None
+        assert ctx is not None
+        assert spec is not None
+        _history: TransitionHistory = history
+        _ctx: EffectContext = ctx
+        _spec: _ProjectionSpec = spec
+
+        refuted_keys: set[tuple[object, ...]] = set()
+        max_attempts = 3
+        attempt = 1
+
+        while True:
+            counter_evidence = validate_rules_against_history(
+                tuple(unique), _ctx, _history, _spec
+            )
+
+            if not counter_evidence:
+                # All rules passed validation
+                log.info(
+                    "validation_loop: attempt %d, %d proposals passed",
+                    attempt,
+                    len(unique),
+                )
+                for rule in unique:
+                    parts = [rule.kind]
+                    for e in rule.effects:
+                        val = e.value
+                        if isinstance(val, int):
+                            parts.append(f"e{e.of}.{e.dim}{e.op}{val:+d}")
+                        else:
+                            parts.append(f"e{e.of}.{e.dim}{e.op}{val}")
+                    if rule.is_positional_guard:
+                        parts.append(f"guard={rule.guard_spec}")
+                    parts.append(f"support={rule.support}")
+                    log.info("rule_proposer: + %s", " ".join(parts))
+                return unique
+
+            if attempt >= max_attempts:
+                # Max retries exhausted — keep only rules that didn't fire
+                # in any counter-evidence entry (i.e. rules not refuted).
+                fired_keys_in_ce: set[tuple[object, ...]] = set()
+                for ce in counter_evidence:
+                    for fired_dict in ce.fired_rules:
+                        try:
+                            normalized = dict(fired_dict)
+                            if "guard_spec" in normalized and "guard" not in normalized:
+                                normalized["guard"] = normalized.pop("guard_spec")
+                            fired_rule = dsl_to_rule(normalized)
+                            fired_keys_in_ce.add(fired_rule.key())
+                        except (KeyError, ValueError, TypeError):
+                            pass
+                passing = [
+                    r for r in unique if r.key() not in fired_keys_in_ce
+                ]
+                log.info(
+                    "validation_loop: attempt %d, %d proposals passed",
+                    attempt,
+                    len(passing),
+                )
+                for rule in passing:
+                    parts = [rule.kind]
+                    for e in rule.effects:
+                        val = e.value
+                        if isinstance(val, int):
+                            parts.append(f"e{e.of}.{e.dim}{e.op}{val:+d}")
+                        else:
+                            parts.append(f"e{e.of}.{e.dim}{e.op}{val}")
+                    if rule.is_positional_guard:
+                        parts.append(f"guard={rule.guard_spec}")
+                    parts.append(f"support={rule.support}")
+                    log.info("rule_proposer: + %s", " ".join(parts))
+                return passing
+
+            # Counter-evidence found — retry
+            log.info(
+                "validation_loop: attempt %d, %d failures, retrying",
+                attempt,
+                len(counter_evidence),
+            )
+
+            # Collect refuted rule keys for dedup across retries
+            for ce in counter_evidence:
+                for fired_dict in ce.fired_rules:
+                    try:
+                        normalized = dict(fired_dict)
+                        if "guard_spec" in normalized and "guard" not in normalized:
+                            normalized["guard"] = normalized.pop("guard_spec")
+                        fired_rule = dsl_to_rule(normalized)
+                        refuted_keys.add(fired_rule.key())
+                    except (KeyError, ValueError, TypeError):
+                        pass
+
+            # Cap counter-evidence at 3 entries per refuted rule to avoid LLM prompt explosion
+            _MAX_CE_PER_RETRY = 3
+            capped_ce = counter_evidence[:_MAX_CE_PER_RETRY]
+
+            # Format counter-evidence for the LLM
+            ce_text = format_counter_evidence(capped_ce)
+            if not ce_text:
+                # No useful text to send back; return what we have
+                for rule in unique:
+                    parts = [rule.kind]
+                    for e in rule.effects:
+                        val = e.value
+                        if isinstance(val, int):
+                            parts.append(f"e{e.of}.{e.dim}{e.op}{val:+d}")
+                        else:
+                            parts.append(f"e{e.of}.{e.dim}{e.op}{val}")
+                    if rule.is_positional_guard:
+                        parts.append(f"guard={rule.guard_spec}")
+                    parts.append(f"support={rule.support}")
+                    log.info("rule_proposer: + %s", " ".join(parts))
+                return unique
+
+            # Append assistant response + counter-evidence user message
+            messages = messages + [
+                {"role": "assistant", "content": raw},
+                {
+                    "role": "user",
+                    "content": (
+                        "## Counter-evidence\n\n"
+                        "Your proposed rules failed validation against historical "
+                        "transitions. Here are the failures:\n\n"
+                        f"{ce_text}\n\n"
+                        "Please revise your rules to address these failures. "
+                        "Output the corrected rules in the same JSON format."
+                    ),
+                },
+            ]
+
+            # Call LLM again (retry)
+            raw = llm_call(messages)
+            proposals = parse_proposals(raw)
+
+            # Re-validate proposals against scene entities
+            rules = []
+            for proposal in proposals:
+                rule = validate_proposal(proposal, scene_entities)
+                if rule is not None:
+                    rules.append(rule)
+
+            # Re-dedup against existing + refuted keys
+            seen_keys = set()
+            unique = []
+            for rule in rules:
+                k = rule.key()
+                if (
+                    k not in existing_keys
+                    and k not in refuted_keys
+                    and k not in seen_keys
+                ):
+                    unique.append(rule)
+                    seen_keys.add(k)
+
+            log.info(
+                "rule_proposer: retry parsed=%d validated=%d deduped=%d "
+                "(existing=%d, refuted=%d)",
+                len(proposals),
+                len(rules),
+                len(unique),
+                len(existing_keys),
+                len(refuted_keys),
+            )
+
+            if not unique:
+                # No proposals survived validation on retry
+                return []
+
+            attempt += 1
+
+        # Unreachable, but satisfy type checker
         return unique
     except Exception as exc:
         log.warning(
