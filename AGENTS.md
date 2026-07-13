@@ -19,7 +19,10 @@ never on the eval path.
 
 - `main.py` — entry point. Loop: `main.py → Swarm → one Agent per game → Agent.choose_action()/is_done()`.
 - `agents/` — upstream harness. `agent.py` (base contract), `swarm.py`, `recorder.py`, `templates/` (random, curiosity, llmcuriosity, llm, langgraph, …). Registered by lowercased class name in `agents/__init__.py:AVAILABLE_AGENTS`.
-- `perception/` — observational extraction (frames → registry → `SceneSnapshot`)
+- `vision/` — grid rendering for multimodal LLM input (palette + PIL-based image generation)
+  - `palette.py` — `ARCADE_PALETTE`: canonical 16-color RGBA tuples for ARC-AGI-3 grid indices
+  - `render.py` — `grid_to_image` (64×64 → 256×256 PNG), `image_to_base64`, `make_image_block`, `make_multimodal_user_message`
+- `perception/` — observational extraction (frames → registry → `SceneSnapshot`). `SceneSnapshot.grid` carries the raw 64×64 colour-index grid.
 - `entity/` — entity identity layer (re-identification + composition + roles)
   - `reconciler.py` — temporal successor: links dead tracks to born tracks (rotation, color change, compound co-transition)
   - `logical_registry.py` — `LogicalRegistry`: wraps `ObjectRegistry` with a merge map
@@ -36,7 +39,7 @@ never on the eval path.
   - `exploration.py` — `ExplorationPolicy`: engine step, BFS, divergence, proposal injection
   - `search.py` — `plan_bfs` with unknown-state tracking
   - `probe.py` — `ProbeGoal` DSL (target predicates + action field)
-  - `llm_planner.py` — LLM planner prompt, parse, validate, call
+  - `llm_planner.py` — LLM planner prompt, parse, validate, call. Supports `LLM_VISION=true` env var to inject grid images (multimodal).
   - `llm_rule_proposer.py` — LLM rule proposer (movement/collision/terminal/delta)
   - `query.py` — `QueryInterface.bundle()`: LLM-facing scene + rules + context
 - `grouping/` — heuristic entity grouping (classical proposals + LLM confirm)
@@ -64,6 +67,12 @@ uv run main.py --agent=llmcuriosity --game=<game_id>
 
 Replay a recording as an agent: `--agent=<file>.recording.jsonl`.
 
+Enable grid image input to the LLM planner (multimodal):
+
+```bash
+LLM_VISION=true uv run main.py --agent=llmcuriosityv2 --game=<game_id>
+```
+
 ## Debugging with LLM logs
 
 Every LLM call (planner + rule proposer) is recorded to a sibling `.llm.jsonl`
@@ -78,7 +87,7 @@ jq 'select(.frame_index == 7)' recordings/*.llm.jsonl | head
 jq 'select(.ok == false)' recordings/*.llm.jsonl
 
 # How big was each prompt?
-jq '{frame: .frame_index, kind: .kind, chars: (.messages | map(.content) | add | length)}' recordings/*.llm.jsonl
+jq '{frame: .frame_index, kind: .kind, chars: (.messages | map(.content | if type == "string" then length else (map(.text // "") | join("") | length) end) | add)}' recordings/*.llm.jsonl
 ```
 
 Messages/responses are truncated at 20 KB per field (`MAX_CONTENT_CHARS` in `agents/templates/llm_logging.py`).
