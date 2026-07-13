@@ -629,6 +629,65 @@ class TestPrediction:
         assert result.unknown is False
         assert result.state.pos(0) == (9, 9)
 
+    def test_predict_return_fired_false_returns_prediction(self):
+        """Backward compat: return_fired=False returns Prediction, not tuple."""
+        movement_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "set", (9, 9)),),
+            support=1,
+            kind="movement",
+        )
+        ctx = EffectContext(movement_rules=(movement_rule,))
+        start = SceneState(relevant=((0, ("pos", (5, 5))),))
+        result = predict(start, 1, ctx, return_fired=False)
+        assert isinstance(result, Prediction)
+        assert not result.unknown
+
+    def test_predict_return_fired_true_returns_tuple_with_fired_rules(self):
+        """predict(return_fired=True) returns (Prediction, [fired_rules])."""
+        movement_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "set", (9, 9)),),
+            support=1,
+            kind="movement",
+        )
+        terminal_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("terminal", 0, "set", TERMINAL_GAME_OVER),),
+            support=1,
+        )
+        ctx = EffectContext(
+            movement_rules=(movement_rule,), 
+            terminal_rules=(terminal_rule,), 
+            available_actions=(1,)
+        )
+        start = SceneState(relevant=((0, ("pos", (5, 5))),))
+        result = predict(start, 1, ctx, return_fired=True)
+        assert isinstance(result, tuple)
+        pred, fired = result
+        assert isinstance(pred, Prediction)
+        assert not pred.unknown
+        assert movement_rule in fired
+        assert terminal_rule in fired
+        assert len(fired) == 2
+
+    def test_predict_return_fired_true_unknown_returns_empty_list(self):
+        """predict(return_fired=True) returns empty fired list when unknown."""
+        movement_rule = Rule(
+            guard_spec={"action": 2},
+            effects=(Effect("pos", 0, "set", (9, 9)),),
+            support=1,
+            kind="movement",
+        )
+        ctx = EffectContext(movement_rules=(movement_rule,))
+        start = SceneState(relevant=((0, ("pos", (5, 5))),))
+        result = predict(start, 1, ctx, return_fired=True)
+        assert isinstance(result, tuple)
+        pred, fired = result
+        assert pred.unknown is True
+        assert fired == []
+
+
     def test_predict_collision_rule_with_overlaps_guard(self):
         """Collision rule with overlaps guard evaluated against post-movement state."""
         movement_rule = Rule(

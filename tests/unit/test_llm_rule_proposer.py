@@ -335,3 +335,230 @@ def test_validate_proposal_orientation_delta_integer() -> None:
     assert isinstance(rule, Rule)
     assert rule.effects[0].op == "delta"
     assert rule.effects[0].value == 1
+
+
+# ---------------------------------------------------------------------------
+# SYSTEM_PROMPT sections (Task 8)
+# ---------------------------------------------------------------------------
+
+
+def test_system_prompt_contains_refuted_rules_section() -> None:
+    """SYSTEM_PROMPT must include guidance about refuted rules."""
+    prompt_lower = SYSTEM_PROMPT.lower()
+    assert "refuted" in prompt_lower, "SYSTEM_PROMPT missing 'refuted' section"
+    assert "refuted_rules" in prompt_lower or "refuted rules" in prompt_lower, (
+        "SYSTEM_PROMPT missing 'refuted_rules' or 'Refuted rules' section header"
+    )
+
+
+def test_system_prompt_contains_counter_evidence_section() -> None:
+    """SYSTEM_PROMPT must include guidance about counter-evidence."""
+    prompt_lower = SYSTEM_PROMPT.lower()
+    assert "counter-evidence" in prompt_lower or "counter evidence" in prompt_lower, (
+        "SYSTEM_PROMPT missing 'counter-evidence' section"
+    )
+
+
+def test_system_prompt_contains_over_specialization_guidance() -> None:
+    """SYSTEM_PROMPT must warn against over-specialization / overfitting."""
+    prompt_lower = SYSTEM_PROMPT.lower()
+    assert "general" in prompt_lower, "SYSTEM_PROMPT missing 'general' keyword"
+    assert (
+        "overfit" in prompt_lower
+        or "over-specif" in prompt_lower
+        or "specific guard" in prompt_lower
+    ), "SYSTEM_PROMPT missing over-specialization / overfitting warning"
+
+
+# ---------------------------------------------------------------------------
+# Validation loop (Task 7)
+# ---------------------------------------------------------------------------
+
+
+def _make_llm_response(rule_dict: dict) -> str:
+    """Wrap a rule dict in the expected JSON response format."""
+    return json.dumps({"rules": [rule_dict]})
+
+
+def test_call_rule_proposer_backward_compat_no_history() -> None:
+    """Without history/ctx/spec, call_rule_proposer skips validation."""
+    mv_rule = {
+        "kind": "movement",
+        "guard": {"action": 1},
+        "effects": [{"dim": "pos", "of": 0, "op": "delta", "value": [-1, 0]}],
+        "support": 3,
+    }
+    bundle = {
+        "scene": {"frame_idx": 0, "n_observed": 1, "entities": [{"id": 0, "pos": [5, 5]}]},
+        "engine_rules": {"confirmed": [], "proposed": []},
+    }
+    call_count = 0
+
+    def mock_llm(messages: list[dict[str, str]]) -> str:
+        nonlocal call_count
+        call_count += 1
+        return _make_llm_response(mv_rule)
+
+    result = call_rule_proposer(bundle, [], mock_llm)
+    assert len(result) == 1
+    assert result[0].kind == "movement"
+    assert call_count == 1, "Should call LLM exactly once without validation"
+
+
+def test_validation_loop_passes_first_try() -> None:
+    """When proposed rules pass validation, no retries needed."""
+    from effects.context import EffectContext
+    from effects.engine import _ProjectionSpec
+    from effects.transition_history import TransitionHistory
+    from effects.state import SceneState
+
+    mv_rule_dict = {
+        "kind": "movement",
+        "guard": {"action": 1},
+        "effects": [{"dim": "pos", "of": 0, "op": "delta", "value": [-1, 0]}],
+        "support": 3,
+    }
+    bundle = {
+        "scene": {"frame_idx": 0, "n_observed": 1, "entities": [{"id": 0, "pos": [5, 5]}]},
+        "engine_rules": {"confirmed": [], "proposed": []},
+    }
+    call_count = 0
+
+    def mock_llm(messages: list[dict[str, str]]) -> str:
+        nonlocal call_count
+        call_count += 1
+        return _make_llm_response(mv_rule_dict)
+
+    mv_rule = Rule(
+        guard_spec={"action": 1},
+        effects=(Effect("pos", 0, "delta", (-1, 0)),),
+        support=1,
+        kind="movement",
+    )
+    ctx = EffectContext(movement_rules=(mv_rule,), available_actions=(1,))
+    history = TransitionHistory()
+    history.append(
+        state_before=SceneState(relevant=((0, ("pos", (5, 5))),)),
+        action=1,
+        state_after=SceneState(relevant=((0, ("pos", (4, 5))),)),
+        frame_idx=0,
+    )
+    spec = _ProjectionSpec(
+        entities=(0,), dims=("pos",), include_terminal=False
+    )
+
+    result = call_rule_proposer(
+        bundle, [], mock_llm,
+        history=history, ctx=ctx, spec=spec,
+    )
+    assert len(result) >= 1, "Should return at least one validated rule"
+    assert call_count == 1, "Should call LLM exactly once when validation passes"
+
+
+def test_validation_loop_retries_with_counter_evidence() -> None:
+    """When rules fail validation, LLM is called again with counter-evidence."""
+    from effects.context import EffectContext
+    from effects.engine import _ProjectionSpec
+    from effects.transition_history import TransitionHistory
+    from effects.state import SceneState
+
+    wrong_rule_dict = {
+        "kind": "movement",
+        "guard": {"action": 1},
+        "effects": [{"dim": "pos", "of": 0, "op": "delta", "value": [99, 99]}],
+        "support": 3,
+    }
+    correct_rule_dict = {
+        "kind": "movement",
+        "guard": {"action": 1},
+        "effects": [{"dim": "pos", "of": 0, "op": "delta", "value": [-1, 0]}],
+        "support": 3,
+    }
+    bundle = {
+        "scene": {"frame_idx": 0, "n_observed": 1, "entities": [{"id": 0, "pos": [5, 5]}]},
+        "engine_rules": {"confirmed": [], "proposed": []},
+    }
+    call_count = 0
+
+    def mock_llm(messages: list[dict[str, str]]) -> str:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _make_llm_response(wrong_rule_dict)
+        return _make_llm_response(correct_rule_dict)
+
+    # Existing movement rule so predict() returns known (not unknown)
+    existing_rule = Rule(
+        guard_spec={"action": 1},
+        effects=(Effect("pos", 0, "delta", (-1, 0)),),
+        support=1,
+        kind="movement",
+    )
+    ctx = EffectContext(movement_rules=(existing_rule,), available_actions=(1,))
+    history = TransitionHistory()
+    history.append(
+        state_before=SceneState(relevant=((0, ("pos", (5, 5))),)),
+        action=1,
+        state_after=SceneState(relevant=((0, ("pos", (4, 5))),)),
+        frame_idx=0,
+    )
+    spec = _ProjectionSpec(
+        entities=(0,), dims=("pos",), include_terminal=False
+    )
+
+    result = call_rule_proposer(
+        bundle, [], mock_llm,
+        history=history, ctx=ctx, spec=spec,
+    )
+    assert call_count >= 2, f"Should retry LLM on validation failure, got {call_count} calls"
+
+
+def test_validation_loop_drops_after_max_retries() -> None:
+    """When LLM always returns wrong rules, max retries reached, returns empty."""
+    from effects.context import EffectContext
+    from effects.engine import _ProjectionSpec
+    from effects.transition_history import TransitionHistory
+    from effects.state import SceneState
+
+    wrong_rule_dict = {
+        "kind": "movement",
+        "guard": {"action": 1},
+        "effects": [{"dim": "pos", "of": 0, "op": "delta", "value": [99, 99]}],
+        "support": 3,
+    }
+    bundle = {
+        "scene": {"frame_idx": 0, "n_observed": 1, "entities": [{"id": 0, "pos": [5, 5]}]},
+        "engine_rules": {"confirmed": [], "proposed": []},
+    }
+    call_count = 0
+
+    def mock_llm(messages: list[dict[str, str]]) -> str:
+        nonlocal call_count
+        call_count += 1
+        return _make_llm_response(wrong_rule_dict)
+
+    existing_rule = Rule(
+        guard_spec={"action": 1},
+        effects=(Effect("pos", 0, "delta", (-1, 0)),),
+        support=1,
+        kind="movement",
+    )
+    ctx = EffectContext(movement_rules=(existing_rule,), available_actions=(1,))
+    history = TransitionHistory()
+    history.append(
+        state_before=SceneState(relevant=((0, ("pos", (5, 5))),)),
+        action=1,
+        state_after=SceneState(relevant=((0, ("pos", (4, 5))),)),
+        frame_idx=0,
+    )
+    spec = _ProjectionSpec(
+        entities=(0,), dims=("pos",), include_terminal=False
+    )
+
+    result = call_rule_proposer(
+        bundle, [], mock_llm,
+        history=history, ctx=ctx, spec=spec,
+    )
+    assert call_count <= 3, f"Should not exceed max 3 retries, got {call_count}"
+    # After max retries with failing rules, result should be empty
+    # (all proposed rules fail validation)

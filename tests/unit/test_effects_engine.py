@@ -10,6 +10,7 @@ from effects import (
     ResidualEntry,
     Rule,
     SceneState,
+    add_refuted_rule,
     compute_residual,
     confirm_rules,
     diff_effect_context,
@@ -20,7 +21,8 @@ from effects import (
     propose_rules,
     prune_rules,
 )
-from effects.engine import _bump_support, _iter_managed_rules, _promote_rules
+from effects.context import MAX_REFUTED_RULES
+from effects.engine import _bump_support, _iter_managed_rules, _promote_rules, _refute_contradicted_rules
 from effects.engine_log import _index_rules, format_rule
 from perception.session import PerceptionSession
 from planning.adapters import snapshot_from_scene
@@ -916,3 +918,204 @@ class TestOrientationSetRules:
         assert rule.effects[0].value == 0, "N should map to 0"
         roundtrip_dsl = rule_to_dsl(rule)
         assert roundtrip_dsl["effects"][0]["value"] == 0, "orientation should serialize as integer, not compass letter"
+
+
+@pytest.mark.unit
+class TestRefutedRules:
+    """refuted_rules bucket in EffectContext: default, serialization, FIFO eviction."""
+
+    def test_effect_context_refuted_rules_default_empty(self):
+        """EffectContext defaults to empty refuted_rules."""
+        ctx = EffectContext()
+        assert ctx.refuted_rules == ()
+
+    def test_effect_context_refuted_rules_serialized(self):
+        """to_dict() includes refuted_rules with rule dicts via rule_to_dsl."""
+        rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (1, 0)),),
+            support=3,
+            kind="movement",
+        )
+        ctx = add_refuted_rule(EffectContext(), rule)
+        d = ctx.to_dict()
+        assert "refuted_rules" in d
+        assert len(d["refuted_rules"]) == 1
+        assert d["refuted_rules"][0]["kind"] == "movement"
+
+    def test_add_refuted_rule_fifo_eviction(self):
+        """Adding 11th refuted rule drops the oldest (FIFO eviction)."""
+        ctx = EffectContext()
+        for i in range(MAX_REFUTED_RULES + 1):
+            rule = Rule(
+                guard_spec={"action": i},
+                effects=(Effect("size", i, "delta", 1),),
+                support=1,
+            )
+            ctx = add_refuted_rule(ctx, rule)
+        assert len(ctx.refuted_rules) == MAX_REFUTED_RULES
+        # Oldest rule (action=0) should be evicted
+        assert all(r.guard_spec != {"action": 0} for r in ctx.refuted_rules)
+
+
+@pytest.mark.unit
+class TestRefutationDetection:
+    """_refute_contradicted_rules moves confirmed contradicted rules to refuted_rules."""
+
+    def test_confirmed_movement_rule_contradicted_moved_to_refuted(self):
+        """A confirmed movement rule whose prediction contradicts observation
+        gets moved from movement_rules to refuted_rules."""
+        mv_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (1, 0)),),
+            support=3,
+            kind="movement",
+        )
+        ctx = EffectContext(
+            movement_rules=(mv_rule,),
+            available_actions=(1,),
+            confirm_threshold=2,
+        )
+        before = SceneState(relevant=((0, ("pos", (5, 5))),))
+        observed = SceneState(relevant=((0, ("pos", (5, 5))),))
+        predicted = SceneState(relevant=((0, ("pos", (6, 5))),))
+        residual = compute_residual(
+            predicted, observed, entity_ids=(0,), dims=("pos",)
+        )
+        assert len(residual) > 0, "should have residual for movement mismatch"
+
+        result = _refute_contradicted_rules(ctx, before, 1, residual)
+        assert len(result.movement_rules) == 0, "refuted rule should be removed from movement_rules"
+        assert len(result.refuted_rules) == 1, "refuted rule should appear in refuted_rules"
+        assert result.refuted_rules[0].key() == mv_rule.key()
+
+    def test_movement_rule_not_refuted_when_collision_overrides(self):
+        """When a collision rule overrides a movement rule, the movement rule
+        should NOT be refuted because predict() applies collision after
+        movement and produces a correct prediction (no residual)."""
+        mv_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (1, 0)),),
+            support=3,
+            kind="movement",
+        )
+        col_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "revert", ""),),
+            support=3,
+            kind="collision",
+        )
+        ctx = EffectContext(
+            movement_rules=(mv_rule,),
+            collision_rules=(col_rule,),
+            available_actions=(1,),
+            confirm_threshold=2,
+        )
+        before = SceneState(relevant=((0, ("pos", (5, 5))),))
+        observed = SceneState(relevant=((0, ("pos", (5, 5))),))
+        residual_empty: tuple[ResidualEntry, ...] = ()
+        result = _refute_contradicted_rules(ctx, before, 1, residual_empty)
+        assert len(result.movement_rules) == 1, "movement rule should stay when collision overrides"
+        assert len(result.refuted_rules) == 0
+
+    def test_fifo_eviction_when_refuted_exceeds_capacity(self):
+        """When more than MAX_REFUTED_RULES rules are refuted, oldest are evicted."""
+        num_rules = MAX_REFUTED_RULES + 3
+        rules = []
+        for i in range(num_rules):
+            rules.append(
+                Rule(
+                    guard_spec={"action": 0},
+                    effects=(Effect("pos", i, "delta", (1, 0)),),
+                    support=2,
+                    kind="movement",
+                )
+            )
+        ctx = EffectContext(
+            movement_rules=tuple(rules),
+            available_actions=(0, 1),
+            confirm_threshold=2,
+        )
+        before = SceneState(
+            relevant=tuple((i, ("pos", (0, 0))) for i in range(num_rules))
+        )
+        observed = SceneState(
+            relevant=tuple((i, ("pos", (0, 0))) for i in range(num_rules))
+        )
+        pred_result = predict(before, 0, ctx, return_fired=True)
+        assert isinstance(pred_result, tuple)
+        pred, fired_rules = pred_result
+        assert not pred.unknown
+        residual = compute_residual(
+            pred.state, observed,
+            entity_ids=tuple(range(num_rules)),
+            dims=("pos",),
+        )
+        assert len(residual) > 0
+
+        result = _refute_contradicted_rules(ctx, before, 0, residual)
+        assert len(result.refuted_rules) <= MAX_REFUTED_RULES
+        assert len(result.movement_rules) == 0
+
+    def test_empty_residual_no_refutation(self):
+        """With no residual, no rules are refuted."""
+        mv_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (1, 0)),),
+            support=3,
+            kind="movement",
+        )
+        ctx = EffectContext(
+            movement_rules=(mv_rule,),
+            available_actions=(1,),
+            confirm_threshold=2,
+        )
+        result = _refute_contradicted_rules(ctx, SceneState(relevant=((0, ("pos", (5, 5))),)), 1, ())
+        assert len(result.movement_rules) == 1
+        assert len(result.refuted_rules) == 0
+
+    def test_unknown_prediction_no_refutation(self):
+        """When predict returns unknown (no rule fires), no refutation occurs."""
+        ctx = EffectContext(available_actions=(1,), confirm_threshold=2)
+        before = SceneState(relevant=((0, ("pos", (5, 5))),))
+        observed = SceneState(relevant=((0, ("pos", (7, 5))),))
+        residual = (ResidualEntry(0, "pos", (5, 5), (7, 5)),)
+        result = _refute_contradicted_rules(ctx, before, 1, residual)
+        assert len(result.refuted_rules) == 0
+
+    def test_terminal_rule_refuted_on_residual(self):
+        """A confirmed terminal rule contradicted by observation is moved to refuted."""
+        mv_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (0, 0)),),
+            support=3,
+            kind="movement",
+        )
+        term_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("terminal", 0, "set", "win"),),
+            support=3,
+            kind="terminal",
+        )
+        ctx = EffectContext(
+            movement_rules=(mv_rule,),
+            terminal_rules=(term_rule,),
+            available_actions=(1,),
+            confirm_threshold=2,
+        )
+        before = SceneState(relevant=((0, ("pos", (1, 1))),))
+        pred_result = predict(before, 1, ctx, return_fired=True)
+        assert isinstance(pred_result, tuple)
+        pred, fired_rules = pred_result
+        assert not pred.unknown
+        observed = SceneState(relevant=((0, ("pos", (1, 1))),), terminal="loss")
+        residual = compute_residual(
+            pred.state, observed, entity_ids=(0,), dims=("pos",), include_terminal=True
+        )
+        assert any(e.dim == "terminal" for e in residual), "should have terminal residual"
+
+        result = _refute_contradicted_rules(ctx, before, 1, residual)
+        assert len(result.terminal_rules) == 0
+        assert len(result.refuted_rules) == 1
+        assert result.refuted_rules[0].key() == term_rule.key()
+        assert result.refuted_rules[0].key() == term_rule.key()

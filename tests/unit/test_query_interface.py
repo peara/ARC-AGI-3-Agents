@@ -80,7 +80,7 @@ class TestQueryInterface:
         scene = _make_scene()
         qi = QueryInterface(scene)
         bundle = qi.bundle()
-        expected_keys = {"scene", "action_legend", "engine_rules", "recent_actions", "unknowns", "context_note", "residual", "pruned_rules", "observed_transition", "confirmed_groups", "coverage_gaps"}
+        expected_keys = {"scene", "action_legend", "engine_rules", "recent_actions", "unknowns", "context_note", "residual", "pruned_rules", "refuted_rules", "observed_transition", "confirmed_groups", "coverage_gaps"}
         assert set(bundle.keys()) == expected_keys
 
     def test_bundle_with_effect_context(self):
@@ -198,6 +198,40 @@ class TestQueryInterface:
         assert "pruned_rules" in bundle
         assert bundle["pruned_rules"] == []
 
+    def test_bundle_refuted_rules_default(self):
+        scene = _make_scene()
+        qi = QueryInterface(scene)
+        bundle = qi.bundle()
+        assert "refuted_rules" in bundle
+        assert bundle["refuted_rules"] == []
+
+    def test_bundle_with_refuted_rules(self):
+        refuted = Rule(
+            guard_spec={"action": 2},
+            effects=(Effect("size", 10, "delta", -1),),
+            support=1,
+        )
+        ctx = EffectContext(refuted_rules=(refuted,))
+        scene = _make_scene()
+        qi = QueryInterface(scene, ctx=ctx)
+        bundle = qi.bundle()
+        assert len(bundle["refuted_rules"]) == 1
+        dsl = bundle["refuted_rules"][0]
+        assert dsl["kind"] == "delta"
+        assert dsl["guard"] == {"action": 2}
+        assert dsl["effect"]["of"] == 10
+
+    def test_bundle_field_ordering(self):
+        scene = _make_scene()
+        qi = QueryInterface(scene)
+        bundle = qi.bundle()
+        keys = list(bundle.keys())
+        
+        pruned_idx = keys.index("pruned_rules")
+        refuted_idx = keys.index("refuted_rules")
+        observed_idx = keys.index("observed_transition")
+        
+        assert pruned_idx < refuted_idx < observed_idx
     def test_bundle_with_residual(self):
         scene = _make_scene()
         residual = (

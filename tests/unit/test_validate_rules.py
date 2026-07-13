@@ -1,0 +1,280 @@
+"""Tests for validate_rules_against_history()."""
+
+from __future__ import annotations
+
+import pytest
+
+from effects import (
+    Effect,
+    EffectContext,
+    Rule,
+    SceneState,
+    TransitionHistory,
+    validate_rules_against_history,
+)
+from effects.engine import _ProjectionSpec
+from effects.transition_history import Transition
+
+
+def _make_transition(frame_idx: int, action: int, state_before: SceneState, state_after: SceneState) -> Transition:
+    return Transition(
+        frame_idx=frame_idx,
+        action=action,
+        state_before=state_before,
+        state_after=state_after,
+    )
+
+
+def _empty_history() -> TransitionHistory:
+    return TransitionHistory()
+
+
+def _history_with(*transitions: Transition) -> TransitionHistory:
+    h = TransitionHistory()
+    for t in transitions:
+        h.append(
+            state_before=t.state_before,
+            action=t.action,
+            state_after=t.state_after,
+            frame_idx=t.frame_idx,
+        )
+    return h
+
+
+@pytest.mark.unit
+class TestValidateRulesAgainstHistory:
+    def test_empty_history_returns_empty(self):
+        proposed = (
+            Rule(
+                guard_spec={"action": 1},
+                effects=(Effect("pos", 0, "delta", (1, 0)),),
+                support=0,
+                kind="movement",
+            ),
+        )
+        ctx = EffectContext()
+        spec = _ProjectionSpec(entities=(0,), dims=("pos",))
+        result = validate_rules_against_history(proposed, ctx, _empty_history(), spec)
+        assert result == []
+
+    def test_empty_proposed_rules_returns_empty(self):
+        history = _history_with(
+            _make_transition(
+                0,
+                1,
+                SceneState(relevant=((0, ("pos", (1, 1))),)),
+                SceneState(relevant=((0, ("pos", (2, 1))),)),
+            )
+        )
+        ctx = EffectContext()
+        spec = _ProjectionSpec(entities=(0,), dims=("pos",))
+        result = validate_rules_against_history((), ctx, history, spec)
+        assert result == []
+
+    def test_all_rules_pass_no_counter_evidence(self):
+        rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (1, 0)),),
+            support=0,
+            kind="movement",
+        )
+        before = SceneState(relevant=((0, ("pos", (1, 1))),))
+        after = SceneState(relevant=((0, ("pos", (2, 1))),))
+        history = _history_with(_make_transition(0, 1, before, after))
+        ctx = EffectContext()
+        spec = _ProjectionSpec(entities=(0,), dims=("pos",))
+        result = validate_rules_against_history((rule,), ctx, history, spec)
+        assert result == []
+
+    def test_rule_mispredicts_produces_counter_evidence(self):
+        rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (5, 0)),),
+            support=0,
+            kind="movement",
+        )
+        before = SceneState(relevant=((0, ("pos", (1, 1))),))
+        after = SceneState(relevant=((0, ("pos", (2, 1))),))
+        history = _history_with(_make_transition(0, 1, before, after))
+        ctx = EffectContext()
+        spec = _ProjectionSpec(entities=(0,), dims=("pos",))
+        result = validate_rules_against_history((rule,), ctx, history, spec)
+        assert len(result) == 1
+        ce = result[0]
+        assert ce.frame_idx == 0
+        assert ce.action == 1
+        assert ce.state_before_summary == {0: (1, 1)}
+        assert ce.predicted_values[0]["pos"] == (6, 1)
+        assert ce.observed_values[0]["pos"] == (2, 1)
+        assert len(ce.fired_rules) >= 1
+
+    def test_unknown_prediction_skipped(self):
+        rule = Rule(
+            guard_spec={"action": 99},
+            effects=(Effect("pos", 0, "delta", (1, 0)),),
+            support=0,
+            kind="movement",
+        )
+        before = SceneState(relevant=((0, ("pos", (1, 1))),))
+        after = SceneState(relevant=((0, ("pos", (2, 1))),))
+        history = _history_with(_make_transition(0, 1, before, after))
+        ctx = EffectContext()
+        spec = _ProjectionSpec(entities=(0,), dims=("pos",))
+        result = validate_rules_against_history((rule,), ctx, history, spec)
+        assert result == []
+
+    def test_multiple_transitions_mixed(self):
+        rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (1, 0)),),
+            support=0,
+            kind="movement",
+        )
+        before_matching = SceneState(relevant=((0, ("pos", (1, 1))),))
+        after_matching = SceneState(relevant=((0, ("pos", (2, 1))),))
+        after_mismatch = SceneState(relevant=((0, ("pos", (6, 5))),))
+        history = _history_with(
+            _make_transition(0, 1, before_matching, after_matching),
+            _make_transition(1, 1, before_matching, after_mismatch),
+        )
+        ctx = EffectContext()
+        spec = _ProjectionSpec(entities=(0,), dims=("pos",))
+        result = validate_rules_against_history((rule,), ctx, history, spec)
+        assert len(result) == 1
+        assert result[0].frame_idx == 1
+
+    def test_does_not_mutate_original_ctx(self):
+        rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (5, 0)),),
+            support=0,
+            kind="movement",
+        )
+        before = SceneState(relevant=((0, ("pos", (1, 1))),))
+        after = SceneState(relevant=((0, ("pos", (2, 1))),))
+        history = _history_with(_make_transition(0, 1, before, after))
+        ctx = EffectContext()
+        spec = _ProjectionSpec(entities=(0,), dims=("pos",))
+        original_len = len(ctx.proposed_rules)
+        _ = validate_rules_against_history((rule,), ctx, history, spec)
+        assert len(ctx.proposed_rules) == original_len
+
+    def test_terminal_dim_in_counter_evidence(self):
+        from effects.state import TERMINAL_GAME_OVER
+
+        rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("terminal", 0, "set", TERMINAL_GAME_OVER),),
+            support=0,
+        )
+        movement_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (0, 0)),),
+            support=0,
+            kind="movement",
+        )
+        before = SceneState(relevant=((0, ("pos", (1, 1))),))
+        after = SceneState(relevant=((0, ("pos", (2, 1))),), terminal="alive")
+        history = _history_with(_make_transition(0, 1, before, after))
+        ctx = EffectContext()
+        spec = _ProjectionSpec(entities=(0,), dims=("pos",), include_terminal=True)
+        result = validate_rules_against_history(
+            (rule, movement_rule), ctx, history, spec
+        )
+        assert len(result) == 1
+        ce = result[0]
+        assert "terminal" in ce.predicted_values.get(0, {})
+        assert ce.predicted_values[0]["terminal"] == TERMINAL_GAME_OVER
+        assert ce.observed_values[0]["terminal"] == "alive"
+
+    def test_fired_rules_serialized_as_dicts(self):
+        rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (5, 0)),),
+            support=0,
+            kind="movement",
+        )
+        before = SceneState(relevant=((0, ("pos", (1, 1))),))
+        after = SceneState(relevant=((0, ("pos", (2, 1))),))
+        history = _history_with(_make_transition(0, 1, before, after))
+        ctx = EffectContext()
+        spec = _ProjectionSpec(entities=(0,), dims=("pos",))
+        result = validate_rules_against_history((rule,), ctx, history, spec)
+        assert len(result) == 1
+        for r_dict in result[0].fired_rules:
+            assert isinstance(r_dict, dict)
+            assert "guard_spec" in r_dict
+            assert "effects" in r_dict
+
+    def test_multiple_entity_dims(self):
+        rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("size", 5, "delta", 2),),
+            support=0,
+        )
+        movement_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (0, 0)),),
+            support=0,
+            kind="movement",
+        )
+        before = SceneState(
+            relevant=(
+                (0, ("pos", (1, 1))),
+                (5, ("size", 3)),
+            )
+        )
+        after = SceneState(
+            relevant=(
+                (0, ("pos", (2, 1))),
+                (5, ("size", 3)),
+            )
+        )
+        history = _history_with(_make_transition(0, 1, before, after))
+        ctx = EffectContext()
+        spec = _ProjectionSpec(entities=(0, 5), dims=("pos", "size"))
+        result = validate_rules_against_history(
+            (rule, movement_rule), ctx, history, spec
+        )
+        assert len(result) == 1
+        ce = result[0]
+        assert 0 in ce.predicted_values
+        assert 5 in ce.predicted_values
+        assert "pos" in ce.predicted_values[0]
+        assert "size" in ce.predicted_values[5]
+        assert ce.predicted_values[5]["size"] == 5
+        assert ce.observed_values[5]["size"] == 3
+
+    def test_existing_ctx_rules_included(self):
+        existing_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (1, 0)),),
+            support=2,
+            kind="movement",
+        )
+        proposed_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("size", 5, "set", 99),),
+            support=0,
+        )
+        before = SceneState(
+            relevant=(
+                (0, ("pos", (1, 1))),
+                (5, ("size", 3)),
+            )
+        )
+        after = SceneState(
+            relevant=(
+                (0, ("pos", (2, 1))),
+                (5, ("size", 3)),
+            )
+        )
+        history = _history_with(_make_transition(0, 1, before, after))
+        ctx = EffectContext(movement_rules=(existing_rule,))
+        spec = _ProjectionSpec(entities=(0, 5), dims=("pos", "size"))
+        result = validate_rules_against_history(
+            (proposed_rule,), ctx, history, spec
+        )
+        assert len(result) == 1
+        assert result[0].predicted_values[5]["size"] == 99
+        assert result[0].observed_values[5]["size"] == 3
