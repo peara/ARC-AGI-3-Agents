@@ -9,6 +9,7 @@ is configurable via constructor arguments or environment variables
 from __future__ import annotations
 
 import os
+from typing import Any
 
 import openai
 from openai import OpenAI as OpenAIClient
@@ -68,7 +69,7 @@ class LLMClient:
             api_key=self.api_key or "no-key",
         )
 
-    def chat(self, messages: list[dict[str, str]]) -> str:
+    def chat(self, messages: list[dict[str, Any]]) -> str:
         """Send a chat completion request and return the assistant content string.
 
         Parameters

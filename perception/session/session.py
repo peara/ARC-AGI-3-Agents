@@ -64,6 +64,7 @@ class PerceptionSession:
         self.n_subframes_per_step: list[int] = []
         self.catalog: EntityCatalog = EntityCatalog(entities={})
         self.n_observed = 0
+        self._last_grid: list[list[int]] | None = None
         self._prev_settled: Grid | None = None
         self._transition_outcomes: dict[tuple[str, int], str] = {}
         self.determinism_violations: list[dict[str, object]] = []
@@ -82,6 +83,7 @@ class PerceptionSession:
     ) -> SceneSnapshot:
         """Process one frame; return a read-only snapshot for planners."""
         grid = to_grid(frame)
+        self._last_grid = grid.tolist()
         n_sf = n_subframes(frame)
         action = int(produced_by)
         self.action_ids.append(action)
@@ -148,6 +150,7 @@ class PerceptionSession:
             action_ids=tuple(self.action_ids),
             grid_rows=self.grid_rows,
             grid_cols=self.grid_cols,
+            grid=self._last_grid,
             last_step=last_step,
             step_observations=tuple(self.step_observations),
             determinism_violations=tuple(self.determinism_violations),

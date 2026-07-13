@@ -28,7 +28,7 @@ MAX_CONTENT_CHARS = 40_000
 
 
 class LlmCallable(Protocol):
-    def __call__(self, messages: list[dict[str, str]]) -> str: ...
+    def __call__(self, messages: list[dict[str, Any]]) -> str: ...
 
 
 class LlmCallLogger:
@@ -82,17 +82,34 @@ def _truncate_content(content: str, limit: int) -> tuple[str, bool]:
 
 
 def _truncate_messages(
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     limit: int,
-) -> tuple[list[dict[str, str]], bool]:
+) -> tuple[list[dict[str, Any]], bool]:
     truncated_any = False
-    out: list[dict[str, str]] = []
+    out: list[dict[str, Any]] = []
     for msg in messages:
         content = msg.get("content", "")
-        if isinstance(content, str) and len(content) > limit:
+        if isinstance(content, list):
+            new_blocks = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "image_url":
+                    new_blocks.append({"type": "text", "text": "[image omitted]"})
+                    truncated_any = True
+                elif isinstance(block, dict) and block.get("type") == "text":
+                    text = block.get("text", "")
+                    if len(text) > limit:
+                        text, did = _truncate_content(text, limit)
+                        truncated_any = truncated_any or did
+                    new_blocks.append({"type": "text", "text": text})
+                else:
+                    new_blocks.append(block)
+            out.append({**msg, "content": new_blocks})
+        elif isinstance(content, str) and len(content) > limit:
             content, did = _truncate_content(content, limit)
             truncated_any = truncated_any or did
-        out.append({**msg, "content": content})
+            out.append({**msg, "content": content})
+        else:
+            out.append(msg)
     return out, truncated_any
 
 
@@ -100,14 +117,14 @@ def wrap_llm_call(
     llm_call: LlmCallable,
     logger: LlmCallLogger,
     kind: str,
-) -> Callable[[list[dict[str, str]]], str]:
+) -> Callable[[list[dict[str, Any]]], str]:
     """Wrap ``llm_call`` so every invocation is logged to ``logger.path``.
 
     The returned callable has the same signature as ``llm_call``:
-    ``(messages: list[dict[str, str]]) -> str``.
+    ``(messages: list[dict[str, Any]]) -> str``.
     """
 
-    def wrapped(messages: list[dict[str, str]]) -> str:
+    def wrapped(messages: list[dict[str, Any]]) -> str:
         seq = logger.next_seq()
         frame_index = logger._frame_indexer()
         trigger = logger.trigger or kind

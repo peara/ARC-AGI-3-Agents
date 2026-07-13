@@ -38,6 +38,7 @@ class SceneSnapshot:
     action_ids: tuple[int, ...]
     grid_rows: int = 64
     grid_cols: int = 64
+    grid: list[list[int]] | None = None
     last_step: StepObservation | None = None
     step_observations: tuple[StepObservation, ...] = ()
     determinism_violations: tuple[dict[str, object], ...] = ()
