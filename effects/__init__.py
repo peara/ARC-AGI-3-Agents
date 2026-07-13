@@ -1,20 +1,25 @@
 """Forward prediction over symbolic state learned from perception."""
 
+from .counter_evidence import CounterEvidence, format_counter_evidence
 from .context import (
+    MAX_REFUTED_RULES,
     EffectContext,
     FrameMeta,
+    add_refuted_rule,
     frame_meta_from_steps,
     load_recording_meta,
     merge_effect_context,
 )
 from .dsl import dsl_to_rule, rule_to_dsl
 from .engine import (
+    _ProjectionSpec,
     confirm_rules,
     engine_step,
     inject_llm_proposals,
     propose_rules,
     prune_rules,
     retroactive_test,
+    validate_rules_against_history,
 )
 from .engine_log import (  # noqa: F401
     diff_effect_context,
@@ -56,6 +61,8 @@ __all__ = [
     "rule_to_dsl",
     "EffectContext",
     "FrameMeta",
+    "MAX_REFUTED_RULES",
+    "add_refuted_rule",
     "Pos",
     "Prediction",
     "ResidualEntry",
@@ -92,4 +99,8 @@ __all__ = [
     "terminal_from_state_name",
     "Transition",
     "TransitionHistory",
+    "CounterEvidence",
+    "format_counter_evidence",
+    "validate_rules_against_history",
+    "_ProjectionSpec",
 ]

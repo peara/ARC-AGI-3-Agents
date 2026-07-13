@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import logging
 from dataclasses import replace
+from typing import cast
 
-from .context import EffectContext
+from .context import EffectContext, add_refuted_rule
+from .counter_evidence import CounterEvidence
 from .engine_log import log_effect_context_diff
 from .predict import predict
 from .residual import ResidualEntry, compute_residual
 from .rules import Effect, Rule
 from .state import SceneState
-from .transition_history import TransitionHistory
+from .transition_history import Transition, TransitionHistory
 
 log = logging.getLogger(__name__)
 
@@ -482,6 +484,82 @@ def prune_rules(
     )
 
 
+def _refute_contradicted_rules(
+    ctx: EffectContext,
+    state_before: SceneState,
+    action: int,
+    residual: tuple[ResidualEntry, ...],
+) -> EffectContext:
+    """Move confirmed rules that contradicted observation to refuted_rules.
+
+    When ``predict`` returns a Known prediction but the residual is non-empty,
+    one or more confirmed rules fired yet produced wrong predictions.  For each
+    fired rule whose effect dimensions overlap the residual, move it from its
+    current bucket (movement/collision/terminal/relational) into
+    ``refuted_rules`` via ``add_refuted_rule`` (FIFO eviction at 10 entries).
+
+    This is the *runtime* refutation path — distinct from ``prune_rules()``
+    which handles *proposed* rules.  Confirmed rules that mispredict should be
+    refuted rather than silently pruned, because they accumulated significant
+    support and their demotion is a high-signal event.
+    """
+    if not residual:
+        return ctx
+
+    pred, fired_rules = predict(state_before, action, ctx, return_fired=True)
+
+    if pred.unknown:
+        return ctx
+
+    residual_dims = {(e.entity_id, e.dim) for e in residual}
+    terminal_in_residual = any(e.dim == "terminal" for e in residual)
+
+    refuted_keys: set[tuple[object, ...]] = set()
+    for rule in fired_rules:
+        for effect in rule.effects:
+            if effect.dim == "terminal":
+                if terminal_in_residual:
+                    refuted_keys.add(rule.key())
+                    break
+            else:
+                if (effect.of, effect.dim) in residual_dims:
+                    refuted_keys.add(rule.key())
+                    break
+
+    if not refuted_keys:
+        return ctx
+
+    terminal = tuple(r for r in ctx.terminal_rules if r.key() not in refuted_keys)
+    relational = tuple(r for r in ctx.relational_rules if r.key() not in refuted_keys)
+    movement = tuple(r for r in ctx.movement_rules if r.key() not in refuted_keys)
+    collision = tuple(r for r in ctx.collision_rules if r.key() not in refuted_keys)
+
+    all_confirmed = (
+        ctx.terminal_rules + ctx.relational_rules
+        + ctx.movement_rules + ctx.collision_rules
+    )
+    refuted_rules = [r for r in all_confirmed if r.key() in refuted_keys]
+
+    updated = replace(
+        ctx,
+        terminal_rules=terminal,
+        relational_rules=relational,
+        movement_rules=movement,
+        collision_rules=collision,
+    )
+    for rule in refuted_rules:
+        updated = add_refuted_rule(updated, rule)
+
+    if refuted_rules:
+        log.info(
+            "refute_rules: moved %d to refuted: %s",
+            len(refuted_rules),
+            [f"{r.kind}[{r.key()}]" for r in refuted_rules],
+        )
+
+    return updated
+
+
 def engine_step(
     ctx: EffectContext,
     state_before: SceneState,
@@ -530,6 +608,110 @@ def engine_step(
     if history is not None and len(history) > 0:
         updated = _apply_retroactive_support(updated, history)
     updated = confirm_rules(updated, state_before, action, observed)
+    updated = _refute_contradicted_rules(
+        updated, state_before, action, residual
+    )
     if log_changes:
         log_effect_context_diff(ctx, updated, step_label=step_label)
     return updated
+
+
+class _ProjectionSpec:
+    """Minimal projection spec for validate_rules_against_history."""
+
+    __slots__ = ("entities", "dims", "include_terminal")
+
+    def __init__(
+        self,
+        entities: tuple[int, ...],
+        dims: tuple[str, ...],
+        include_terminal: bool = False,
+    ) -> None:
+        self.entities = list(entities)
+        self.dims = dims
+        self.include_terminal = include_terminal
+
+
+def validate_rules_against_history(
+    proposed_rules: tuple[Rule, ...],
+    ctx: EffectContext,
+    history: TransitionHistory,
+    spec: _ProjectionSpec,
+) -> list[CounterEvidence]:
+    """Validate proposed rules against historical transitions.
+
+    Pure function — no side effects, no mutation of *ctx* or *history*.
+    Creates a temporary EffectContext with the proposed rules injected,
+    then checks each historical transition for prediction mismatches.
+
+    Returns a list of CounterEvidence entries for transitions where the
+    predicted state contradicts the observed state.  The caller is
+    responsible for capping per refuted rule (e.g. at 3).
+    """
+    if not proposed_rules or len(history) == 0:
+        return []
+
+    temp_ctx = inject_llm_proposals(ctx, proposed_rules)
+    entity_ids = tuple(spec.entities)
+    dims = spec.dims
+
+    results: list[CounterEvidence] = []
+
+    for t in history:
+        result = predict(t.state_before, t.action, temp_ctx, return_fired=True)
+        if isinstance(result, tuple):
+            pred, fired = result
+        else:
+            continue
+
+        if pred.unknown:
+            continue
+
+        residual = compute_residual(
+            pred.state,
+            t.state_after,
+            entity_ids=entity_ids,
+            dims=dims,
+            include_terminal=spec.include_terminal,
+        )
+
+        if not residual:
+            continue
+
+        state_before_summary: dict[int, tuple[int, int] | None] = {
+            eid: t.state_before.pos(eid) for eid in entity_ids
+        }
+
+        predicted_values: dict[int, dict[str, object]] = {}
+        observed_values: dict[int, dict[str, object]] = {}
+        for eid in entity_ids:
+            pred_eid: dict[str, object] = {}
+            obs_eid: dict[str, object] = {}
+            for dim in dims:
+                pv = pred.state.get(eid, dim)
+                ov = t.state_after.get(eid, dim)
+                pred_eid[dim] = pv
+                obs_eid[dim] = ov
+            predicted_values[eid] = pred_eid
+            observed_values[eid] = obs_eid
+
+        if spec.include_terminal:
+            terminal_pred = pred.state.terminal
+            terminal_obs = t.state_after.terminal
+            predicted_values.setdefault(0, {})["terminal"] = terminal_pred
+            observed_values.setdefault(0, {})["terminal"] = terminal_obs
+
+        fired_rules_dicts: list[dict[str, object]] = [r.to_dict() for r in fired]
+
+        results.append(
+            CounterEvidence(
+                frame_idx=t.frame_idx,
+                action=t.action,
+                state_before_summary=state_before_summary,
+                predicted_values=predicted_values,
+                observed_values=observed_values,
+                fired_rules=fired_rules_dicts,
+            )
+        )
+
+    return results
