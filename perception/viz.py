@@ -11,27 +11,11 @@ from typing import Iterable
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from vision.palette import ARCADE_PALETTE
+
 from .objects import GameObject, Grid
 
-# Full 0..15 palette (superset of the locksmith palette in templates).
-COLOR_PALETTE: dict[int, tuple[int, int, int]] = {
-    0: (0, 0, 0),
-    1: (30, 30, 60),
-    2: (255, 0, 0),
-    3: (60, 90, 60),
-    4: (0, 170, 0),
-    5: (128, 128, 128),
-    6: (0, 0, 255),
-    7: (255, 255, 0),
-    8: (255, 165, 0),
-    9: (128, 0, 128),
-    10: (255, 255, 255),
-    11: (90, 90, 90),
-    12: (255, 0, 255),
-    13: (0, 255, 255),
-    14: (165, 42, 42),
-    15: (255, 192, 203),
-}
+COLOR_PALETTE = {i: rgb[:3] for i, rgb in enumerate(ARCADE_PALETTE)}
 _DEFAULT_COLOR = (200, 200, 200)
 
 # A handful of high-contrast outline colours cycled per object.

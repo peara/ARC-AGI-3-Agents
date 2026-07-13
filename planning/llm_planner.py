@@ -9,8 +9,9 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Callable
+from typing import Any, Callable
 
+from vision.render import make_multimodal_user_message
 from effects.context import EffectContext
 from effects.counter_evidence import CounterEvidence, format_counter_evidence
 from effects.dsl import dsl_to_rule
@@ -133,7 +134,9 @@ def _build_messages(
     bundle: dict[str, object],
     available_actions: list[int],
     failure_context: dict[str, object] | None = None,
-) -> list[dict[str, str]]:
+    vision: bool = False,
+    grid: list[list[int]] | None = None,
+) -> list[dict[str, Any]]:
     """Build the system + user messages for the LLM planner call.
 
     Returns exactly two messages: one with role "system" and one with role
@@ -164,6 +167,12 @@ def _build_messages(
             )
 
     user_content = "\n\n".join(user_parts)
+
+    if vision:
+        if grid is not None:
+            user_content = make_multimodal_user_message(user_content, grid)
+        else:
+            log.warning("Vision enabled but no grid available, falling back to text-only")
 
     return [
         {"role": "system", "content": _SYSTEM_PROMPT},
@@ -299,8 +308,10 @@ def _validate_goal(
 def call_planner(
     bundle: dict[str, object],
     available_actions: list[int],
-    llm_call: Callable[[list[dict[str, str]]], str],
+    llm_call: Callable[[list[dict[str, Any]]], str],
     failure_context: dict[str, object] | None = None,
+    vision: bool = False,
+    grid: list[list[int]] | None = None,
 ) -> ProbeGoal | None:
     """Orchestrate LLM-based planning: build prompt → call LLM → parse → validate.
 
@@ -317,6 +328,10 @@ def call_planner(
     failure_context:
         Optional dict describing why a previous plan failed, appended to the
         user message.
+    vision:
+        Whether to include the grid image in the prompt.
+    grid:
+        The grid to render as an image if vision is enabled.
 
     Returns
     -------
@@ -324,7 +339,7 @@ def call_planner(
         A validated goal, or None if the LLM response could not be parsed or
         the predicate references entities not present in the scene.
     """
-    messages = _build_messages(bundle, available_actions, failure_context)
+    messages = _build_messages(bundle, available_actions, failure_context, vision, grid)
     raw = llm_call(messages)
     parsed = _parse_response(raw)
     if parsed is None:

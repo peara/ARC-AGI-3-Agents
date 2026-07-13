@@ -1,14 +1,12 @@
 # pixel_art.py
 from __future__ import annotations
 
-import base64
-import io
 import json
 import logging
 import os
 import re
 from textwrap import dedent
-from typing import Any, List, Optional, Sequence, Tuple
+from typing import Any, List, Optional, Tuple
 
 import numpy as np
 import openai
@@ -17,76 +15,12 @@ from openai import OpenAI as OpenAIClient
 from openai.types.chat import ChatCompletion
 from PIL import Image
 
+from vision.render import grid_to_image, image_to_base64, make_image_block
+
 from ..agent import Agent
 
 logger = logging.getLogger()
 
-# 16-color palette (RGBA, hex -> tuple)
-_PALETTE: List[tuple[int, int, int, int]] = [
-    (0xFF, 0xFF, 0xFF, 0xFF),  # 0 White
-    (0xCC, 0xCC, 0xCC, 0xFF),  # 1 Off-white
-    (0x99, 0x99, 0x99, 0xFF),  # 2 Neutral light
-    (0x66, 0x66, 0x66, 0xFF),  # 3 Neutral
-    (0x33, 0x33, 0x33, 0xFF),  # 4 Off-black
-    (0x00, 0x00, 0x00, 0xFF),  # 5 Black
-    (0xE5, 0x3A, 0xA3, 0xFF),  # 6 Magenta
-    (0xFF, 0x7B, 0xCC, 0xFF),  # 7 Magenta light
-    (0xF9, 0x3C, 0x31, 0xFF),  # 8 Red
-    (0x1E, 0x93, 0xFF, 0xFF),  # 9 Blue
-    (0x88, 0xD8, 0xF1, 0xFF),  # 10 Blue light
-    (0xFF, 0xDC, 0x00, 0xFF),  # 11 Yellow
-    (0xFF, 0x85, 0x1B, 0xFF),  # 12 Orange
-    (0x92, 0x12, 0x31, 0xFF),  # 13 Maroon
-    (0x4F, 0xCC, 0x30, 0xFF),  # 14 Green
-    (0xA3, 0x56, 0xD6, 0xFF),  # 15 Purple
-]
-
-_SCALE = 2  # 64 px -> 128 px
-_TARGET_SIZE = 64 * _SCALE
-
-
-def _validate_grid(grid: Sequence[Sequence[int]]) -> None:
-    if len(grid) != 64 or any(len(row) != 64 for row in grid):
-        raise ValueError("Grid must be 64×64.")
-    if any(cell not in range(16) for row in grid for cell in row):
-        raise ValueError("Grid values must be integers 0–15.")
-
-
-def grid_to_image(grid: Sequence[Sequence[int]]) -> Image.Image:
-    """
-    Convert a 64×64 int grid to a 256×256 RGBA Pillow Image.
-    """
-    _validate_grid(grid)
-
-    # Flatten grid into raw bytes (R, G, B, A per pixel)
-    raw = bytearray()
-    for row in grid:
-        for idx in row:
-            raw.extend(_PALETTE[idx])
-
-    img = Image.frombytes("RGBA", (64, 64), bytes(raw))
-    # Nearest-neighbor upscale keeps crisp pixel art
-    img = img.resize((_TARGET_SIZE, _TARGET_SIZE), Image.NEAREST)
-    return img
-
-
-def image_to_base64(img: Image.Image) -> str:
-    """
-    Return a base-64 encoded PNG (no data-URL prefix).
-    """
-    buffer = io.BytesIO()
-    img.save(buffer, format="PNG", optimize=True)
-    return base64.b64encode(buffer.getvalue()).decode("ascii")
-
-
-def make_image_block(b64_string: str) -> dict[str, Any]:
-    """
-    Return the JSON block OpenAI expects for an inline base-64 image.
-    """
-    return {
-        "type": "image_url",
-        "image_url": {"url": f"data:image/png;base64,{b64_string}"},
-    }
 
 
 def image_diff(
@@ -505,8 +439,9 @@ class MultiModalLLM(Agent):
         if action.is_complex():
             action.set_data(
                 {
-                    "x": max(0, min(current_action["x"], 127)) // _SCALE,
-                    "y": max(0, min(current_action["y"], 127)) // _SCALE,
+                        "x": max(0, min(current_action["x"], 127)) // 2,
+                        "y": max(0, min(current_action["y"], 127)) // 2,
+
                 }
             )
         action.reasoning = {
