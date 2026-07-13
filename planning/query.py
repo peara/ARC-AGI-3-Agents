@@ -81,6 +81,7 @@ class QueryInterface:
         result["coverage_gaps"] = self._build_coverage_gaps()
         result["residual"] = self._build_residual()
         result["pruned_rules"] = self._build_pruned_rules()
+        result["refuted_rules"] = self._build_refuted_rules()
         result["observed_transition"] = self._build_observed_transition()
         return result
 
@@ -218,6 +219,11 @@ class QueryInterface:
         if self._pruned_rules is None:
             return []
         return [rule_to_dsl(r) for r in self._pruned_rules]
+
+    def _build_refuted_rules(self) -> list[dict[str, object]]:
+        if self._ctx is None:
+            return []
+        return [rule_to_dsl(r) for r in self._ctx.refuted_rules]
 
     def _build_unknowns(self) -> list[dict[str, object]]:
         if self._unknowns is None:

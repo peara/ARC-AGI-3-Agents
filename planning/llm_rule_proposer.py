@@ -175,6 +175,32 @@ changes in the residual but `has_orientation_rules: false`, propose an
 orientation rule. If an entity has `actions_unknown`, the observed transition
 likely involves one of those actions.
 
+## Refuted rules
+
+The scene bundle may include a `refuted_rules` list. These are rules that were
+previously confirmed but contradicted by a new observation — they predicted
+incorrectly and have been demoted. Treat them as negative examples: do NOT
+propose the same rule again. If you see a refuted rule with the same guard as
+your proposal, add a more specific guard (positional or overlap condition) to
+distinguish the contexts.
+
+## Counter-evidence
+
+When your proposed rules fail validation against historical transitions, \
+you'll see counter-evidence showing the failure. Each entry contains:
+
+- `frame_idx`: the frame where the prediction failed
+- `action`: the action taken
+- `predicted_values`: what your rules predicted would happen
+- `observed_values`: what actually happened
+- `fired_rules`: which rules fired during the prediction
+
+Use this to refine your rules. Add guard conditions that distinguish the \
+failing cases from the passing ones. Prefer general rules with action-only \
+guards — use positional guards only when the rule fails without them. Don't \
+add guards that only cover a single frame (that's overfitting, not \
+generalization).
+
 ## Output format
 
 Respond with a single JSON object:
