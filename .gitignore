@@ -29,3 +29,7 @@ motion_out/
 track_out/
 
 environment_files/
+
+# Debug scratch artifacts
+*.png
+llm_grouping_test_result.json
