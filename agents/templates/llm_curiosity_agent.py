@@ -19,7 +19,7 @@ from arcengine import FrameData, GameAction, GameState
 from agents.llm_client import LLMClient
 from effects.engine_step_result import EngineStepResult, run_engine_step
 from entity import EntityBuilder
-from grouping import ConfirmedGroup, GroupingEngine
+from grouping import ConfirmedGroup, CombinedEngine
 from perception.session import RESET_ACTION, PerceptionSession, SceneSnapshot
 from planning.adapters import snapshot_from_scene
 from planning.exploration import ExplorationPolicy
@@ -97,14 +97,15 @@ class LlmCuriosity(Agent):
             self._proposer_call = wrap_llm_call(
                 self.llm_call, self._llm_logger, kind="rule_proposer"
             )
-            self._grouping_engine = GroupingEngine(
+            self._grouping_engine = CombinedEngine(
                 llm_call=wrap_llm_call(self.llm_call, self._llm_logger, kind="grouping"),
+                vision=self._vision_enabled,
             )
         else:
             self._llm_logger = None
             self._planner_call = self.llm_call
             self._proposer_call = self.llm_call
-            self._grouping_engine = GroupingEngine(llm_call=self.llm_call)
+            self._grouping_engine = CombinedEngine(llm_call=self.llm_call, vision=self._vision_enabled)
 
         self._confirmed_groups: list[ConfirmedGroup] = []
 

@@ -2,11 +2,9 @@
 
 Heuristic-first entity grouping for ARC-AGI-3. Classical heuristics propose
 groups; an LLM confirms/rejects and assigns roles/labels. The engine runs every
-frame, applies readiness gates, debounces LLM calls, and returns a full
-snapshot of confirmed groups.
+frame, applies readiness gates, and returns a full snapshot of confirmed groups.
 
-Not wired to the `LlmCuriosity` agent yet — interface will settle after
-integration testing.
+Now wired into the `LlmCuriosity` agent via `CombinedEngine` (see v2 architecture below).
 
 ---
 
@@ -38,7 +36,10 @@ prompt bloat and giving the planner stable object references.
 - `grouping/heuristics.py` — `co_movement`, `same_shape`, `containment`, `adjacency`, `static_bounded`
 - `grouping/readiness.py` — `ReadinessConfig` + `apply_gates()` — per-heuristic readiness thresholds
 - `grouping/resolver.py` — `resolve_conflicts()` — suppress adjacency covered by containment
-- `grouping/engine.py` — `GroupingEngine` + `ConfirmedGroup` + `MemberLabel`
+- `grouping/heuristic_engine.py` — `HeuristicGroupingEngine`: pure proposal generator
+- `grouping/llm_engine.py` — `LlmGroupingEngine`: grid-image adjudication
+- `grouping/combined_engine.py` — `CombinedEngine`: orchestrator
+- `grouping/engine.py` — `GroupingEngine` (v1) + `ConfirmedGroup` + `MemberLabel`
 - `grouping/proposal.py` — `GroupProposal` + `ProposedGroup` frozen dataclasses
 - `grouping/llm_probe.py` — standalone script: replay recording → heuristics → LLM → verdicts
 - `scripts/grouping_heuristics.py` — CLI: replay recording → print features + proposals (no LLM)
@@ -107,6 +108,52 @@ Internally per frame:
 `confirm_threshold=1` because the diff logic only sends each proposal once
 (it's "new" only on its first appearance). A threshold of 2 is unreachable.
 
+## v2 Architecture
+
+The grouping system was refactored into three classes for clearer separation of concerns.
+
+### HeuristicGroupingEngine
+
+`grouping/heuristic_engine.py` — pure proposal generator. Runs heuristics +
+readiness gates + resolver every frame, emits `list[GroupProposal]`. No LLM
+calls, no internal state. Stateless and testable in isolation.
+
+### LlmGroupingEngine
+
+`grouping/llm_engine.py` — grid-image adjudicator. Receives new proposals +
+previous and current frame grids as 256x256 images. Calls the LLM once per
+frame (debounce = 1, no batching). Parses verdicts into `ConfirmedGroup`
+updates.
+
+**Two-grid-image input.** Both the previous frame grid and the current frame
+grid are rendered as images and sent to the LLM. This gives the model motion
+context so it can judge whether two entities are truly moving together or
+just incidentally near each other.
+
+### CombinedEngine
+
+`grouping/combined_engine.py` — orchestrator. Called every frame via
+`update(snapshot)`:
+
+1. Run `HeuristicGroupingEngine` to get fresh proposals.
+2. Diff against tracked confirmed groups to find new proposals only.
+3. Run stale detection on existing groups.
+4. If new proposals exist, call `LlmGroupingEngine` with prev + curr grid images.
+5. Merge LLM verdicts into confirmed groups.
+6. Return full snapshot.
+
+### Stale group detection
+
+Confirmed groups are monitored for two death signals:
+
+- **Motion divergence** — a member's centroid drifts outside a tolerance
+  relative to the group's collective motion.
+- **Member death** — a tracked entity disappears from the registry (merged,
+  destroyed, or lost).
+
+When either signal fires, the group is marked stale and removed from the
+active snapshot. This prevents the agent from planning against ghosts.
+
 ## LLM probe script
 
 ```bash
@@ -149,9 +196,12 @@ Tested across 3 recordings with real LLM:
   "pixel detail" and "player body" — co-movement detected, but the rotational
   role was not inferred.
 
+## Completed
+
+- Wire into `LlmCuriosity` agent via `CombinedEngine`
+- Bundle compression: replace flat entity list with grouped representation
+
 ## Not yet done
 
-- Wire into `LlmCuriosity` agent (how confirmed groups compress the bundle)
 - Test on more game types (only ls20 and wa30 tested so far)
-- Bundle compression: replace flat entity list with grouped representation
 - Confidence >1 (needs re-send logic or cross-heuristic corroboration)

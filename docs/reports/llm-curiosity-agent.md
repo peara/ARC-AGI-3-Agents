@@ -31,15 +31,18 @@ graph TD
     PS[PerceptionSession] --> SS[SceneSnapshot]
     SS --> EP[ExplorationPolicy]
     SS --> QI[QueryInterface<br/>bundle for LLM]
+    SS --> CG[CombinedEngine<br/>entity grouping]
     EP --> BFS[plan_bfs<br/>classical BFS]
     QI --> LP[LLM Planner<br/>ProbeGoal]
     QI --> LRP[LLM Rule Proposer<br/>Rule hypotheses]
     EP --> EE[Effects Engine<br/>predict + confirm]
+    CG --> QI
 
     style LP fill:#4a9,stroke:#286
     style LRP fill:#4a9,stroke:#286
     style EE fill:#69d,stroke:#47a
     style BFS fill:#69d,stroke:#47a
+    style CG fill:#69d,stroke:#47a
 ```
 
 ### Layer 1 — Perception
@@ -68,7 +71,7 @@ execution, LLM cooldown, failure context.
 ```mermaid
 flowchart TD
     RESET[RESET gate] --> INGEST
-    INGEST[INGEST<br/>session.ingest → SceneSnapshot<br/>policy.on_observed → engine_step<br/>if residual/transition → proposer → inject] --> PHASE
+    INGEST[INGEST<br/>session.ingest → SceneSnapshot<br/>combined_engine.update → groups<br/>policy.on_observed → engine_step<br/>if residual/transition → proposer → inject] --> PHASE
     PHASE[Phase gate<br/>random vs llm_directed] --> DIV
     DIV{Divergence?} -->|yes| DROP[Drop plan,<br/>set failure context]
     DIV -->|no| PROBE
@@ -293,6 +296,7 @@ unknown entries, each with full state fingerprints).
 
 | Component | File |
 |-----------|------|
+| Entity grouping | `grouping/combined_engine.py` |
 | Agent entry point | `agents/templates/llm_curiosity_agent.py` |
 | Exploration policy | `planning/exploration.py` |
 | BFS search | `planning/search.py` |
