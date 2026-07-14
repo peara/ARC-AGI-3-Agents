@@ -73,6 +73,19 @@ Enable grid image input to the LLM planner (multimodal):
 LLM_VISION=true uv run main.py --agent=llmcuriosityv2 --game=<game_id>
 ```
 
+## Recording format
+
+The `*.recording.jsonl` and `*.llm.jsonl` files have non-obvious timing
+semantics and a few serialization bugs. See
+[`docs/reports/recording-format.md`](docs/reports/recording-format.md) for
+the full reference. Key pitfalls:
+
+- **Entity bboxes lag the grid by one frame.** `scene_state[N]` reflects
+  pre-action positions; `frame[N]` shows the post-action grid. When overlaying
+  entity data on a grid, pair `scene_state[N]` with `frame[N-1]`.
+- **`effect_context.available_actions` is always `[0]`** in recordings. Use
+  the top-level `data.available_actions` field instead.
+
 ## Debugging with LLM logs
 
 Every LLM call (planner + rule proposer) is recorded to a sibling `.llm.jsonl`
