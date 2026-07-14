@@ -19,7 +19,7 @@ from arcengine import FrameData, GameAction, GameState
 from agents.llm_client import LLMClient
 from effects.engine_step_result import EngineStepResult, run_engine_step
 from entity import EntityBuilder
-from grouping import ConfirmedGroup, CombinedEngine
+from grouping import CombinedEngine, ConfirmedGroup
 from perception.session import RESET_ACTION, PerceptionSession, SceneSnapshot
 from planning.adapters import snapshot_from_scene
 from planning.exploration import ExplorationPolicy

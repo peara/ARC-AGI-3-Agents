@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import json
-import pytest
 from unittest.mock import MagicMock
 
 from grouping.combined_engine import CombinedEngine
-from grouping.engine import ConfirmedGroup
 from grouping.features import EntityFeature
 from perception.entities import EntityCatalog
-from perception.registry import ObjectRegistry, Track, Observation
+from perception.registry import ObjectRegistry, Observation, Track
 
 # ---------------------------------------------------------------------------
 # Helpers (Adapted from test_stale_detection.py)

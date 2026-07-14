@@ -61,11 +61,13 @@ def detect_stale_groups(
             # --- Signal 2: member death ---
             # Entity absent from both registry tracks and features → dead.
             if feat is None and eid not in registry.tracks:
-                proposals.append(SplitProposal(
-                    group_id=idx,
-                    member_id=eid,
-                    reason="member_death",
-                ))
+                proposals.append(
+                    SplitProposal(
+                        group_id=idx,
+                        member_id=eid,
+                        reason="member_death",
+                    )
+                )
                 continue
 
             if feat is None:
@@ -77,11 +79,13 @@ def detect_stale_groups(
                 # Check recent displacements for non-zero movement.
                 recent_disps = [d for d in feat.displacements if d is not None]
                 if any(d != (0, 0) for d in recent_disps):
-                    proposals.append(SplitProposal(
-                        group_id=idx,
-                        member_id=eid,
-                        reason="motion_divergence",
-                    ))
+                    proposals.append(
+                        SplitProposal(
+                            group_id=idx,
+                            member_id=eid,
+                            reason="motion_divergence",
+                        )
+                    )
                     continue
 
             # --- Signal 1b: mover stops moving while rest of group moves ---
@@ -90,15 +94,20 @@ def detect_stale_groups(
                 # in the group do, it has diverged.
                 this_has_disp = bool(feat.action_displacements)
                 others_have_disp = any(
-                    bool(features.get(other_eid) and features[other_eid].action_displacements)
+                    bool(
+                        features.get(other_eid)
+                        and features[other_eid].action_displacements
+                    )
                     for other_eid in mover_ids_in_group
                     if other_eid != eid and other_eid in features
                 )
                 if not this_has_disp and others_have_disp:
-                    proposals.append(SplitProposal(
-                        group_id=idx,
-                        member_id=eid,
-                        reason="motion_divergence",
-                    ))
+                    proposals.append(
+                        SplitProposal(
+                            group_id=idx,
+                            member_id=eid,
+                            reason="motion_divergence",
+                        )
+                    )
 
     return proposals

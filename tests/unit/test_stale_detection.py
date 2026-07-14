@@ -7,8 +7,7 @@ import pytest
 from grouping.engine import ConfirmedGroup, MemberLabel
 from grouping.features import EntityFeature
 from grouping.stale_detection import SplitProposal, detect_stale_groups
-from perception.registry import ObjectRegistry, Track, Observation
-
+from perception.registry import ObjectRegistry, Observation, Track
 
 # ---------------------------------------------------------------------------
 # Helpers

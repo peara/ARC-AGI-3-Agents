@@ -19,11 +19,11 @@ from perception.entities import EntityCatalog
 from perception.registry import ObjectRegistry
 
 from .engine import (
+    _CONFIRM_THRESHOLD,
     ConfirmedGroup,
     MemberLabel,
-    _CONFIRM_THRESHOLD,
-    _ProposalState,
     _entity_compact,
+    _ProposalState,
 )
 from .features import EntityFeature, extract_features
 from .heuristic_engine import HeuristicGroupingEngine
@@ -56,8 +56,12 @@ class CombinedEngine:
         self._llm_call: _LLMCall | None = llm_call
         self._vision: bool = vision
         self._config: ReadinessConfig = config or ReadinessConfig()
-        self._heuristic_engine: HeuristicGroupingEngine = HeuristicGroupingEngine(config=self._config)
-        self._llm_engine: LlmGroupingEngine = LlmGroupingEngine(llm_call=llm_call, vision=vision)
+        self._heuristic_engine: HeuristicGroupingEngine = HeuristicGroupingEngine(
+            config=self._config
+        )
+        self._llm_engine: LlmGroupingEngine = LlmGroupingEngine(
+            llm_call=llm_call, vision=vision
+        )
 
         self._registry: ObjectRegistry | None = None
         self._catalog: EntityCatalog | None = None
@@ -95,7 +99,9 @@ class CombinedEngine:
         # Update grid references: prev_grid falls back to last frame's
         # curr_grid; curr_grid comes from the parameter.
         if curr_grid is not None:
-            self._prev_grid = self._curr_grid if self._curr_grid is not None else prev_grid
+            self._prev_grid = (
+                self._curr_grid if self._curr_grid is not None else prev_grid
+            )
             self._curr_grid = curr_grid
         elif prev_grid is not None:
             self._prev_grid = prev_grid
@@ -113,17 +119,14 @@ class CombinedEngine:
         self._apply_splits(split_proposals)
 
         # --- Step 3: Diff against last frame → only NEW proposals ---
-        current_ready_keys = {
-            (p.heuristic, frozenset(p.member_ids)) for p in proposals
-        }
+        current_ready_keys = {(p.heuristic, frozenset(p.member_ids)) for p in proposals}
         new_keys = current_ready_keys - self._last_ready_keys - self._rejected
         # Also exclude already-confirmed proposals from the LLM round.
         new_keys -= set(self._confirmed.keys())
         self._last_ready_keys = current_ready_keys
 
         new_proposals = [
-            p for p in proposals
-            if (p.heuristic, frozenset(p.member_ids)) in new_keys
+            p for p in proposals if (p.heuristic, frozenset(p.member_ids)) in new_keys
         ]
 
         # --- Step 4: Adjudicate new proposals via LLM (or auto-confirm) ---
@@ -161,8 +164,7 @@ class CombinedEngine:
             new_member_ids = group.member_ids - {split.member_id}
             # Remove the MemberLabel for the split member.
             new_members = tuple(
-                m for m in group.members
-                if m.entity_id != split.member_id
+                m for m in group.members if m.entity_id != split.member_id
             )
 
             # Group dissolved if fewer than 2 members remain.
@@ -170,7 +172,9 @@ class CombinedEngine:
                 log.debug(
                     "Dissolving confirmed group %s (heuristic=%s): "
                     + "split member %d leaves < 2 members",
-                    key, group.heuristic, split.member_id,
+                    key,
+                    group.heuristic,
+                    split.member_id,
                 )
                 del self._confirmed[key]
                 self._states.pop(key, None)

@@ -15,14 +15,14 @@ from typing import Any, Callable
 from vision.render import grid_to_image, image_to_base64, make_image_block
 
 from .engine import (
-    ConfirmedGroup,
+    _SYSTEM_PROMPT,
     _VALID_RELATIONS,
     _VALID_ROLES,
     _VALID_VERDICTS,
+    ConfirmedGroup,
     _build_proposal_payload,
     _build_user_message,
     _parse_response,
-    _SYSTEM_PROMPT,
 )
 from .features import EntityFeature
 from .proposal import GroupProposal
@@ -109,11 +109,13 @@ def _validate_entry(
             role = m.get("role", "unknown")
             if role not in _VALID_ROLES:
                 role = "unknown"
-            members.append({
-                "id": m.get("id"),
-                "role": role,
-                "label": str(m.get("label", "")),
-            })
+            members.append(
+                {
+                    "id": m.get("id"),
+                    "role": role,
+                    "label": str(m.get("label", "")),
+                }
+            )
 
     reason = str(entry.get("reason", ""))
 
@@ -189,8 +191,7 @@ class LlmGroupingEngine:
             for new_id, p in enumerate(proposals)
         ]
         payloads = [
-            _build_proposal_payload(p, features, p.group_id)
-            for p in renumbered
+            _build_proposal_payload(p, features, p.group_id) for p in renumbered
         ]
 
         # --- Build messages ---
