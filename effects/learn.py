@@ -148,7 +148,7 @@ def learn_movement_rules(
     rules (guard on action only, using delta) serve as fallback.
     """
     ent = catalog.entities.get(entity_id)
-    available_actions = tuple(sorted(set(action_ids)))
+    available_actions = tuple(sorted(a for a in set(action_ids) if a != 0))
 
     if ent is None:
         return ((), (), available_actions)
