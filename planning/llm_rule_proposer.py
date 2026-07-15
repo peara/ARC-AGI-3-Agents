@@ -142,23 +142,6 @@ positional guard.
 position-specific). For movement rules, a generic action-only guard is \
 preferred unless the movement only applies at that position.
 
-## Confirmed groups
-
-The scene bundle may include a `confirmed_groups` list. Each entry describes
-a semantic group of entities that have been observed to move together, share
-shape, be adjacent, or have a containment relationship:
-
-- `relation`: "merge" (become one entity), "nest" (container+contents),
-  "sibling" (parallel peers)
-- `members`: each has `entity_id`, `role` (player, obstacle, goal, key,
-  container, cosmetic, hud, counter, dynamic, unknown), and `label`
-  (descriptive text)
-- `confidence`: how many times this grouping was confirmed
-
-Use this to understand which entities are parts of the same physical object.
-When proposing movement rules for a compound entity, you can reference both
-the compound entity ID and its member entity IDs.
-
 ## Rule coverage gaps
 
 The scene bundle may include a `coverage_gaps` list. Each entry describes an

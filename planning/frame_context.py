@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from effects import EffectContext, ResidualEntry, SceneState
-from grouping import ConfirmedGroup
 from perception.session.snapshot import SceneSnapshot
 from planning.query import UnknownAction
 from planning.search import PlanSpec
@@ -21,7 +20,6 @@ class FrameContext:
     residual: tuple[ResidualEntry, ...]
     observed_transition: tuple[SceneState, int, SceneState] | None
     unknowns: tuple[UnknownAction, ...]
-    confirmed_groups: list[ConfirmedGroup]
     diverged: bool
     spec: PlanSpec
     next_spec: PlanSpec | None = None

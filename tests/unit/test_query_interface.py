@@ -9,7 +9,6 @@ import pytest
 
 from effects import Effect, EffectContext, Rule
 from effects.residual import ResidualEntry
-from grouping import ConfirmedGroup, MemberLabel
 from planning.query import QueryInterface
 
 
@@ -80,7 +79,7 @@ class TestQueryInterface:
         scene = _make_scene()
         qi = QueryInterface(scene)
         bundle = qi.bundle()
-        expected_keys = {"scene", "action_legend", "engine_rules", "recent_actions", "unknowns", "context_note", "residual", "pruned_rules", "refuted_rules", "observed_transition", "confirmed_groups", "coverage_gaps"}
+        expected_keys = {"scene", "action_legend", "engine_rules", "recent_actions", "unknowns", "context_note", "residual", "pruned_rules", "refuted_rules", "observed_transition", "coverage_gaps"}
         assert set(bundle.keys()) == expected_keys
 
     def test_bundle_with_effect_context(self):
@@ -285,52 +284,6 @@ class TestQueryInterface:
         entities = bundle["scene"]["entities"]
         assert entities[0]["orientation"] == 2
         assert entities[1]["orientation"] is None
-
-    def test_build_groups_empty(self):
-        scene = _make_scene()
-        qi = QueryInterface(scene, confirmed_groups=None)
-        assert qi._build_groups() == []
-        qi = QueryInterface(scene, confirmed_groups=[])
-        assert qi._build_groups() == []
-
-    def test_build_groups_with_data(self):
-        scene = _make_scene()
-        groups = [
-            ConfirmedGroup(
-                member_ids=frozenset({1, 2}),
-                relation="merge",
-                heuristic="co_movement",
-                members=(
-                    MemberLabel(entity_id=1, role="player", label="head"),
-                    MemberLabel(entity_id=2, role="cosmetic", label="hat"),
-                ),
-                confidence=5,
-            )
-        ]
-        qi = QueryInterface(scene, confirmed_groups=groups)
-        res = qi._build_groups()
-        assert len(res) == 1
-        assert res[0] == {
-            "member_ids": [1, 2],
-            "relation": "merge",
-            "heuristic": "co_movement",
-            "confidence": 5,
-            "members": [
-                {"entity_id": 1, "role": "player", "label": "head"},
-                {"entity_id": 2, "role": "cosmetic", "label": "hat"},
-            ],
-        }
-
-    def test_build_groups_cap(self):
-        scene = _make_scene()
-        groups = [
-            ConfirmedGroup(frozenset({i}), "none", "test", (), 1)
-            for i in range(5)
-        ]
-        qi = QueryInterface(scene, confirmed_groups=groups)
-        res = qi._build_groups()
-        assert len(res) == QueryInterface.MAX_GROUPS
-        assert len(res) == 3
 
     def test_build_coverage_gaps_no_context(self):
         scene = _make_scene()

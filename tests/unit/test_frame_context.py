@@ -17,8 +17,8 @@ class TestFrameContext:
         """FrameContext should be frozen (immutable)."""
         assert FrameContext.__dataclass_params__.frozen  # type: ignore[attr-defined]
 
-    def test_has_nine_fields(self) -> None:
-        """FrameContext should have exactly 9 fields."""
+    def test_has_eight_fields(self) -> None:
+        """FrameContext should have exactly 8 fields."""
         fc_fields = {f.name for f in fields(FrameContext)}
         expected = {
             "scene",
@@ -26,7 +26,6 @@ class TestFrameContext:
             "residual",
             "observed_transition",
             "unknowns",
-            "confirmed_groups",
             "diverged",
             "spec",
             "next_spec",

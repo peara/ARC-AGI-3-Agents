@@ -9,7 +9,6 @@ from effects.dsl import rule_to_dsl
 from effects.residual import ResidualEntry
 from effects.rules import Rule
 from effects.state import SceneState
-from grouping import ConfirmedGroup
 from perception.session import SceneSnapshot
 
 
@@ -35,7 +34,6 @@ class QueryInterface:
         pruned_rules: tuple[Rule, ...] | list[Rule] | None = None,
         unknowns: tuple[UnknownAction, ...] | None = None,
         observed_transition: tuple[SceneState, int, SceneState] | None = None,
-        confirmed_groups: list[ConfirmedGroup] | None = None,
     ) -> None:
         self._scene = scene
         self._ctx = ctx
@@ -45,7 +43,6 @@ class QueryInterface:
         self._pruned_rules = pruned_rules
         self._unknowns = unknowns
         self._observed_transition = observed_transition
-        self._confirmed_groups = confirmed_groups
 
     def bundle(
         self,
@@ -77,7 +74,6 @@ class QueryInterface:
         if self._available_actions is not None:
             result["available_actions"] = list(self._available_actions)
         # Small fields first — ensures they survive JSON truncation in LLM logs
-        result["confirmed_groups"] = self._build_groups()
         result["coverage_gaps"] = self._build_coverage_gaps()
         result["residual"] = self._build_residual()
         result["pruned_rules"] = self._build_pruned_rules()
@@ -87,31 +83,7 @@ class QueryInterface:
 
     # -- field builders -------------------------------------------------------
 
-    MAX_GROUPS = 3
     MAX_GAP_ENTITIES = 5
-
-    def _build_groups(self) -> list[dict[str, object]]:
-        if not self._confirmed_groups:
-            return []
-        out: list[dict[str, object]] = []
-        for group in self._confirmed_groups[: self.MAX_GROUPS]:
-            out.append(
-                {
-                    "member_ids": sorted(group.member_ids),
-                    "relation": group.relation,
-                    "heuristic": group.heuristic,
-                    "confidence": group.confidence,
-                    "members": [
-                        {
-                            "entity_id": m.entity_id,
-                            "role": m.role,
-                            "label": m.label,
-                        }
-                        for m in group.members
-                    ],
-                }
-            )
-        return out
 
     def _build_coverage_gaps(self) -> list[dict[str, object]]:
         if self._ctx is None:
