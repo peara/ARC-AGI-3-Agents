@@ -655,7 +655,6 @@ class TestLlmCuriosityAgentLoop:
                 residual=(),
                 observed_transition=obs_transition,
                 unknowns=(),
-                confirmed_groups=[],
                 diverged=False,
                 spec=MagicMock(),
             )

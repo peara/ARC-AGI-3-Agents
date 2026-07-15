@@ -19,7 +19,7 @@ from arcengine import FrameData, GameAction, GameState
 from agents.llm_client import LLMClient
 from effects.engine_step_result import EngineStepResult, run_engine_step
 from entity import EntityBuilder
-from grouping import CombinedEngine, ConfirmedGroup
+from grouping import CombinedEngine
 from perception.session import RESET_ACTION, PerceptionSession, SceneSnapshot
 from planning.adapters import snapshot_from_scene
 from planning.exploration import ExplorationPolicy
@@ -62,7 +62,6 @@ class LlmCuriosity(Agent):
 
         self._policy_version = policy_version
         self.session = PerceptionSession()
-        self._entity_builder = EntityBuilder()
         action_space = [a.value for a in GameAction if a is not GameAction.RESET]
         if policy_version == "v2":
             self.policy = RuleFirstPolicy(
@@ -97,7 +96,7 @@ class LlmCuriosity(Agent):
             self._proposer_call = wrap_llm_call(
                 self.llm_call, self._llm_logger, kind="rule_proposer"
             )
-            self._grouping_engine = CombinedEngine(
+            _combined_engine = CombinedEngine(
                 llm_call=wrap_llm_call(self.llm_call, self._llm_logger, kind="grouping"),
                 vision=self._vision_enabled,
             )
@@ -105,9 +104,9 @@ class LlmCuriosity(Agent):
             self._llm_logger = None
             self._planner_call = self.llm_call
             self._proposer_call = self.llm_call
-            self._grouping_engine = CombinedEngine(llm_call=self.llm_call, vision=self._vision_enabled)
+            _combined_engine = CombinedEngine(llm_call=self.llm_call, vision=self._vision_enabled)
 
-        self._confirmed_groups: list[ConfirmedGroup] = []
+        self._entity_builder = EntityBuilder(combined_engine=_combined_engine)
 
         # Rule proposer (wraps llm_call with cooldown; NULL_RULE_PROPOSER on eval path — no network)
         self._rule_proposer: RuleProposerFn = make_rule_proposer(self.llm_call)
@@ -157,7 +156,6 @@ class LlmCuriosity(Agent):
                 residual=(),
                 observed_transition=None,
                 unknowns=(),
-                confirmed_groups=[],
                 diverged=False,
                 spec=self.policy._engine_plan_spec(self.session.snapshot()),
             )
@@ -176,7 +174,6 @@ class LlmCuriosity(Agent):
         self._current_goal = None
         self._last_action_id = RESET_ACTION
         self._tried_fallback_unknowns.clear()
-        self._confirmed_groups = []
         self._engine_step_pending = None
         self._last_engine_result = None
         return GameAction.RESET
@@ -186,12 +183,11 @@ class LlmCuriosity(Agent):
             return None
 
         self.session.ingest(latest_frame.frame, self._last_action_id)
+        curr_grid = self.session._last_grid
         logical_registry, catalog = self._entity_builder.update(
             self.session.registry, self.session.action_ids,
             effect_context=self.policy.context,
-        )
-        self._confirmed_groups = self._grouping_engine.update(
-            self.session.registry, catalog, self._last_action_id,
+            curr_grid=curr_grid,
         )
         self._scene = SceneSnapshot(
             frame_idx=self.session.registry.frame_idx,
@@ -201,6 +197,7 @@ class LlmCuriosity(Agent):
             action_ids=tuple(self.session.action_ids),
             grid_rows=self.session.grid_rows,
             grid_cols=self.session.grid_cols,
+            grid=curr_grid,
             last_step=(
                 self.session.step_observations[-1]
                 if self.session.step_observations
@@ -246,7 +243,6 @@ class LlmCuriosity(Agent):
                     residual=_residual,
                     observed_transition=_observed_transition,
                     unknowns=_unknowns,
-                    confirmed_groups=self._confirmed_groups,
                     diverged=self.policy.status().diverged,
                     spec=self.policy._engine_plan_spec(self._scene),
                 )
@@ -264,7 +260,6 @@ class LlmCuriosity(Agent):
                 residual=_residual,
                 observed_transition=_observed_transition,
                 unknowns=_unknowns,
-                confirmed_groups=self._confirmed_groups,
                 diverged=self.policy.status().diverged,
                 spec=self.policy._engine_plan_spec(self._scene),
             )
@@ -345,7 +340,6 @@ class LlmCuriosity(Agent):
                 scene,
                 self.policy.context,
                 available_actions=actions,
-                confirmed_groups=self._confirmed_groups,
             ).bundle()
             if self._llm_logger is not None:
                 self._llm_logger.trigger = "planner_cycle"
@@ -447,7 +441,6 @@ class LlmCuriosity(Agent):
                 residual=self._last_engine_result.residual if self._last_engine_result else (),
                 observed_transition=self._last_engine_result.observed_transition if self._last_engine_result else None,
                 unknowns=self._last_engine_result.unknowns if self._last_engine_result else (),
-                confirmed_groups=self._confirmed_groups,
                 diverged=self.policy.status().diverged,
                 spec=self.policy._engine_plan_spec(self._scene),
             )
@@ -468,7 +461,6 @@ class LlmCuriosity(Agent):
             residual=residual,
             unknowns=fc.unknowns,
             observed_transition=observed_transition,
-            confirmed_groups=fc.confirmed_groups,
         ).bundle()
         residual_dicts = [
             {

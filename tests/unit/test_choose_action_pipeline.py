@@ -86,7 +86,6 @@ class TestChooseActionPipeline:
         agent._current_goal = MagicMock()
         agent._last_action_id = 5
         agent._tried_fallback_unknowns.add((123, 1))
-        agent._confirmed_groups = [MagicMock()]
 
         action = agent._reset()
 
@@ -96,7 +95,6 @@ class TestChooseActionPipeline:
         assert agent._current_goal is None
         assert agent._last_action_id == 0  # RESET_ACTION
         assert len(agent._tried_fallback_unknowns) == 0
-        assert agent._confirmed_groups == []
 
     def test_perceive_returns_frame_context(self) -> None:
         """Verify _perceive() returns FrameContext when a new frame is ingested."""
@@ -136,7 +134,6 @@ class TestChooseActionPipeline:
             residual=(),
             observed_transition=None,
             unknowns=(),
-            confirmed_groups=[],
             diverged=False,
             spec=MagicMock(),
         )
@@ -165,7 +162,6 @@ class TestChooseActionPipeline:
             residual=(),
             observed_transition=None,
             unknowns=(),
-            confirmed_groups=[],
             diverged=False,
             spec=MagicMock(),
         )
