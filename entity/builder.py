@@ -7,22 +7,35 @@ engine (grouping).  Owns four concerns:
    across rotation, colour-change, and disappearance/reappearance events.
 2. **Entity composition** (``build_entities``): group logical tracks into
    entities by common-fate co-movement.
-3. **Compound grouping** (``co_movement`` heuristic): when two or more
-   entities co-move, auto-confirm them as a compound entity.  This reduces
-   the entity count for the LLM bundle and stabilises identity.  Individual
-   member tracks are kept for role detection — ``detect_controllable`` maps
-   a controllable member track to the containing compound entity.
+3. **Compound grouping** (CombinedEngine or classical co_movement): when
+   two or more entities co-move, confirm them as a compound entity.  This
+   reduces the entity count for the LLM bundle and stabilises identity.
+   Individual member tracks are kept for role detection —
+   ``detect_controllable`` maps a controllable member track to the
+   containing compound entity.
+
+   When a ``CombinedEngine`` is injected, LLM adjudication filters bad
+   compounds *before* role assignment.  When ``combined_engine`` is None,
+   the classical ``co_movement`` heuristic is used (backward compat).
+
 4. **Role assignment** (``assign_roles``): detect controllable and counter
    entities.  Runs **once**, on the final catalog (after compound grouping).
 
-Classical-only: no LLM, no network.  It runs every frame.
+EntityBuilder optionally uses LLM adjudication via an injected
+``CombinedEngine``; falls back to classical ``co_movement`` when
+``combined_engine=None``.  The perception core remains network-free — LLM
+calls happen inside CombinedEngine only when explicitly configured.
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import cast
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from grouping.combined_engine import CombinedEngine
 
 from effects.context import EffectContext
 from effects.predict import predict
@@ -64,9 +77,14 @@ class EntityBuilder:
     """
 
     def __init__(
-        self, config: EntityBuilderConfig | None = None, *, dormant_ttl: int = 3
+        self,
+        config: EntityBuilderConfig | None = None,
+        *,
+        dormant_ttl: int = 3,
+        combined_engine: CombinedEngine | None = None,
     ) -> None:
         self.config = config or EntityBuilderConfig()
+        self._combined_engine = combined_engine
         self._reconciler = Reconciler(self.config.reconciler)
         self._logical_registry: LogicalRegistry | None = None
         self._catalog: EntityCatalog | None = None
@@ -96,6 +114,7 @@ class EntityBuilder:
         registry: ObjectRegistry,
         action_ids: list[int],
         effect_context: EffectContext | None = None,
+        curr_grid: Sequence[Sequence[int]] | None = None,
     ) -> tuple[LogicalRegistry, EntityCatalog]:
         """Re-identify tracks, build entities, group compounds, assign roles.
 
@@ -175,7 +194,8 @@ class EntityBuilder:
 
         # 4. Compound grouping: merge co-moving entities into one compound
         catalog = self._apply_compound_grouping(
-            self._logical_registry, catalog, action_ids, effect_context
+            self._logical_registry, catalog, action_ids, effect_context,
+            curr_grid=curr_grid,
         )
 
         # 5. Dormant / DEAD lifecycle transitions
@@ -317,8 +337,18 @@ class EntityBuilder:
         catalog: EntityCatalog,
         action_ids: list[int],
         effect_context: EffectContext | None = None,
+        *,
+        curr_grid: Sequence[Sequence[int]] | None = None,
     ) -> EntityCatalog:
         """Find co-moving entities, merge into a compound entity.
+
+        When ``self._combined_engine`` is set, delegates compound detection
+        to ``CombinedEngine.update()`` which runs heuristics + LLM
+        adjudication.  Only groups with ``relation == "merge"`` trigger
+        ``_merge_into_compound``; other relations are metadata only.
+
+        When ``self._combined_engine`` is None, falls back to the classical
+        ``co_movement`` heuristic (backward compat).
 
         Only alive entities are considered for new proposals — dead
         entities retain stale features that produce spurious matches.
@@ -330,6 +360,90 @@ class EntityBuilder:
         result, the compound is preserved even when co-movement fails
         to find it (e.g. because a track died during rotation).
         """
+        # Check whether predict() knows the compound's movement.
+        prediction_known = self._is_prediction_known(effect_context)
+
+        if self._combined_engine is not None:
+            # --- CombinedEngine path ---
+            confirmed = self._combined_engine.update(
+                cast(ObjectRegistry, logical_reg),
+                catalog,
+                action_ids[-1] if action_ids else 0,
+                curr_grid=curr_grid,
+            )
+            merge_groups = [g for g in confirmed if g.relation == "merge"]
+
+            if merge_groups:
+                all_member_ids: set[int] = set()
+                for g in merge_groups:
+                    all_member_ids |= g.member_ids
+
+                if not all_member_ids:
+                    return catalog
+
+                # When confirmed member_ids is a strict subset of the
+                # previous compound and prediction says the compound
+                # should persist, reject the false-positive subset and
+                # keep the previous compound instead.
+                if (
+                    self._compound_members is not None
+                    and prediction_known
+                    and frozenset(all_member_ids) != self._compound_members
+                    and frozenset(all_member_ids).issubset(self._compound_members)
+                ):
+                    log.info(
+                        "compound subset rejected (prediction known): "
+                        "proposed=%s previous=%s",
+                        sorted(all_member_ids),
+                        sorted(self._compound_members),
+                    )
+                    return self._merge_into_compound(
+                        catalog, self._compound_members, reuse_id=True
+                    )
+
+                prev_members = self._compound_members
+                self._compound_members = frozenset(all_member_ids)
+
+                members_unchanged = prev_members == self._compound_members
+                if not members_unchanged:
+                    if prev_members is None:
+                        log.info(
+                            "compound formed: members=%s",
+                            sorted(self._compound_members),
+                        )
+                    else:
+                        log.info(
+                            "compound members changed: %s -> %s",
+                            sorted(prev_members),
+                            sorted(self._compound_members),
+                        )
+
+                return self._merge_into_compound(
+                    catalog, frozenset(all_member_ids),
+                    reuse_id=prev_members == frozenset(all_member_ids),
+                )
+
+            # No merge groups found.
+            if self._compound_members is not None:
+                if prediction_known:
+                    log.info(
+                        "compound preserved (prediction known): members=%s",
+                        sorted(self._compound_members),
+                    )
+                    return self._merge_into_compound(
+                        catalog, self._compound_members, reuse_id=True
+                    )
+                log.info(
+                    "compound dissolved: members=%s",
+                    sorted(self._compound_members),
+                )
+                catalog = self._dissolve_compound(catalog)
+                self._compound_members = None
+                self._compound_entity_id = None
+                self._compound_track_to_entity = {}
+            return catalog
+
+        # --- Classical fallback (co_movement heuristic) ---
         features = extract_features(
             cast(ObjectRegistry, logical_reg), catalog, action_ids
         )
@@ -348,7 +462,7 @@ class EntityBuilder:
         }
 
         proposals = co_movement(alive_features)
-        confirmed: list[frozenset[int]] = []
+        classical_confirmed: list[frozenset[int]] = []
         for p in proposals:
             member_feats = [
                 alive_features[eid] for eid in p.member_ids if eid in alive_features
@@ -360,12 +474,9 @@ class EntityBuilder:
                 continue
             if len(matched) < self.config.compound_min_actions:
                 continue
-            confirmed.append(p.member_ids)
+            classical_confirmed.append(p.member_ids)
 
-        # Check whether predict() knows the compound's movement.
-        prediction_known = self._is_prediction_known(effect_context)
-
-        if not confirmed:
+        if not classical_confirmed:
             if self._compound_members is not None:
                 if prediction_known:
                     log.info(
@@ -386,7 +497,7 @@ class EntityBuilder:
             return catalog
 
         all_member_ids: set[int] = set()
-        for ids in confirmed:
+        for ids in classical_confirmed:
             all_member_ids |= ids
 
         if not all_member_ids:
