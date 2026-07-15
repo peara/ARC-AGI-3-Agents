@@ -1,7 +1,7 @@
 # LLM Curiosity Agent — Design Document
 
 > Architecture and data flow for the `LlmCuriosity` agent.
-> Last updated: 2026-07-09
+> Last updated: 2026-07-15
 
 ---
 
@@ -28,21 +28,20 @@ the proposer and the planner falls back to classical BFS.
 
 ```mermaid
 graph TD
-    PS[PerceptionSession] --> SS[SceneSnapshot]
+    PS[PerceptionSession] --> EB[EntityBuilder<br/>reconciler + build_entities<br/>+ CombinedEngine compound grouping<br/>+ assign_roles]
+    EB --> SS[SceneSnapshot]
     SS --> EP[ExplorationPolicy]
     SS --> QI[QueryInterface<br/>bundle for LLM]
-    SS --> CG[CombinedEngine<br/>entity grouping]
     EP --> BFS[plan_bfs<br/>classical BFS]
     QI --> LP[LLM Planner<br/>ProbeGoal]
     QI --> LRP[LLM Rule Proposer<br/>Rule hypotheses]
     EP --> EE[Effects Engine<br/>predict + confirm]
-    CG --> QI
 
     style LP fill:#4a9,stroke:#286
     style LRP fill:#4a9,stroke:#286
     style EE fill:#69d,stroke:#47a
     style BFS fill:#69d,stroke:#47a
-    style CG fill:#69d,stroke:#47a
+    style EB fill:#e74,stroke:#c33
 ```
 
 ### Layer 1 — Perception
@@ -71,7 +70,7 @@ execution, LLM cooldown, failure context.
 ```mermaid
 flowchart TD
     RESET[RESET gate] --> INGEST
-    INGEST[INGEST<br/>session.ingest → SceneSnapshot<br/>combined_engine.update → groups<br/>policy.on_observed → engine_step<br/>if residual/transition → proposer → inject] --> PHASE
+    INGEST[INGEST<br/>session.ingest → raw tracks<br/>entity_builder.update → reconciler + build_entities<br/>  + CombinedEngine compound grouping → LLM-approved compounds<br/>  + assign_roles → controllable role<br/>SceneSnapshot construction<br/>policy.on_observed → engine_step<br/>if residual/transition → proposer → inject] --> PHASE
     PHASE[Phase gate<br/>random vs llm_directed] --> DIV
     DIV{Divergence?} -->|yes| DROP[Drop plan,<br/>set failure context]
     DIV -->|no| PROBE
@@ -88,11 +87,12 @@ flowchart TD
     style LLM fill:#4a9,stroke:#286
 ```
 
-> **Refactor planned.** The current `choose_action` (lines 137-355 in
-> `llm_curiosity_agent.py`) is a 220-line monolith with 15 exit points. See
-> [§10 Refactor direction](#10-refactor-direction--explicit-per-frame-pipeline)
-> for the planned 5-stage pipeline (`_perceive` → `_verify` → `_learn` →
-> `_decide` → `_prepare`) with `FrameContext` as the per-frame carrier.
+CombinedEngine runs inside `EntityBuilder._apply_compound_grouping` via
+dependency injection (`combined_engine` parameter). LLM adjudication filters
+bad compounds before `assign_roles` runs, so the controllable role is assigned
+to a stable, validated compound. Grids are passed through
+`EntityBuilder.update(curr_grid=...)` and forwarded to CombinedEngine for
+vision-mode LLM adjudication.
 
 ---
 
@@ -296,7 +296,7 @@ unknown entries, each with full state fingerprints).
 
 | Component | File |
 |-----------|------|
-| Entity grouping | `grouping/combined_engine.py` |
+| Entity grouping | `grouping/combined_engine.py` (injected into EntityBuilder) |
 | Agent entry point | `agents/templates/llm_curiosity_agent.py` |
 | Exploration policy | `planning/exploration.py` |
 | BFS search | `planning/search.py` |
@@ -364,7 +364,7 @@ fields. Specific issues:
 
 5. **Per-frame state is scattered.** `self._scene`, `self.policy._engine_ctx`,
    `self.policy._last_residual`, `self.policy._last_unknowns`,
-   `self._confirmed_groups`, `self._probe_plan`, etc. — no single struct
+   `self._probe_plan`, etc. — no single struct
    carries the per-frame context. Adding new state means threading new
    parameters through every helper.
 
@@ -396,7 +396,6 @@ class FrameContext:
     residual: tuple[ResidualEntry, ...]
     observed_transition: tuple[SceneState, int, SceneState] | None
     unknowns: tuple[UnknownAction, ...]
-    confirmed_groups: list[ConfirmedGroup]
     diverged: bool
     spec: PlanSpec                          # what was tracked this frame
     next_spec: PlanSpec | None = None       # planner-chosen spec for next frame

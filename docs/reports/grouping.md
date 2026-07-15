@@ -132,8 +132,9 @@ just incidentally near each other.
 
 ### CombinedEngine
 
-`grouping/combined_engine.py` — orchestrator. Called every frame via
-`update(snapshot)`:
+`grouping/combined_engine.py` — orchestrator. Called every frame inside
+`EntityBuilder._apply_compound_grouping` via `update(registry, catalog,
+action_id, curr_grid=...)`:
 
 1. Run `HeuristicGroupingEngine` to get fresh proposals.
 2. Diff against tracked confirmed groups to find new proposals only.
@@ -141,6 +142,10 @@ just incidentally near each other.
 4. If new proposals exist, call `LlmGroupingEngine` with prev + curr grid images.
 5. Merge LLM verdicts into confirmed groups.
 6. Return full snapshot.
+
+EntityBuilder acts on `relation == "merge"` groups by folding member
+entities into a single compound in the catalog. Other relations are metadata
+only (tracked on the group but do not mutate the catalog).
 
 ### Stale group detection
 
@@ -200,8 +205,41 @@ Tested across 3 recordings with real LLM:
 
 - Wire into `LlmCuriosity` agent via `CombinedEngine`
 - Bundle compression: replace flat entity list with grouped representation
+- CombinedEngine integrated into EntityBuilder (dependency injection)
 
 ## Not yet done
 
 - Test on more game types (only ls20 and wa30 tested so far)
 - Confidence >1 (needs re-send logic or cross-heuristic corroboration)
+
+## Architectural overlap with EntityBuilder (RESOLVED)
+
+> This overlap has been resolved. CombinedEngine is now called inside
+> EntityBuilder via dependency injection. The agent no longer calls
+> `grouping_engine.update()` separately.
+
+**Problem (historical).** `EntityBuilder._apply_compound_grouping` (in
+`entity/builder.py`) used the same `co_movement` heuristic as `CombinedEngine`
+but ran **before** it in the agent loop. EntityBuilder merged co-moving
+entities into a compound in the catalog, `assign_roles` assigned the
+controllable role to the compound, and CombinedEngine ran afterward producing
+only metadata — it could not undo the catalog mutation.
+
+This caused two issues:
+
+1. **Static objects in controllable.** Zero-displacement trivially "matches"
+   any action in co-movement. EntityBuilder merged static objects into the
+   compound, `assign_roles` marked the compound as controllable, and
+   CombinedEngine could not remove the static members afterward.
+
+2. **Controllable ID instability.** The compound entity ID changed when
+   co-membership shifted frame-to-frame, causing `CONTROLLABLE ID CHANGED`
+   warnings on ~20% of frames.
+
+**Resolution.** CombinedEngine is now injected into EntityBuilder via the
+`combined_engine` parameter. EntityBuilder calls `CombinedEngine.update()`
+inside `_apply_compound_grouping`, so LLM adjudication filters bad compounds
+**before** `assign_roles` runs. When `combined_engine=None`, the classical
+`co_movement` heuristic is used (eval-path compat). Grids are passed through
+`EntityBuilder.update(curr_grid=...)` to CombinedEngine, and `grid=curr_grid`
+is forwarded to `SceneSnapshot`.
