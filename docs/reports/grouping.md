@@ -159,6 +159,97 @@ Confirmed groups are monitored for two death signals:
 When either signal fires, the group is marked stale and removed from the
 active snapshot. This prevents the agent from planning against ghosts.
 
+### Split detection (compound review)
+
+Confirmed `merge` groups can also be *split* when members diverge after the
+initial compound was formed.  The engine watches for four gating signals that
+suggest an existing compound may no longer be valid.  When any signal fires, a
+compound review is sent to the LLM asking it to confirm or split the group.
+
+**Why.**  Classical heuristics only propose compounds; they do not revise them.
+A controllable entity can pick up a counter, a static border can be merged by
+accident, or a member can stop moving while the rest continues.  Split
+detection adds a second LLM adjudication pass on already-confirmed compounds.
+
+**Four gate signals in `CombinedEngine._should_ask_split()`.**
+
+1. **New members outside previous bbox.**  If the current member set of a
+   compound contains entities that were not in the previous frame's member
+   set, and any new member lies outside the previous group's union bounding
+   box, the gate fires.  This catches cases where a passing entity is
+   incorrectly absorbed into an existing compound.
+2. **Area growth > 30%.**  The union bounding box area of the current member
+   set is compared to the previous frame's union bbox.  If the area grew by
+   more than 30 percent, the gate fires.  This signals that an oversized or
+   background entity may have been merged.
+3. **Counter/obstacle role members.**  If any member of the compound is
+   labelled (by the LLM or by features) as `counter` or `obstacle`, the gate
+   fires immediately.  Counters and obstacles are typically independent
+   entities that should not be part of a player compound.
+4. **Action displacement mismatch.**  Signal 1c from
+   `stale_detection.detect_stale_groups()` flags members whose displacement
+   for the last action is zero while the majority of the group moved.  This
+   is a *per-frame stateless* check.  `CombinedEngine` tracks consecutive
+   mismatches in `_mismatch_counters` (incremented on mismatch, reset to 0
+   otherwise).  The gate only fires when a member has 2 or more consecutive
+   mismatches.  This prevents transient one-frame pauses from triggering a
+   split.
+
+**How Signal 1c works.**  `detect_stale_groups()` collects all displacement
+vectors for `last_action_id` across every member of each confirmed group.  If
+at least two members have displacement data and more than half of them moved
+(non-zero), any member whose displacements are all zero is flagged with
+reason `action_displacement_mismatch`.  The signal is skipped entirely when
+`last_action_id` is None or fewer than 2 members have data.
+
+**Compound review piggybacks on the existing LLM call.**
+
+The LLM extension adds a new section to the prompt.  `_build_user_message()`
+in `grouping/engine.py` appends a `### Existing compound review` section when
+`compound_review` is provided.  Each confirmed group gets its own payload entry
+with compact member features.  The LLM responds with the same JSON list
+schema; compound entries use `proposal_id = len(proposals) + compound_index`
+so the parser can distinguish them from new proposals.  `_validate_compound_entry()`
+(in `grouping/llm_engine.py`) parses these entries into `CompoundSplitVerdict`
+objects.
+
+There are three cost scenarios:
+
+| Scenario | Extra LLM call? |
+|---|---|
+| New proposals exist AND gate fires | No. Compound review piggybacks on the same LLM call used for new proposals. |
+| No new proposals AND gate fires | Yes. A standalone compound review call is made via `_adjudicate_compound_review()`. |
+| Gate does not fire | No extra call at all. |
+
+Empirically, on a 101-frame recording the gate fires roughly 7 times when no
+new proposals are present, so the standalone compound review adds about 7 extra
+LLM calls per 101 frames.  When new proposals are present, the compound review
+is effectively free.
+
+**How split verdicts flow through the system.**
+
+1. `CombinedEngine._apply_compound_split_verdicts()` receives a list of
+   `CompoundSplitVerdict` objects from the LLM.
+2. For each verdict:
+   - `confirm` means the compound stays unchanged.
+   - `split` means the LLM has specified which sub-groups should remain.  Any
+     member not listed in `split_into` is ejected.
+   - If fewer than 2 members remain after ejection, the group is dissolved
+     (removed from `self._confirmed`).
+3. `EntityBuilder._apply_compound_grouping()` then inspects the confirmed merge
+   groups returned by `CombinedEngine.update()`.  If the member set is a strict
+   subset of the previous compound's members, it checks whether all members were
+   ejected:
+   - If *all* members were ejected, `EntityBuilder._dissolve_compound()` is
+     called.  The compound entity transitions to `DEAD` and its former members
+     are restored as `ACTIVE` singletons in the catalog.
+   - If only *some* members were ejected, the existing `_merge_into_compound()`
+     call with `reuse_id=True` rebuilds the compound from the smaller member
+     set, preserving the same entity ID.
+
+This flow ensures that bad compounds are caught and corrected without
+requiring the agent to restart its entity tracking from scratch.
+
 ## LLM probe script
 
 ```bash

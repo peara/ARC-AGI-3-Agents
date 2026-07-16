@@ -19,6 +19,7 @@ from .engine import (
     _VALID_RELATIONS,
     _VALID_ROLES,
     _VALID_VERDICTS,
+    CompoundSplitVerdict,
     ConfirmedGroup,
     _build_proposal_payload,
     _build_user_message,
@@ -53,7 +54,15 @@ When the images contradict the heuristic evidence, trust the images.
 Use "split" verdict when a heuristic bundles entities that visually belong
 to different semantic layers — e.g. a background element mixed with a
 foreground object, or HUD elements grouped with game-world entities.
-Provide "split_into" with sub-groups that share a genuine visual coherence."""
+Provide "split_into" with sub-groups that share a genuine visual coherence.
+
+## Compound review
+
+You may also see an "### Existing compound review" section. For each compound
+listed, judge whether all members still belong together. Use "confirm" if the
+compound is still valid, or "split" with "split_into" to indicate which members
+should be ejected. When splitting, list the sub-groups that should remain
+together; ejected members become singletons again."""
 
 
 @dataclass(frozen=True)
@@ -139,6 +148,70 @@ def _validate_entry(
     )
 
 
+def _validate_compound_entry(
+    entry: dict[str, Any],
+    n_compounds: int,
+    n_proposals: int = 0,
+) -> CompoundSplitVerdict | None:
+    """Validate a compound review entry from the LLM response.
+
+    *n_proposals* is the number of new proposals in the same LLM call;
+    when the LLM omits ``compound_index``, we fall back to deriving it
+    from ``proposal_id - n_proposals``.
+    """
+    compound_index = entry.get("compound_index")
+    if not isinstance(compound_index, int) or compound_index < 0 or compound_index >= n_compounds:
+        # Fall back: derive compound_index from proposal_id offset
+        pid = entry.get("proposal_id")
+        if isinstance(pid, int) and pid >= 0 and n_proposals > 0:
+            compound_index = pid - n_proposals
+            if compound_index < 0 or compound_index >= n_compounds:
+                return None
+        else:
+            return None
+
+    verdict = entry.get("verdict")
+    if verdict not in ("confirm", "split"):
+        return None
+
+    members: list[dict] = []
+    raw_members = entry.get("members")
+    if isinstance(raw_members, list):
+        for m in raw_members:
+            if not isinstance(m, dict):
+                continue
+            role = m.get("role", "unknown")
+            if role not in _VALID_ROLES:
+                role = "unknown"
+            members.append(
+                {
+                    "id": m.get("id"),
+                    "role": role,
+                    "label": str(m.get("label", "")),
+                }
+            )
+
+    reason = str(entry.get("reason", ""))
+
+    split_into: list[list[int]] | None = None
+    if verdict == "split":
+        raw_split = entry.get("split_into")
+        if isinstance(raw_split, list):
+            split_into = [
+                [x for x in sub if isinstance(x, int)]
+                for sub in raw_split
+                if isinstance(sub, list)
+            ]
+
+    return CompoundSplitVerdict(
+        compound_index=compound_index,
+        verdict=verdict,
+        members=members,
+        reason=reason,
+        split_into=split_into,
+    )
+
+
 class LlmGroupingEngine:
     """Grid-image adjudication engine: sends two grids + proposals to the LLM.
 
@@ -167,17 +240,20 @@ class LlmGroupingEngine:
         proposals: list[GroupProposal],
         confirmed_groups: list[ConfirmedGroup],
         features: dict[int, EntityFeature],
-    ) -> list[Verdict]:
-        """Judge heuristic proposals via LLM, returning one Verdict per proposal.
+        compound_review: list[dict[str, Any]] | None = None,
+    ) -> tuple[list[Verdict], list[CompoundSplitVerdict]]:
+        """Judge heuristic proposals via LLM, returning verdicts and compound split verdicts.
 
         Falls back to confirming all proposals on any error/timeout.
+        When *compound_review* is provided, it is appended to the user
+        message so the LLM can also review existing confirmed groups.
         """
-        if not proposals:
-            return []
+        if not proposals and compound_review is None:
+            return [], []
 
         # --- Mock mode: no LLM callable ---
         if self._llm_call is None:
-            return _fallback_verdicts(proposals)
+            return _fallback_verdicts(proposals), []
 
         # --- Build payloads ---
         renumbered = [
@@ -197,7 +273,7 @@ class LlmGroupingEngine:
         # --- Build messages ---
         system_msg: dict[str, str] = {"role": "system", "content": self._system_prompt}
 
-        text_content = _build_user_message(payloads)
+        text_content = _build_user_message(payloads, compound_review=compound_review)
 
         if self._vision:
             try:
@@ -222,20 +298,37 @@ class LlmGroupingEngine:
             raw = self._llm_call(messages)
         except Exception:
             log.exception("LlmGroupingEngine LLM call failed")
-            return _fallback_verdicts(renumbered)
+            return _fallback_verdicts(renumbered), []
 
         # --- Parse response ---
         parsed = _parse_response(raw)
         if parsed is None:
             log.warning("LlmGroupingEngine: could not parse LLM response")
-            return _fallback_verdicts(renumbered)
+            return _fallback_verdicts(renumbered), []
 
         verdicts: list[Verdict] = []
+        compound_verdicts: list[CompoundSplitVerdict] = []
         seen_ids: set[int] = set()
+        n_proposals = len(renumbered)
         for entry in parsed:
             if not isinstance(entry, dict):
                 continue
-            v = _validate_entry(entry, len(renumbered))
+            pid = entry.get("proposal_id")
+            if not isinstance(pid, int):
+                continue
+
+            # Compound review entries have proposal_id >= n_proposals
+            if pid >= n_proposals:
+                compound_index = pid - n_proposals
+                if compound_review is not None and compound_index < len(compound_review):
+                    cv = _validate_compound_entry(
+                        entry, len(compound_review), n_proposals=n_proposals,
+                    )
+                    if cv is not None:
+                        compound_verdicts.append(cv)
+                continue
+
+            v = _validate_entry(entry, n_proposals)
             if v is not None and v.proposal_id not in seen_ids:
                 verdicts.append(v)
                 seen_ids.add(v.proposal_id)
@@ -255,4 +348,4 @@ class LlmGroupingEngine:
                     )
                 )
 
-        return verdicts
+        return verdicts, compound_verdicts

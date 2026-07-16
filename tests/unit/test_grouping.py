@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 import pytest
 
+from grouping.engine import CompoundSplitVerdict, ConfirmedGroup, MemberLabel
 from grouping.features import EntityFeature
 from grouping.heuristics import (
     _canonical_shape_key,
@@ -18,7 +19,12 @@ from grouping.heuristics import (
     static_bounded,
 )
 from grouping.proposal import GroupProposal, ProposedGroup
+from grouping.readiness import ReadinessConfig
 from grouping.resolver import resolve_conflicts
+
+if TYPE_CHECKING:
+    from grouping.combined_engine import CombinedEngine
+    from grouping.llm_engine import LlmGroupingEngine
 
 
 def _make_feature(
@@ -694,3 +700,1014 @@ class TestGroupingEngineMock:
 
         assert _parse_members("not a list") == ()
         assert _parse_members(None) == ()
+
+
+# ---------------------------------------------------------------------------
+# Compound split detection tests
+# ---------------------------------------------------------------------------
+
+
+class TestDetectStaleGroupsSignal1c:
+    """Tests for Signal 1c (action displacement mismatch) in detect_stale_groups."""
+
+    def _make_registry_with_tracks(self, track_ids: list[int]) -> object:
+        """Create a minimal ObjectRegistry with the given track IDs (no dead tracks)."""
+        from perception.registry import ObjectRegistry
+
+        reg = ObjectRegistry.__new__(ObjectRegistry)
+        reg.tracks = {}
+        return reg
+
+    def test_last_action_id_none_no_signal(self) -> None:
+        from grouping.stale_detection import detect_stale_groups
+
+        features = {
+            0: _make_feature(entity_id=0, ever_moves=True, action_displacements={1: [(2, 0)]}),
+            1: _make_feature(entity_id=1, ever_moves=True, action_displacements={1: [(0, 0)]}),
+        }
+        registry = self._make_registry_with_tracks([])
+        group = _make_confirmed_group(member_ids={0, 1}, relation="merge")
+        # last_action_id=None → Signal 1c should never fire
+        proposals = detect_stale_groups(
+            [group], features, registry, last_action_id=None
+        )
+        assert all(p.reason != "action_displacement_mismatch" for p in proposals)
+
+    def test_majority_moved_member_zero_displacement_produces_proposal(self) -> None:
+        from grouping.stale_detection import detect_stale_groups
+
+        # 3 members: 2 moved (majority), 1 stayed → entity 2 gets flagged
+        features = {
+            0: _make_feature(entity_id=0, ever_moves=True, action_displacements={5: [(2, 0)]}),
+            1: _make_feature(entity_id=1, ever_moves=True, action_displacements={5: [(3, 0)]}),
+            2: _make_feature(entity_id=2, ever_moves=True, action_displacements={5: [(0, 0)]}),
+        }
+        registry = self._make_registry_with_tracks([])
+        group = _make_confirmed_group(member_ids={0, 1, 2}, relation="merge")
+        proposals = detect_stale_groups(
+            [group], features, registry, last_action_id=5
+        )
+        mismatch_proposals = [p for p in proposals if p.reason == "action_displacement_mismatch"]
+        assert len(mismatch_proposals) == 1
+        assert mismatch_proposals[0].member_id == 2
+
+    def test_member_matching_displacement_no_proposal(self) -> None:
+        from grouping.stale_detection import detect_stale_groups
+
+        # All members moved → no mismatch
+        features = {
+            0: _make_feature(entity_id=0, ever_moves=True, action_displacements={5: [(2, 0)]}),
+            1: _make_feature(entity_id=1, ever_moves=True, action_displacements={5: [(2, 0)]}),
+        }
+        registry = self._make_registry_with_tracks([])
+        group = _make_confirmed_group(member_ids={0, 1}, relation="merge")
+        proposals = detect_stale_groups(
+            [group], features, registry, last_action_id=5
+        )
+        mismatch_proposals = [p for p in proposals if p.reason == "action_displacement_mismatch"]
+        assert len(mismatch_proposals) == 0
+
+    def test_member_zero_displacement_no_data_for_action(self) -> None:
+        """When a member has no displacement data for the action, it counts as zero."""
+        from grouping.stale_detection import detect_stale_groups
+
+        features = {
+            0: _make_feature(entity_id=0, ever_moves=True, action_displacements={5: [(2, 0)]}),
+            1: _make_feature(entity_id=1, ever_moves=True, action_displacements={}),  # no data for action 5
+        }
+        registry = self._make_registry_with_tracks([])
+        group = _make_confirmed_group(member_ids={0, 1}, relation="merge")
+        proposals = detect_stale_groups(
+            [group], features, registry, last_action_id=5
+        )
+        mismatch_proposals = [p for p in proposals if p.reason == "action_displacement_mismatch"]
+        # Only 1 member has data → fewer than 2, so no signal
+        assert len(mismatch_proposals) == 0
+
+    def test_fewer_than_two_members_with_data_no_signal(self) -> None:
+        from grouping.stale_detection import detect_stale_groups
+
+        features = {
+            0: _make_feature(entity_id=0, ever_moves=True, action_displacements={5: [(2, 0)]}),
+            1: _make_feature(entity_id=1, ever_moves=True, action_displacements={}),
+        }
+        registry = self._make_registry_with_tracks([])
+        group = _make_confirmed_group(member_ids={0, 1}, relation="merge")
+        proposals = detect_stale_groups(
+            [group], features, registry, last_action_id=5
+        )
+        assert all(p.reason != "action_displacement_mismatch" for p in proposals)
+
+    def test_majority_did_not_move_no_signal(self) -> None:
+        """If most members have zero displacement, no mismatch signal is produced."""
+        from grouping.stale_detection import detect_stale_groups
+
+        features = {
+            0: _make_feature(entity_id=0, ever_moves=True, action_displacements={5: [(0, 0)]}),
+            1: _make_feature(entity_id=1, ever_moves=True, action_displacements={5: [(0, 0)]}),
+            2: _make_feature(entity_id=2, ever_moves=True, action_displacements={5: [(2, 0)]}),
+        }
+        registry = self._make_registry_with_tracks([])
+        group = _make_confirmed_group(member_ids={0, 1, 2}, relation="merge")
+        proposals = detect_stale_groups(
+            [group], features, registry, last_action_id=5
+        )
+        mismatch_proposals = [p for p in proposals if p.reason == "action_displacement_mismatch"]
+        assert len(mismatch_proposals) == 0
+
+
+class TestShouldAskSplit:
+    """Tests for CombinedEngine._should_ask_split() gate signals."""
+
+    def _make_engine(self) -> "CombinedEngine":
+        from grouping.combined_engine import CombinedEngine
+
+        engine = CombinedEngine.__new__(CombinedEngine)
+        engine._llm_call = None
+        engine._vision = True
+        engine._config = ReadinessConfig()
+        engine._heuristic_engine = None  # type: ignore[assignment]
+        engine._llm_engine = None  # type: ignore[assignment]
+        engine._registry = None
+        engine._catalog = None
+        engine._action_ids = []
+        engine._frame_count = 0
+        engine._last_ready_keys = set()
+        engine._states = {}
+        engine._confirmed = {}
+        engine._rejected = set()
+        engine._prev_grid = None
+        engine._curr_grid = None
+        engine._mismatch_counters = {}
+        engine._prev_compound_member_ids = None
+        return engine
+
+    def test_no_merge_groups_returns_false(self) -> None:
+        engine = self._make_engine()
+        engine._confirmed = {
+            ("nest", frozenset({0, 1})): _make_confirmed_group(
+                member_ids={0, 1}, relation="nest"
+            ),
+        }
+        features = {0: _make_feature(entity_id=0), 1: _make_feature(entity_id=1)}
+        result, reason = engine._should_ask_split(None, features, set())
+        assert result is False
+        assert reason == ""
+
+    def test_signal1_new_member_outside_bbox(self) -> None:
+        engine = self._make_engine()
+        # Previous members: entities 0,1 in bboxes near (5,5)-(10,10)
+        # New member 2 at bbox (50, 50, 55, 55) — well outside
+        prev_ids = frozenset({0, 1})
+        engine._confirmed = {
+            ("merge", frozenset({0, 1, 2})): _make_confirmed_group(
+                member_ids={0, 1, 2}, relation="merge"
+            ),
+        }
+        features = {
+            0: _make_feature(entity_id=0, bboxes=[(5, 5, 10, 10)]),
+            1: _make_feature(entity_id=1, bboxes=[(5, 5, 10, 10)]),
+            2: _make_feature(entity_id=2, bboxes=[(50, 50, 55, 55)]),
+        }
+        result, reason = engine._should_ask_split(prev_ids, features, set())
+        assert result is True
+        assert reason == "new_member_outside_bbox"
+
+    def test_signal2_area_growth_with_new_member(self) -> None:
+        engine = self._make_engine()
+        prev_ids = frozenset({0, 1})
+        engine._confirmed = {
+            ("merge", frozenset({0, 1, 2})): _make_confirmed_group(
+                member_ids={0, 1, 2}, relation="merge"
+            ),
+        }
+        features = {
+            0: _make_feature(entity_id=0, bboxes=[(0, 0, 5, 5)]),
+            1: _make_feature(entity_id=1, bboxes=[(0, 0, 5, 5)]),
+            2: _make_feature(entity_id=2, bboxes=[(50, 50, 55, 55)]),
+        }
+        result, _ = engine._should_ask_split(prev_ids, features, set())
+        assert result is True
+
+    def test_signal3_counter_or_obstacle_member(self) -> None:
+        engine = self._make_engine()
+        engine._confirmed = {
+            ("merge", frozenset({0, 1})): _make_confirmed_group(
+                member_ids={0, 1}, relation="merge",
+                members=(
+                    MemberLabel(entity_id=0, role="player", label="avatar"),
+                    MemberLabel(entity_id=1, role="counter", label="score"),
+                ),
+            ),
+        }
+        features = {0: _make_feature(entity_id=0), 1: _make_feature(entity_id=1)}
+        result, reason = engine._should_ask_split(None, features, set())
+        assert result is True
+        assert reason == "counter_or_obstacle_member"
+
+    def test_signal3_obstacle_in_features(self) -> None:
+        engine = self._make_engine()
+        engine._confirmed = {
+            ("merge", frozenset({0, 1})): _make_confirmed_group(
+                member_ids={0, 1}, relation="merge",
+            ),
+        }
+        features = {
+            0: _make_feature(entity_id=0),
+            1: _make_feature(entity_id=1, role="obstacle"),
+        }
+        result, reason = engine._should_ask_split(None, features, set())
+        assert result is True
+        assert reason == "counter_or_obstacle_feature"
+
+    def test_signal4_action_displacement_mismatch(self) -> None:
+        engine = self._make_engine()
+        engine._confirmed = {
+            ("merge", frozenset({0, 1})): _make_confirmed_group(
+                member_ids={0, 1}, relation="merge"
+            ),
+        }
+        features = {0: _make_feature(entity_id=0), 1: _make_feature(entity_id=1)}
+        result, reason = engine._should_ask_split(None, features, {5})
+        assert result is True
+        assert reason == "action_displacement_mismatch"
+
+    def test_no_signal_when_all_clear(self) -> None:
+        engine = self._make_engine()
+        engine._confirmed = {
+            ("merge", frozenset({0, 1})): _make_confirmed_group(
+                member_ids={0, 1}, relation="merge"
+            ),
+        }
+        features = {
+            0: _make_feature(entity_id=0, bboxes=[(5, 5, 10, 10)]),
+            1: _make_feature(entity_id=1, bboxes=[(5, 5, 10, 10)]),
+        }
+        # No new members, no area growth, no counter/obstacle, no mismatches
+        result, reason = engine._should_ask_split(frozenset({0, 1}), features, set())
+        assert result is False
+        assert reason == ""
+
+
+class TestApplyCompoundSplitVerdicts:
+    """Tests for CombinedEngine._apply_compound_split_verdicts()."""
+
+    def _make_engine_with_groups(
+        self, groups: dict[tuple[str, frozenset[int]], "ConfirmedGroup"]
+    ) -> "CombinedEngine":
+        from grouping.combined_engine import CombinedEngine
+
+        engine = CombinedEngine.__new__(CombinedEngine)
+        engine._llm_call = None
+        engine._vision = True
+        engine._config = ReadinessConfig()
+        engine._heuristic_engine = None  # type: ignore[assignment]
+        engine._llm_engine = None  # type: ignore[assignment]
+        engine._registry = None
+        engine._catalog = None
+        engine._action_ids = []
+        engine._frame_count = 0
+        engine._last_ready_keys = set()
+        engine._states = {}
+        engine._confirmed = dict(groups)
+        engine._rejected = set()
+        engine._prev_grid = None
+        engine._curr_grid = None
+        engine._mismatch_counters = {}
+        engine._prev_compound_member_ids = None
+        return engine
+
+    def test_confirm_verdict_no_change(self) -> None:
+        key = ("merge", frozenset({0, 1, 2}))
+        groups = {
+            key: _make_confirmed_group(member_ids={0, 1, 2}, relation="merge"),
+        }
+        engine = self._make_engine_with_groups(groups)
+        verdicts = [
+            CompoundSplitVerdict(
+                compound_index=0, verdict="confirm",
+                members=[], reason="still valid", split_into=None,
+            )
+        ]
+        engine._apply_compound_split_verdicts(verdicts)
+        # Group unchanged
+        assert key in engine._confirmed
+        assert engine._confirmed[key].member_ids == frozenset({0, 1, 2})
+
+    def test_partial_split_ejects_members(self) -> None:
+        key = ("merge", frozenset({0, 1, 2}))
+        groups = {
+            key: _make_confirmed_group(
+                member_ids={0, 1, 2}, relation="merge",
+                members=(
+                    MemberLabel(entity_id=0, role="player", label="a"),
+                    MemberLabel(entity_id=1, role="dynamic", label="b"),
+                    MemberLabel(entity_id=2, role="dynamic", label="c"),
+                ),
+            ),
+        }
+        engine = self._make_engine_with_groups(groups)
+        # Split: eject entity 2, keep {0, 1} together
+        verdicts = [
+            CompoundSplitVerdict(
+                compound_index=0, verdict="split",
+                members=[], reason="c diverged",
+                split_into=[[0, 1]],
+            )
+        ]
+        engine._apply_compound_split_verdicts(verdicts)
+        # Group still exists but smaller
+        assert key in engine._confirmed
+        assert engine._confirmed[key].member_ids == frozenset({0, 1})
+
+    def test_full_dissolution_removes_group(self) -> None:
+        key = ("merge", frozenset({0, 1}))
+        groups = {
+            key: _make_confirmed_group(
+                member_ids={0, 1}, relation="merge",
+                members=(
+                    MemberLabel(entity_id=0, role="player", label="a"),
+                    MemberLabel(entity_id=1, role="dynamic", label="b"),
+                ),
+            ),
+        }
+        engine = self._make_engine_with_groups(groups)
+        # split_into=[] (empty list) → nobody kept → all ejected → dissolution
+        verdicts = [
+            CompoundSplitVerdict(
+                compound_index=0, verdict="split",
+                members=[], reason="compound dissolved",
+                split_into=[],
+            )
+        ]
+        engine._apply_compound_split_verdicts(verdicts)
+        assert key not in engine._confirmed
+
+    def test_split_with_none_split_into_is_noop(self) -> None:
+        key = ("merge", frozenset({0, 1}))
+        groups = {
+            key: _make_confirmed_group(
+                member_ids={0, 1}, relation="merge",
+                members=(
+                    MemberLabel(entity_id=0, role="player", label="a"),
+                    MemberLabel(entity_id=1, role="dynamic", label="b"),
+                ),
+            ),
+        }
+        engine = self._make_engine_with_groups(groups)
+        # split_into=None means "no split_into specified" → no-op
+        verdicts = [
+            CompoundSplitVerdict(
+                compound_index=0, verdict="split",
+                members=[], reason="compound dissolved",
+                split_into=None,
+            )
+        ]
+        engine._apply_compound_split_verdicts(verdicts)
+        assert key in engine._confirmed
+
+    def test_invalid_compound_index_ignored(self) -> None:
+        key = ("merge", frozenset({0, 1}))
+        groups = {
+            key: _make_confirmed_group(member_ids={0, 1}, relation="merge"),
+        }
+        engine = self._make_engine_with_groups(groups)
+        # Out-of-range compound_index
+        verdicts = [
+            CompoundSplitVerdict(
+                compound_index=99, verdict="split",
+                members=[], reason="bad index",
+                split_into=None,
+            )
+        ]
+        engine._apply_compound_split_verdicts(verdicts)
+        # Group unchanged
+        assert key in engine._confirmed
+
+    def test_negative_compound_index_ignored(self) -> None:
+        key = ("merge", frozenset({0, 1}))
+        groups = {
+            key: _make_confirmed_group(member_ids={0, 1}, relation="merge"),
+        }
+        engine = self._make_engine_with_groups(groups)
+        verdicts = [
+            CompoundSplitVerdict(
+                compound_index=-1, verdict="split",
+                members=[], reason="bad index",
+                split_into=None,
+            )
+        ]
+        engine._apply_compound_split_verdicts(verdicts)
+        assert key in engine._confirmed
+
+    def test_empty_verdicts_list_no_change(self) -> None:
+        key = ("merge", frozenset({0, 1}))
+        groups = {
+            key: _make_confirmed_group(member_ids={0, 1}, relation="merge"),
+        }
+        engine = self._make_engine_with_groups(groups)
+        engine._apply_compound_split_verdicts([])
+        assert key in engine._confirmed
+
+
+class TestBuildCompoundReviewPayload:
+    """Tests for _build_compound_review_payload()."""
+
+    def test_basic_payload_structure(self) -> None:
+        from grouping.engine import _build_compound_review_payload
+
+        group = _make_confirmed_group(
+            member_ids={5, 10}, relation="merge", heuristic="co_movement"
+        )
+        features = {
+            5: _make_feature(entity_id=5, role="player"),
+            10: _make_feature(entity_id=10, role="dynamic"),
+        }
+        result = _build_compound_review_payload([group], features)
+        assert len(result) == 1
+        entry = result[0]
+        assert entry["compound_index"] == 0
+        assert entry["heuristic"] == "co_movement"
+        assert entry["relation"] == "merge"
+        assert entry["member_ids"] == [5, 10]
+        assert len(entry["members"]) == 2
+
+    def test_multiple_groups(self) -> None:
+        from grouping.engine import _build_compound_review_payload
+
+        g1 = _make_confirmed_group(member_ids={1, 2}, relation="merge", heuristic="co_movement")
+        g2 = _make_confirmed_group(member_ids={3, 4}, relation="nest", heuristic="containment")
+        features = {
+            1: _make_feature(entity_id=1),
+            2: _make_feature(entity_id=2),
+            3: _make_feature(entity_id=3),
+            4: _make_feature(entity_id=4),
+        }
+        result = _build_compound_review_payload([g1, g2], features)
+        assert len(result) == 2
+        assert result[0]["compound_index"] == 0
+        assert result[1]["compound_index"] == 1
+        assert result[0]["heuristic"] == "co_movement"
+        assert result[1]["heuristic"] == "containment"
+
+    def test_missing_features_skipped(self) -> None:
+        from grouping.engine import _build_compound_review_payload
+
+        group = _make_confirmed_group(member_ids={1, 2, 3}, relation="merge")
+        # Feature for entity 2 is missing
+        features = {
+            1: _make_feature(entity_id=1),
+            3: _make_feature(entity_id=3),
+        }
+        result = _build_compound_review_payload([group], features)
+        assert len(result) == 1
+        # Only 2 members in payload (entity 2 skipped)
+        assert len(result[0]["members"]) == 2
+
+
+class TestBuildUserMessageWithCompoundReview:
+    """Tests for _build_user_message() with compound_review parameter."""
+
+    def test_without_compound_review(self) -> None:
+        from grouping.engine import _build_user_message
+
+        payloads = [{"proposal_id": 0, "heuristic": "co_movement", "member_ids": [1, 2],
+                      "members": [], "evidence": {}, "neighbour_ids": [],
+                      "neighbours": [], "union_bbox_expanded": [0, 0, 5, 5]}]
+        msg = _build_user_message(payloads, compound_review=None)
+        assert "### Proposal 1" in msg
+        assert "Existing compound review" not in msg
+
+    def test_with_compound_review(self) -> None:
+        from grouping.engine import _build_user_message
+
+        payloads = [{"proposal_id": 0, "heuristic": "co_movement", "member_ids": [1, 2],
+                      "members": [], "evidence": {}, "neighbour_ids": [],
+                      "neighbours": [], "union_bbox_expanded": [0, 0, 5, 5]}]
+        compound_review = [
+            {"compound_index": 0, "heuristic": "merge", "relation": "merge",
+             "member_ids": [1, 2], "members": [{"id": 1, "role": "player", "label": "avatar"}]},
+        ]
+        msg = _build_user_message(payloads, compound_review=compound_review)
+        assert "### Existing compound review" in msg
+        assert "Compound Review 1" in msg
+        assert "proposal_id=1" in msg  # 1 proposal + 0 compound_index
+        assert "compound_index" in msg
+
+    def test_compound_review_with_multiple_entries(self) -> None:
+        from grouping.engine import _build_user_message
+
+        payloads = [{"proposal_id": 0, "heuristic": "co_movement", "member_ids": [1],
+                      "members": [], "evidence": {}, "neighbour_ids": [],
+                      "neighbours": [], "union_bbox_expanded": [0, 0, 5, 5]}]
+        compound_review = [
+            {"compound_index": 0, "heuristic": "merge", "relation": "merge",
+             "member_ids": [1, 2], "members": []},
+            {"compound_index": 1, "heuristic": "nest", "relation": "nest",
+             "member_ids": [3, 4], "members": []},
+        ]
+        msg = _build_user_message(payloads, compound_review=compound_review)
+        assert "Compound Review 1" in msg
+        assert "Compound Review 2" in msg
+        assert "proposal_id=1" in msg  # 1 proposal + compound_index 0
+        assert "proposal_id=2" in msg  # 1 proposal + compound_index 1
+
+
+class TestValidateCompoundEntry:
+    """Tests for _validate_compound_entry() in llm_engine.py."""
+
+    def test_valid_confirm_entry(self) -> None:
+        from grouping.llm_engine import _validate_compound_entry
+
+        entry = {
+            "compound_index": 0,
+            "verdict": "confirm",
+            "members": [{"id": 1, "role": "player", "label": "avatar"}],
+            "reason": "still valid",
+        }
+        result = _validate_compound_entry(entry, n_compounds=2)
+        assert result is not None
+        assert result.compound_index == 0
+        assert result.verdict == "confirm"
+        assert result.split_into is None
+
+    def test_valid_split_entry(self) -> None:
+        from grouping.llm_engine import _validate_compound_entry
+
+        entry = {
+            "compound_index": 1,
+            "verdict": "split",
+            "members": [],
+            "reason": "diverged",
+            "split_into": [[1, 2], [3]],
+        }
+        result = _validate_compound_entry(entry, n_compounds=3)
+        assert result is not None
+        assert result.compound_index == 1
+        assert result.verdict == "split"
+        assert result.split_into == [[1, 2], [3]]
+
+    def test_invalid_verdict_returns_none(self) -> None:
+        from grouping.llm_engine import _validate_compound_entry
+
+        entry = {
+            "compound_index": 0,
+            "verdict": "reject",  # not valid for compound
+            "members": [],
+            "reason": "bad",
+        }
+        result = _validate_compound_entry(entry, n_compounds=1)
+        assert result is None
+
+    def test_out_of_range_compound_index_returns_none(self) -> None:
+        from grouping.llm_engine import _validate_compound_entry
+
+        entry = {
+            "compound_index": 5,
+            "verdict": "confirm",
+            "members": [],
+            "reason": "ok",
+        }
+        result = _validate_compound_entry(entry, n_compounds=3)
+        assert result is None
+
+    def test_negative_compound_index_returns_none(self) -> None:
+        from grouping.llm_engine import _validate_compound_entry
+
+        entry = {
+            "compound_index": -1,
+            "verdict": "confirm",
+            "members": [],
+            "reason": "ok",
+        }
+        result = _validate_compound_entry(entry, n_compounds=2)
+        assert result is None
+
+    def test_fallback_from_proposal_id(self) -> None:
+        """When compound_index is missing/invalid, derive from proposal_id offset."""
+        from grouping.llm_engine import _validate_compound_entry
+
+        # 3 proposals, compound_index 0 → proposal_id should be 3
+        entry = {
+            "proposal_id": 3,  # 3 proposals + 0 compound_index
+            "verdict": "confirm",
+            "members": [],
+            "reason": "ok",
+        }
+        result = _validate_compound_entry(entry, n_compounds=2, n_proposals=3)
+        assert result is not None
+        assert result.compound_index == 0
+
+    def test_fallback_proposal_id_out_of_range(self) -> None:
+        from grouping.llm_engine import _validate_compound_entry
+
+        entry = {
+            "proposal_id": 10,  # 3 proposals + 7 = way out of range
+            "verdict": "confirm",
+            "members": [],
+            "reason": "ok",
+        }
+        result = _validate_compound_entry(entry, n_compounds=2, n_proposals=3)
+        assert result is None
+
+    def test_fallback_no_proposal_id_no_compound_index(self) -> None:
+        from grouping.llm_engine import _validate_compound_entry
+
+        entry = {
+            "verdict": "confirm",
+            "members": [],
+            "reason": "ok",
+        }
+        result = _validate_compound_entry(entry, n_compounds=2)
+        assert result is None
+
+    def test_fallback_proposal_id_without_n_proposals(self) -> None:
+        """When proposal_id present but n_proposals=0, fallback fails."""
+        from grouping.llm_engine import _validate_compound_entry
+
+        entry = {
+            "proposal_id": 0,
+            "verdict": "confirm",
+            "members": [],
+            "reason": "ok",
+        }
+        result = _validate_compound_entry(entry, n_compounds=2, n_proposals=0)
+        assert result is None
+
+    def test_members_with_invalid_role(self) -> None:
+        from grouping.llm_engine import _validate_compound_entry
+
+        entry = {
+            "compound_index": 0,
+            "verdict": "confirm",
+            "members": [{"id": 1, "role": "nonsense", "label": "x"}],
+            "reason": "ok",
+        }
+        result = _validate_compound_entry(entry, n_compounds=1)
+        assert result is not None
+        assert result.members[0]["role"] == "unknown"
+
+    def test_split_into_filters_non_ints(self) -> None:
+        from grouping.llm_engine import _validate_compound_entry
+
+        entry = {
+            "compound_index": 0,
+            "verdict": "split",
+            "members": [],
+            "reason": "ok",
+            "split_into": [[1, "bad", 2], [3]],
+        }
+        result = _validate_compound_entry(entry, n_compounds=1)
+        assert result is not None
+        assert result.split_into == [[1, 2], [3]]
+
+
+class TestLlmEngineAdjudicateCompoundReview:
+    """Tests for LlmGroupingEngine.adjudicate() with compound_review parameter."""
+
+    def _make_llm_engine(
+        self, response: str
+    ) -> tuple["LlmGroupingEngine", list[list[dict[str, str]]]]:
+        llm_call, calls = _make_mock_llm([response])
+        from grouping.llm_engine import LlmGroupingEngine
+
+        engine = LlmGroupingEngine(llm_call=llm_call, vision=False)
+        return engine, calls
+
+    def _zero_grid(self) -> list[list[int]]:
+        return [[0] * 64 for _ in range(64)]
+
+    def test_adjudicate_with_compound_review_sends_review(self) -> None:
+        compound_review = [
+            {"compound_index": 0, "heuristic": "merge", "relation": "merge",
+             "member_ids": [1, 2], "members": [{"id": 1, "role": "player", "label": "av"}]},
+        ]
+        response = json.dumps([
+            {"proposal_id": 0, "verdict": "confirm", "relation": "merge",
+             "members": [{"id": 1, "role": "player", "label": "av"}], "reason": "ok"},
+            {"proposal_id": 1, "verdict": "confirm", "reason": "compound ok"},
+        ])
+        engine, calls = self._make_llm_engine(response)
+
+        group = _make_confirmed_group(member_ids={1, 2}, relation="merge")
+        features = {1: _make_feature(entity_id=1), 2: _make_feature(entity_id=2)}
+        proposal = GroupProposal(
+            group_id=0, member_ids=frozenset({1, 2}),
+            heuristic="co_movement", evidence={},
+        )
+
+        verdicts, compound_verdicts = engine.adjudicate(
+            prev_grid=self._zero_grid(), curr_grid=self._zero_grid(),
+            entities_data=[_entity_compact(features[1])],
+            proposals=[proposal],
+            confirmed_groups=[group],
+            features=features,
+            compound_review=compound_review,
+        )
+        # Check that the user message includes compound review section
+        assert len(calls) == 1
+        user_content = calls[0][1]["content"]
+        assert "Existing compound review" in user_content
+        # Should have returned verdicts and compound verdicts
+        assert len(verdicts) >= 1
+        assert len(compound_verdicts) >= 1
+
+    def test_adjudicate_without_compound_review(self) -> None:
+        response = json.dumps([
+            {"proposal_id": 0, "verdict": "confirm", "relation": "merge",
+             "members": [{"id": 1, "role": "player", "label": "av"}], "reason": "ok"},
+        ])
+        engine, calls = self._make_llm_engine(response)
+
+        proposal = GroupProposal(
+            group_id=0, member_ids=frozenset({1, 2}),
+            heuristic="co_movement", evidence={},
+        )
+        features = {1: _make_feature(entity_id=1), 2: _make_feature(entity_id=2)}
+
+        verdicts, compound_verdicts = engine.adjudicate(
+            prev_grid=self._zero_grid(), curr_grid=self._zero_grid(),
+            entities_data=[{"id": 1}],
+            proposals=[proposal],
+            confirmed_groups=[],
+            features=features,
+            compound_review=None,
+        )
+        assert len(verdicts) >= 1
+        assert compound_verdicts == []
+        # No compound review section in user message
+        user_content = calls[0][1]["content"]
+        assert "Existing compound review" not in user_content
+
+    def test_adjudicate_empty_proposals_and_no_compound_returns_empty(self) -> None:
+        engine, _ = self._make_llm_engine("[]")
+        verdicts, compound_verdicts = engine.adjudicate(
+            prev_grid=self._zero_grid(), curr_grid=self._zero_grid(),
+            entities_data=[], proposals=[], confirmed_groups=[],
+            features={}, compound_review=None,
+        )
+        assert verdicts == []
+        assert compound_verdicts == []
+
+    def test_adjudicate_compound_review_with_split_verdict(self) -> None:
+        compound_review = [
+            {"compound_index": 0, "heuristic": "merge", "relation": "merge",
+             "member_ids": [1, 2, 3], "members": []},
+        ]
+        # 0 proposals → compound entries need explicit compound_index
+        # (fallback from proposal_id requires n_proposals > 0)
+        response = json.dumps([
+            {"compound_index": 0, "proposal_id": 0, "verdict": "split",
+             "reason": "3 diverged",
+             "split_into": [[1, 2]],
+             "members": [{"id": 1, "role": "player", "label": "av"},
+                          {"id": 2, "role": "dynamic", "label": "b"}]},
+        ])
+        engine, _ = self._make_llm_engine(response)
+
+        group = _make_confirmed_group(member_ids={1, 2, 3}, relation="merge")
+        features = {
+            1: _make_feature(entity_id=1),
+            2: _make_feature(entity_id=2),
+            3: _make_feature(entity_id=3),
+        }
+        verdicts, compound_verdicts = engine.adjudicate(
+            prev_grid=self._zero_grid(), curr_grid=self._zero_grid(),
+            entities_data=[],
+            proposals=[],
+            confirmed_groups=[group],
+            features=features,
+            compound_review=compound_review,
+        )
+        assert len(compound_verdicts) >= 1
+        cv = compound_verdicts[0]
+        assert cv.verdict == "split"
+        assert cv.split_into == [[1, 2]]
+
+    def test_mock_mode_returns_no_compound_verdicts(self) -> None:
+        from grouping.llm_engine import LlmGroupingEngine
+
+        engine = LlmGroupingEngine(llm_call=None, vision=False)
+        proposal = GroupProposal(
+            group_id=0, member_ids=frozenset({1, 2}),
+            heuristic="co_movement", evidence={},
+        )
+        verdicts, compound_verdicts = engine.adjudicate(
+            prev_grid=self._zero_grid(), curr_grid=self._zero_grid(),
+            entities_data=[], proposals=[proposal],
+            confirmed_groups=[], features={},
+            compound_review=None,
+        )
+        # Mock mode: all confirmed, no compound verdicts
+        assert len(verdicts) == 1
+        assert verdicts[0].verdict == "confirm"
+        assert compound_verdicts == []
+
+
+class TestMismatchCounters:
+    """Tests for CombinedEngine._mismatch_counters tracking."""
+
+    def _make_empty_registry(self) -> object:
+        from perception.registry import ObjectRegistry
+
+        reg = ObjectRegistry.__new__(ObjectRegistry)
+        reg.tracks = {}
+        return reg
+
+    def _make_empty_catalog(self) -> object:
+        from perception.entities import EntityCatalog
+
+        cat = EntityCatalog.__new__(EntityCatalog)
+        cat.entities = {}
+        cat.track_to_entity = {}
+        return cat
+
+    def test_counter_increments_on_mismatch(self) -> None:
+        from grouping.combined_engine import CombinedEngine
+
+        engine = CombinedEngine(llm_call=None, vision=False)
+        # Simulate 2 frames with mismatches for entity 5
+        engine._mismatch_counters = {5: 1}
+        # After next mismatch, counter goes to 2 → confirmed
+        mismatch_set = {5}
+        for eid in mismatch_set:
+            engine._mismatch_counters[eid] = engine._mismatch_counters.get(eid, 0) + 1
+        for eid in list(engine._mismatch_counters):
+            if eid not in mismatch_set:
+                engine._mismatch_counters[eid] = 0
+        confirmed = {eid for eid, cnt in engine._mismatch_counters.items() if cnt >= 2}
+        assert 5 in confirmed
+
+    def test_counter_resets_on_no_mismatch(self) -> None:
+        from grouping.combined_engine import CombinedEngine
+
+        engine = CombinedEngine(llm_call=None, vision=False)
+        engine._mismatch_counters = {5: 1}
+        # No mismatch for entity 5 this frame → reset to 0
+        mismatch_set: set[int] = set()
+        for eid in list(engine._mismatch_counters):
+            if eid not in mismatch_set:
+                engine._mismatch_counters[eid] = 0
+        assert engine._mismatch_counters[5] == 0
+
+    def test_gate_fires_at_consecutive_two(self) -> None:
+        """_should_ask_split fires when confirmed_mismatches is non-empty."""
+        from grouping.combined_engine import CombinedEngine
+
+        engine = CombinedEngine.__new__(CombinedEngine)
+        engine._llm_call = None
+        engine._vision = True
+        engine._config = ReadinessConfig()
+        engine._heuristic_engine = None  # type: ignore[assignment]
+        engine._llm_engine = None  # type: ignore[assignment]
+        engine._registry = None
+        engine._catalog = None
+        engine._action_ids = []
+        engine._frame_count = 0
+        engine._last_ready_keys = set()
+        engine._states = {}
+        engine._confirmed = {
+            ("merge", frozenset({0, 1})): _make_confirmed_group(
+                member_ids={0, 1}, relation="merge"
+            ),
+        }
+        engine._rejected = set()
+        engine._prev_grid = None
+        engine._curr_grid = None
+        engine._mismatch_counters = {5: 2}
+        engine._prev_compound_member_ids = None
+
+        features = {0: _make_feature(entity_id=0), 1: _make_feature(entity_id=1)}
+        confirmed_mismatches = {5}
+        result, reason = engine._should_ask_split(None, features, confirmed_mismatches)
+        assert result is True
+        assert reason == "action_displacement_mismatch"
+
+
+class TestCombinedEngineCompoundFlow:
+    """Integration-level tests for CombinedEngine compound review flow."""
+
+    def _make_mock_llm_for_compound(
+        self, verdict: str = "confirm", split_into: list[list[int]] | None = None
+    ) -> tuple[Callable, list]:
+        """Return an LLM mock that confirms proposals and optionally splits compounds."""
+        calls: list[list[dict[str, str]]] = []
+        idx = [0]
+
+        def llm_call(messages: list[dict[str, str]]) -> str:
+            calls.append(messages)
+            idx[0] += 1
+            # Default: confirm all proposals
+            entries = []
+            # Check if there are proposals in the message
+            content = ""
+            for msg in messages:
+                c = msg.get("content", "")
+                if isinstance(c, str):
+                    content += c
+                elif isinstance(c, list):
+                    for part in c:
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            content += part.get("text", "")
+
+            proposal_count = content.count("### Proposal ")
+            for j in range(proposal_count):
+                entries.append({
+                    "proposal_id": j,
+                    "verdict": "confirm",
+                    "relation": "merge",
+                    "members": [],
+                    "reason": "ok",
+                })
+            # If compound review section exists, add compound review entry
+            if "compound review" in content.lower():
+                compound_count = content.count("#### Compound Review")
+                for j in range(compound_count):
+                    pid = proposal_count + j
+                    entries.append({
+                        "proposal_id": pid,
+                        "verdict": verdict,
+                        "reason": "compound review",
+                        "members": [],
+                        **({"split_into": split_into} if verdict == "split" and split_into else {}),
+                    })
+            return json.dumps(entries)
+
+        return llm_call, calls
+
+    def _make_empty_registry(self) -> object:
+        from perception.registry import ObjectRegistry
+
+        reg = ObjectRegistry.__new__(ObjectRegistry)
+        reg.tracks = {}
+        return reg
+
+    def _make_empty_catalog(self) -> object:
+        from perception.entities import EntityCatalog
+
+        cat = EntityCatalog.__new__(EntityCatalog)
+        cat.entities = {}
+        cat.track_to_entity = {}
+        return cat
+
+    def test_update_tracks_mismatch_counters(self) -> None:
+        from grouping.combined_engine import CombinedEngine
+
+        llm_call, _ = self._make_mock_llm_for_compound()
+        engine = CombinedEngine(llm_call=llm_call, vision=False)
+
+        # Set up a confirmed merge group with a mismatch
+        key = ("merge", frozenset({0, 1}))
+        engine._confirmed = {
+            key: _make_confirmed_group(
+                member_ids={0, 1}, relation="merge",
+                members=(
+                    MemberLabel(entity_id=0, role="player", label="a"),
+                    MemberLabel(entity_id=1, role="dynamic", label="b"),
+                ),
+            ),
+        }
+        engine._prev_compound_member_ids = frozenset({0, 1})
+
+        # After two frames with mismatches, the counter should be >= 2
+        engine._mismatch_counters = {1: 2}  # Entity 1 has 2 consecutive mismatches
+        assert engine._mismatch_counters[1] >= 2
+
+
+def _entity_compact(f: EntityFeature) -> dict:
+    """Helper mirroring grouping.engine._entity_compact for test use."""
+    r0, c0, r1, c1 = f.bboxes[-1] if f.bboxes else (0, 0, 0, 0)
+    return {
+        "id": f.entity_id,
+        "role": f.role,
+        "composition": f.composition,
+        "n_members": f.n_members,
+        "size_last": f.sizes[-1] if f.sizes else 0,
+        "size_range": list(f.size_range),
+        "bbox_last": [r0, c0, r1, c1],
+        "ever_moves": f.ever_moves,
+        "shape_stable": f.shape_key_stable,
+        "n_observations": f.n_observations,
+    }
+
+
+def _make_confirmed_group(
+    member_ids: set[int],
+    relation: str = "merge",
+    heuristic: str = "co_movement",
+    members: tuple[MemberLabel, ...] | None = None,
+    confidence: int = 1,
+) -> ConfirmedGroup:
+    """Create a ConfirmedGroup for testing."""
+    if members is None:
+        members = tuple(
+            MemberLabel(entity_id=eid, role="unknown", label="")
+            for eid in sorted(member_ids)
+        )
+    return ConfirmedGroup(
+        member_ids=frozenset(member_ids),
+        relation=relation,
+        heuristic=heuristic,
+        members=members,
+        confidence=confidence,
+    )

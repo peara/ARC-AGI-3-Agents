@@ -43,6 +43,17 @@ class ConfirmedGroup:
     confidence: int
 
 
+@dataclass(frozen=True)
+class CompoundSplitVerdict:
+    """LLM adjudication result for a compound review entry."""
+
+    compound_index: int  # index into confirmed_groups
+    verdict: str  # "confirm" or "split"
+    members: list[dict]  # [{"id": int, "role": str, "label": str}, ...]
+    reason: str
+    split_into: list[list[int]] | None  # only when verdict="split"
+
+
 @dataclass
 class _ProposalState:
     verdict: str
@@ -115,6 +126,16 @@ _VALID_ROLES = {
     "player", "obstacle", "goal", "key", "container",
     "cosmetic", "hud", "counter", "dynamic", "unknown",
 }
+
+_COMPOUND_REVIEW_EXTENSION = """\
+
+### Existing compound review
+
+You may also see an "### Existing compound review" section. For each compound
+listed, judge whether all members still belong together. Use "confirm" if the
+compound is still valid, or "split" with "split_into" to indicate which members
+should be ejected. When splitting, list the sub-groups that should remain
+together; ejected members become singletons again."""
 
 
 def _parse_response(raw: str) -> list[dict[str, Any]] | None:
@@ -204,7 +225,32 @@ def _build_proposal_payload(
     }
 
 
-def _build_user_message(payloads: list[dict[str, Any]]) -> str:
+def _build_compound_review_payload(
+    confirmed_groups: list[ConfirmedGroup],
+    features: dict[int, EntityFeature],
+) -> list[dict[str, Any]]:
+    """Build one payload entry per confirmed group for compound review."""
+    entries: list[dict[str, Any]] = []
+    for idx, group in enumerate(confirmed_groups):
+        member_feats = [
+            _entity_compact(features[eid])
+            for eid in sorted(group.member_ids)
+            if eid in features
+        ]
+        entries.append({
+            "compound_index": idx,
+            "heuristic": group.heuristic,
+            "relation": group.relation,
+            "member_ids": sorted(group.member_ids),
+            "members": member_feats,
+        })
+    return entries
+
+
+def _build_user_message(
+    payloads: list[dict[str, Any]],
+    compound_review: list[dict[str, Any]] | None = None,
+) -> str:
     parts: list[str] = [
         f"There are {len(payloads)} proposals to judge. "
         "Each has heuristic name, members (compact features), neighbours "
@@ -225,6 +271,36 @@ def _build_user_message(payloads: list[dict[str, Any]]) -> str:
         parts.append(json.dumps(body, indent=2, default=str))
         parts.append("```")
         parts.append("")
+    if compound_review:
+        n_proposals = len(payloads)
+        parts.append("\n### Existing compound review")
+        parts.append(
+            "The following compounds are already confirmed. "
+            "For each, judge whether all members still belong together."
+        )
+        for cr in compound_review:
+            compound_id = n_proposals + cr["compound_index"]
+            parts.append(
+                f"#### Compound Review {cr['compound_index'] + 1} "
+                f"(proposal_id={compound_id})"
+            )
+            body = {
+                "compound_index": cr["compound_index"],
+                "heuristic": cr["heuristic"],
+                "relation": cr["relation"],
+                "member_ids": cr["member_ids"],
+                "members": cr["members"],
+            }
+            parts.append("```json")
+            parts.append(json.dumps(body, indent=2, default=str))
+            parts.append("```")
+            parts.append("")
+        parts.append(
+            "For compound review entries, use proposal_id matching the "
+            "compound review entry's proposal_id above. "
+            'Verdict "confirm" keeps the compound; '
+            '"split" with "split_into" ejects members.'
+        )
     parts.append(
         "\nReturn a JSON list — one entry per proposal above — "
         "matching the schema described in the system prompt."

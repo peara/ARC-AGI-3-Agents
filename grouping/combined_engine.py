@@ -13,15 +13,17 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from typing import Callable
+from typing import Any, Callable
 
 from perception.entities import EntityCatalog
 from perception.registry import ObjectRegistry
 
 from .engine import (
     _CONFIRM_THRESHOLD,
+    CompoundSplitVerdict,
     ConfirmedGroup,
     MemberLabel,
+    _build_compound_review_payload,
     _entity_compact,
     _ProposalState,
 )
@@ -77,6 +79,9 @@ class CombinedEngine:
         self._prev_grid: Sequence[Sequence[int]] | None = None
         self._curr_grid: Sequence[Sequence[int]] | None = None
 
+        self._mismatch_counters: dict[int, int] = {}
+        self._prev_compound_member_ids: frozenset[int] | None = None
+
     def update(
         self,
         registry: ObjectRegistry,
@@ -115,7 +120,26 @@ class CombinedEngine:
 
         # --- Step 2: Detect stale groups and apply splits ---
         confirmed_list = list(self._confirmed.values())
-        split_proposals = detect_stale_groups(confirmed_list, features, self._registry)
+        last_action_id = self._action_ids[-1] if self._action_ids else None
+        split_proposals = detect_stale_groups(
+            confirmed_list, features, self._registry, last_action_id=last_action_id
+        )
+
+        # Track consecutive mismatches from Signal 1c
+        mismatch_eids: set[int] = set()
+        for sp in split_proposals:
+            if sp.reason == "action_displacement_mismatch":
+                mismatch_eids.add(sp.member_id)
+        for eid in mismatch_eids:
+            self._mismatch_counters[eid] = self._mismatch_counters.get(eid, 0) + 1
+        # Reset counters for entities NOT in current mismatch set
+        for eid in list(self._mismatch_counters):
+            if eid not in mismatch_eids:
+                self._mismatch_counters[eid] = 0
+        confirmed_mismatches: set[int] = {
+            eid for eid, cnt in self._mismatch_counters.items() if cnt >= 2
+        }
+
         self._apply_splits(split_proposals)
 
         # --- Step 3: Diff against last frame → only NEW proposals ---
@@ -129,13 +153,31 @@ class CombinedEngine:
             p for p in proposals if (p.heuristic, frozenset(p.member_ids)) in new_keys
         ]
 
+        # --- Check if compound review is needed ---
+        should_split, split_reason = self._should_ask_split(
+            self._prev_compound_member_ids, features, confirmed_mismatches
+        )
+
         # --- Step 4: Adjudicate new proposals via LLM (or auto-confirm) ---
-        if new_proposals:
-            if self._llm_call is not None:
-                self._adjudicate_new_proposals(new_proposals, features)
-            else:
-                # Heuristic-only mode: auto-confirm every new proposal.
-                self._auto_confirm(new_proposals)
+        if new_proposals and self._llm_call is not None:
+            self._adjudicate(new_proposals, features, should_split, confirmed_mismatches)
+        elif new_proposals and self._llm_call is None:
+            # Heuristic-only mode: auto-confirm every new proposal.
+            self._auto_confirm(new_proposals)
+
+        # --- Step 5: Compound review when gate fires but no new proposals ---
+        if not new_proposals and should_split and self._confirmed and self._llm_call is not None:
+            self._adjudicate_compound_review(features, confirmed_mismatches)
+
+        # --- Track compound member IDs for next frame's comparison ---
+        merge_groups = [g for g in self._confirmed.values() if g.relation == "merge"]
+        if len(merge_groups) == 1:
+            all_ids: set[int] = set()
+            for g in merge_groups:
+                all_ids |= g.member_ids
+            self._prev_compound_member_ids = frozenset(all_ids)
+        else:
+            self._prev_compound_member_ids = None
 
         return list(self._confirmed.values())
 
@@ -188,12 +230,14 @@ class CombinedEngine:
                 )
                 self._confirmed[key] = updated
 
-    def _adjudicate_new_proposals(
+    def _adjudicate(
         self,
         proposals: list[GroupProposal],
         features: dict[int, EntityFeature],
+        should_split: bool = False,
+        confirmed_mismatches: set[int] | None = None,
     ) -> None:
-        """Send new proposals to the LLM engine for adjudication and apply verdicts."""
+        """Send proposals (and optionally compound review) to the LLM and apply verdicts."""
         # Build entities_data for LLM context.
         entities_data = [
             _entity_compact(features[eid])
@@ -210,16 +254,197 @@ class CombinedEngine:
         if curr_grid is None:
             curr_grid = [[0] * 64 for _ in range(64)]
 
-        verdicts = self._llm_engine.adjudicate(
+        # Build compound review payload if gate fires
+        compound_review: list[dict[str, Any]] | None = None
+        if should_split and self._confirmed:
+            confirmed_list = list(self._confirmed.values())
+            compound_review = _build_compound_review_payload(confirmed_list, features)
+
+        verdicts, compound_verdicts = self._llm_engine.adjudicate(
             prev_grid=prev_grid,
             curr_grid=curr_grid,
             entities_data=entities_data,
             proposals=proposals,
             confirmed_groups=list(self._confirmed.values()),
             features=features,
+            compound_review=compound_review,
         )
 
         self._apply_verdicts(verdicts, proposals, features)
+        self._apply_compound_split_verdicts(compound_verdicts)
+
+    def _adjudicate_compound_review(
+        self,
+        features: dict[int, EntityFeature],
+        confirmed_mismatches: set[int],
+    ) -> None:
+        """Send just a compound review (no new proposals) to the LLM."""
+        entities_data = [
+            _entity_compact(features[eid])
+            for eid in sorted(features)
+            if eid in features
+        ]
+
+        prev_grid = self._prev_grid
+        curr_grid = self._curr_grid
+        if prev_grid is None:
+            prev_grid = [[0] * 64 for _ in range(64)]
+        if curr_grid is None:
+            curr_grid = [[0] * 64 for _ in range(64)]
+
+        confirmed_list = list(self._confirmed.values())
+        compound_review = _build_compound_review_payload(confirmed_list, features)
+
+        _, compound_verdicts = self._llm_engine.adjudicate(
+            prev_grid=prev_grid,
+            curr_grid=curr_grid,
+            entities_data=entities_data,
+            proposals=[],
+            confirmed_groups=confirmed_list,
+            features=features,
+            compound_review=compound_review,
+        )
+
+        self._apply_compound_split_verdicts(compound_verdicts)
+
+    def _should_ask_split(
+        self,
+        prev_member_ids: frozenset[int] | None,
+        features: dict[int, EntityFeature],
+        action_displacements_mismatches: set[int],
+    ) -> tuple[bool, str]:
+        """Check gate signals for compound review.
+
+        Returns (True, reason) if any gate fires, (False, "") otherwise.
+        """
+        merge_groups = [g for g in self._confirmed.values() if g.relation == "merge"]
+        if not merge_groups:
+            return False, ""
+
+        for group in merge_groups:
+            member_ids = group.member_ids
+
+            # Signal 1: New members outside previous union bbox
+            if prev_member_ids is not None:
+                new_members = member_ids - prev_member_ids
+                if new_members:
+                    # Get previous group's union bbox
+                    prev_bboxes = [
+                        features[eid].bboxes[-1]
+                        for eid in prev_member_ids
+                        if eid in features and features[eid].bboxes
+                    ]
+                    if prev_bboxes:
+                        pr0 = min(b[0] for b in prev_bboxes)
+                        pc0 = min(b[1] for b in prev_bboxes)
+                        pr1 = max(b[2] for b in prev_bboxes)
+                        pc1 = max(b[3] for b in prev_bboxes)
+                        for eid in new_members:
+                            feat = features.get(eid)
+                            if feat is not None and feat.bboxes:
+                                r0, c0, r1, c1 = feat.bboxes[-1]
+                                if r0 < pr0 or r1 > pr1 or c0 < pc0 or c1 > pc1:
+                                    return True, "new_member_outside_bbox"
+
+            # Signal 2: Area growth > 30%
+            if prev_member_ids is not None:
+                current_bboxes = [
+                    features[eid].bboxes[-1]
+                    for eid in member_ids
+                    if eid in features and features[eid].bboxes
+                ]
+                prev_bboxes = [
+                    features[eid].bboxes[-1]
+                    for eid in prev_member_ids
+                    if eid in features and features[eid].bboxes
+                ]
+                if current_bboxes and prev_bboxes:
+                    cur_area = _bbox_area(current_bboxes)
+                    prev_area = _bbox_area(prev_bboxes)
+                    if prev_area > 0 and cur_area > prev_area * 1.3:
+                        return True, "area_growth_30pct"
+
+            # Signal 3: Counter/obstacle role members
+            for m in group.members:
+                if m.role in ("counter", "obstacle"):
+                    return True, "counter_or_obstacle_member"
+
+            # Also check features for role
+            for eid in member_ids:
+                feat = features.get(eid)
+                if feat is not None and feat.role in ("counter", "obstacle"):
+                    return True, "counter_or_obstacle_feature"
+
+        # Signal 4: Action displacement mismatches (consecutive)
+        if action_displacements_mismatches:
+            return True, "action_displacement_mismatch"
+
+        return False, ""
+
+    def _apply_compound_split_verdicts(
+        self, compound_verdicts: list[CompoundSplitVerdict]
+    ) -> None:
+        """Apply compound split verdicts from the LLM to confirmed groups."""
+        if not compound_verdicts:
+            return
+
+        confirmed_list = list(self._confirmed.values())
+        for cv in compound_verdicts:
+            if cv.compound_index < 0 or cv.compound_index >= len(confirmed_list):
+                continue
+            key = list(self._confirmed.keys())[cv.compound_index]
+            group = self._confirmed.get(key)
+            if group is None:
+                continue
+
+            if cv.verdict == "confirm":
+                log.debug("Compound confirmed: %s", key)
+                continue
+
+            if cv.verdict == "split" and cv.split_into is not None:
+                # Determine which members to eject
+                ejected: set[int] = set()
+                remaining_groups = cv.split_into
+                if remaining_groups:
+                    kept_ids: set[int] = set()
+                    for sub in remaining_groups:
+                        kept_ids.update(sub)
+                    ejected = set(group.member_ids) - kept_ids
+                else:
+                    # No split_into specified; no members to keep means dissolve
+                    ejected = set(group.member_ids)
+
+                if not ejected:
+                    continue
+
+                new_member_ids = group.member_ids - ejected
+                new_members = tuple(
+                    m for m in group.members if m.entity_id not in ejected
+                )
+
+                if len(new_member_ids) < 2:
+                    log.info(
+                        "Dissolving compound after split verdict: key=%s ejected=%s",
+                        key,
+                        sorted(ejected),
+                    )
+                    del self._confirmed[key]
+                    self._states.pop(key, None)
+                else:
+                    updated = ConfirmedGroup(
+                        member_ids=new_member_ids,
+                        relation=group.relation,
+                        heuristic=group.heuristic,
+                        members=new_members,
+                        confidence=group.confidence,
+                    )
+                    self._confirmed[key] = updated
+                    log.info(
+                        "Split compound: key=%s ejected=%s remaining=%s",
+                        key,
+                        sorted(ejected),
+                        sorted(new_member_ids),
+                    )
 
     def _apply_verdicts(
         self,
@@ -314,6 +539,17 @@ class CombinedEngine:
     @property
     def rejected_keys(self) -> set[tuple[str, frozenset[int]]]:
         return set(self._rejected)
+
+
+def _bbox_area(bboxes: list[tuple[int, int, int, int]]) -> int:
+    """Compute the area of the union bounding box from a list of (r0, c0, r1, c1) bboxes."""
+    if not bboxes:
+        return 0
+    r0 = min(b[0] for b in bboxes)
+    c0 = min(b[1] for b in bboxes)
+    r1 = max(b[2] for b in bboxes)
+    c1 = max(b[3] for b in bboxes)
+    return max(0, (r1 - r0) * (c1 - c0))
 
 
 def _parse_member_labels(raw: list[dict[str, object]]) -> tuple[MemberLabel, ...]:

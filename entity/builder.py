@@ -401,6 +401,33 @@ class EntityBuilder:
                         catalog, self._compound_members, reuse_id=True
                     )
 
+                # Check if some members were ejected by a split verdict
+                # from the compound review flow.
+                if (
+                    self._compound_members is not None
+                    and frozenset(all_member_ids) != self._compound_members
+                ):
+                    ejected = self._compound_members - frozenset(all_member_ids)
+                    if ejected:
+                        log.info(
+                            "compound members ejected by split verdict: %s -> %s "
+                            "(ejected=%s)",
+                            sorted(self._compound_members),
+                            sorted(all_member_ids),
+                            sorted(ejected),
+                        )
+                    # If no members remain (all ejected), dissolve the compound.
+                    if not all_member_ids:
+                        log.info(
+                            "compound dissolved (all members ejected): previous=%s",
+                            sorted(self._compound_members),
+                        )
+                        catalog = self._dissolve_compound(catalog)
+                        self._compound_members = None
+                        self._compound_entity_id = None
+                        self._compound_track_to_entity = {}
+                        return catalog
+
                 prev_members = self._compound_members
                 self._compound_members = frozenset(all_member_ids)
 
