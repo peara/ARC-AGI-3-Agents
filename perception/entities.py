@@ -68,13 +68,16 @@ def compute_entity_aggregates(
     for tid in members:
         track = reg.tracks.get(tid)
         if track is None:
-            return None, None, None, None
-        
+            continue
+
         # Inline observation_at logic to avoid circular import from effects.kinematics
         obs = next((o for o in track.observations if o.frame_idx == frame_idx), None)
         if obs is None:
-            return None, None, None, None
+            continue
         member_obs.append(obs)
+
+    if not member_obs:
+        return None, None, None, None
 
     # 1. Cells (Union of all member cells)
     all_cells: set[tuple[int, int]] = set()

@@ -27,11 +27,13 @@ def entity_pos_at(
     for tid in ent.members:
         track = reg.tracks.get(tid)
         if track is None:
-            return None
+            continue
         obs = observation_at(track, frame_idx)
         if obs is None:
-            return None
+            continue
         cents.append(obs.centroid)
+    if not cents:
+        return None
     r = int(round(sum(c[0] for c in cents) / len(cents)))
     c = int(round(sum(c[1] for c in cents) / len(cents)))
     return (r, c)
@@ -65,14 +67,18 @@ def entity_size_at(
     if ent.size is not None:
         return ent.size
     total = 0
+    found = False
     for tid in ent.members:
         track = reg.tracks.get(tid)
         if track is None:
-            return None
+            continue
         obs = observation_at(track, frame_idx)
         if obs is None:
-            return None
+            continue
         total += obs.size
+        found = True
+    if not found:
+        return None
     return total
 
 
@@ -89,11 +95,13 @@ def entity_cells_at(
     for tid in ent.members:
         track = reg.tracks.get(tid)
         if track is None:
-            return None
+            continue
         obs = observation_at(track, frame_idx)
         if obs is None:
-            return None
+            continue
         all_cells.update(obs.cells)
+    if not all_cells:
+        return None
     return frozenset(all_cells)
 
 
