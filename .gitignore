@@ -27,6 +27,7 @@ memory.db
 perception_out/
 motion_out/
 track_out/
+.local/
 
 environment_files/
 
