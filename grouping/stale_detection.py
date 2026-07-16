@@ -116,6 +116,7 @@ def detect_stale_groups(
                             reason="motion_divergence",
                         )
                     )
+                    continue
 
             # --- Signal 1c: action displacement mismatch ---
             # A member has zero displacement for last_action_id while the

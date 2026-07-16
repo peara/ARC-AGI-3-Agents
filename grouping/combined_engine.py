@@ -388,11 +388,17 @@ class CombinedEngine:
         if not compound_verdicts:
             return
 
+        key_order = list(self._confirmed.keys())
         confirmed_list = list(self._confirmed.values())
+        # Collect mutations and apply them after iteration to avoid
+        # re-indexing when a group is dissolved mid-loop.
+        deletions: list[tuple[str, frozenset[int]]] = []
+        updates: list[tuple[str, frozenset[int], ConfirmedGroup]] = []
+
         for cv in compound_verdicts:
             if cv.compound_index < 0 or cv.compound_index >= len(confirmed_list):
                 continue
-            key = list(self._confirmed.keys())[cv.compound_index]
+            key = key_order[cv.compound_index]
             group = self._confirmed.get(key)
             if group is None:
                 continue
@@ -428,8 +434,7 @@ class CombinedEngine:
                         key,
                         sorted(ejected),
                     )
-                    del self._confirmed[key]
-                    self._states.pop(key, None)
+                    deletions.append(key)
                 else:
                     updated = ConfirmedGroup(
                         member_ids=new_member_ids,
@@ -438,13 +443,20 @@ class CombinedEngine:
                         members=new_members,
                         confidence=group.confidence,
                     )
-                    self._confirmed[key] = updated
+                    updates.append((key, ejected, updated))
                     log.info(
                         "Split compound: key=%s ejected=%s remaining=%s",
                         key,
                         sorted(ejected),
                         sorted(new_member_ids),
                     )
+
+        # Apply collected mutations after iteration
+        for key in deletions:
+            self._confirmed.pop(key, None)
+            self._states.pop(key, None)
+        for key, _ejected, updated in updates:
+            self._confirmed[key] = updated
 
     def _apply_verdicts(
         self,
