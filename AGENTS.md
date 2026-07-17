@@ -121,14 +121,16 @@ environment — reading code is insufficient to understand runtime behaviour.
 When something misbehaves, first add structured logs at the decision points,
 then reproduce. Never debug blind.
 
-All logs go to `logs.log` (file) and stdout. Run with `DEBUG=True` to see
+All logs go to a per-recording `<recording>.logs.log` sidecar (file) and
+stdout. The sidecar is created alongside the `.recording.jsonl` and
+`.llm.jsonl` files, sharing the same guid. Run with `DEBUG=True` to see
 DEBUG-level logs (e.g. proposal rejection reasons):
 
 ```bash
 DEBUG=True uv run main.py --agent=llmcuriosityv2 --game=<game_id>
 ```
 
-### Log channels (filter with `grep` on `logs.log`)
+### Log channels (filter with `grep` on `<recording>.logs.log`)
 
 | Logger prefix | What it traces | Key log lines |
 |---|---|---|
@@ -142,26 +144,26 @@ DEBUG=True uv run main.py --agent=llmcuriosityv2 --game=<game_id>
 
 ```bash
 # Did the controllable entity ID change unexpectedly?
-grep "CONTROLLABLE ID CHANGED" logs.log
+grep "CONTROLLABLE ID CHANGED" <recording>.logs.log
 
 # What did the entity builder do per frame?
-grep "entity.builder" logs.log | grep "frame=7 "
+grep "entity.builder" <recording>.logs.log | grep "frame=7 "
 
 # Why were no rules proposed?
-grep "rule_proposer" logs.log
+grep "rule_proposer" <recording>.logs.log
 
 # Which proposals were rejected and why?
 DEBUG=True uv run main.py ... 2>&1 | grep "validate_proposal: reject"
 
 # Which rules got confirmed / promoted?
-grep "confirm_rules" logs.log
+grep "confirm_rules" <recording>.logs.log
 
 # Full engine step diffs
-grep "engine_log" logs.log
+grep "engine_log" <recording>.logs.log
 ```
 
 The LLM `.llm.jsonl` sidecar (see "Debugging with LLM logs" above) records
-prompt/response content; the `logs.log` channels record the *decisions*
+prompt/response content; the `.logs.log` channels record the *decisions*
 made from that content. Use both together.
 
 ## Conventions

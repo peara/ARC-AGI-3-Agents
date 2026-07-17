@@ -269,7 +269,7 @@ confirm the output matches `.local/experiments/iterative_final_hypothesis.json`.
 - `planning/llm_planner.py`: system prompt paragraph about using the hypothesis
 
 **Validation:** run `LLM_VISION=true uv run main.py --agent=llmcuriosityv2 --game=wa30-ee6fef47`,
-check `logs.log` for mechanics notepad updates, check `.llm.jsonl` for the
+check `<recording>.logs.log` for mechanics notepad updates, check `.llm.jsonl` for the
 mechanics call prompts/responses, confirm the planner's targets shift
 toward the objective.
 
