@@ -3,6 +3,7 @@ import logging
 import os
 import time
 from abc import ABC, abstractmethod
+from contextvars import ContextVar
 from typing import Any, Optional
 
 from arc_agi import EnvironmentWrapper
@@ -14,6 +15,26 @@ from .recorder import Recorder
 from .tracing import trace_agent_session
 
 logger = logging.getLogger()
+
+# Per-recording log routing. Swarm runs agents in parallel threads sharing the
+# root logger, so a FileHandler per recording would cross-contaminate. The
+# ContextVar gates each handler to only records emitted within its own thread.
+_active_log_path: ContextVar[str] = ContextVar("_active_log_path", default="")
+
+
+class _RecordingLogFilter(logging.Filter):
+    """Pass a record only if the active contextvar matches this handler's path.
+
+    Empty contextvar (no agent context — module import, main() setup) drops
+    the record: those lines belong to no recording.
+    """
+
+    def __init__(self, path: str) -> None:
+        super().__init__()
+        self.path = path
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return _active_log_path.get() == self.path
 
 
 class Agent(ABC):
@@ -34,6 +55,7 @@ class Agent(ABC):
     recorder: Recorder
     headers: dict[str, str]
     arc_env: EnvironmentWrapper
+    _log_handler: logging.FileHandler | None
 
     # AgentOps tracing attributes
     trace: Any = None
@@ -58,6 +80,7 @@ class Agent(ABC):
         self.tags = tags or []
         self.frames = [FrameData(levels_completed=0)]
         self._cleanup = True
+        self._log_handler = None
         if max_actions is not None:
             self.MAX_ACTIONS = max_actions
         if record:
@@ -72,6 +95,8 @@ class Agent(ABC):
     def main(self) -> None:
         """The main agent loop. Play the game_id until finished, then exits."""
         self.timer = time.time()
+        if self._log_handler is not None:
+            _active_log_path.set(self._log_handler.baseFilename)
         while (
             not self.is_done(self.frames, self.frames[-1])
             and self.action_counter <= self.MAX_ACTIONS
@@ -125,6 +150,24 @@ class Agent(ABC):
         logger.info(
             f"created new recording for {self.name} into {self.recorder.filename}"
         )
+        if not self.is_playback:
+            self._install_log_handler()
+
+    def _install_log_handler(self) -> None:
+        """Attach a FileHandler writing to the recording's ``.logs.log`` sidecar.
+
+        Filtered by ``_RecordingLogFilter`` so parallel Swarm agents don't
+        capture each other's logs.
+        """
+        path = os.path.abspath(self.recorder.log_path())
+        formatter = logging.Formatter(
+            "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+        )
+        handler = logging.FileHandler(path, mode="w")
+        handler.setFormatter(formatter)
+        handler.addFilter(_RecordingLogFilter(path))
+        logging.getLogger().addHandler(handler)
+        self._log_handler = handler
 
     def _action_input_for_record(self, action: GameAction) -> dict[str, Any]:
         """Serialize the action the agent took for recordings.
@@ -215,6 +258,15 @@ class Agent(ABC):
                 logger.info(
                     f"Finishing: agent took {self.action_counter} actions, took {self.seconds} seconds ({self.fps} average fps)"
                 )
+            self._remove_log_handler()
+
+    def _remove_log_handler(self) -> None:
+        """Detach the per-recording FileHandler (mirror of _install_log_handler)."""
+        if self._log_handler is not None:
+            logging.getLogger().removeHandler(self._log_handler)
+            self._log_handler.close()
+            self._log_handler = None
+        _active_log_path.set("")
 
     @abstractmethod
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:

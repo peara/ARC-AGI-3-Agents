@@ -78,13 +78,10 @@ def main() -> None:
     stdout_handler.setLevel(log_level)
     stdout_handler.setFormatter(formatter)
 
-    file_handler = logging.FileHandler("logs.log", mode="w")
-    file_handler.setLevel(log_level)
-    file_handler.setFormatter(formatter)
-
-    logger.addHandler(file_handler)
     logger.addHandler(stdout_handler)
     logging.getLogger("effects.engine").setLevel(log_level)
+    # No global FileHandler: each Agent installs a per-recording ContextVar-gated
+    # handler writing to its .logs.log sidecar (see Agent._install_log_handler).
 
     # logging.getLogger("requests").setLevel(logging.CRITICAL)
     # logging.getLogger("werkzeug").setLevel(logging.CRITICAL)
