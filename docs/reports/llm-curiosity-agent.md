@@ -44,6 +44,8 @@ graph TD
     style EB fill:#e74,stroke:#c33
 ```
 
+> **Note:** `MechanicsNotepad` (§6.5) is not shown in the diagram above to keep the mermaid render stable. In practice it sits alongside the LLM planner and rule proposer: it receives event triggers from the agent's perception layer and feeds a compact `mechanics_hypothesis` into the planner's query bundle.
+
 ### Layer 1 — Perception
 
 `perception/session/` — ingests raw frames, maintains object registry, emits
@@ -266,6 +268,63 @@ sequenceDiagram
 
 ---
 
+## 6.5 Mechanics notepad
+
+### Purpose
+
+The mechanics notepad maintains an LLM-written hypothesis about the game's objective and mechanics. It is updated on event triggers and fed to the planner as advisory context, so the planner can pick targets that advance the inferred goal instead of exploring blindly.
+
+### Architecture
+
+- `planning/mechanics_notepad.py` — `MechanicsHypothesis` dataclass + `MechanicsNotepad` class
+- `planning/mechanics_prompt.py` — `MECHANICS_SYSTEM_PROMPT`, `REFINE_SYSTEM_PROMPT`, `build_messages()`
+
+**Integration:** the agent instantiates `MechanicsNotepad` in `__init__`, checks `should_trigger()` in `_perceive()`, calls `update()` when a trigger fires, and passes `to_bundle_dict()` to `QueryInterface`.
+
+### Trigger conditions
+
+Four event-driven triggers (not per-frame):
+
+1. **Cold start** — frame index >= 5, hypothesis is None, and at least 2 entities are present.
+2. **`levels_completed` change** — the strongest progress signal.
+3. **New confirmed rule** — when the rule engine confirms a rule that was previously unknown.
+4. **Divergence** — when the planner's probe plan fails repeatedly, suggesting the objective hypothesis may be wrong.
+
+### Cooldown
+
+Non-cold-start updates are gated by an 8-frame cooldown (`NOTEPAD_COOLDOWN_FRAMES = 8`). Cold start bypasses this so the first hypothesis can fire as soon as the board is readable.
+
+### Confidence monotonicity
+
+When both the previous and new hypothesis have status `confirmed` or `refined`, the new confidence is set to `max(new, prev)`. This prevents confidence from regressing once the hypothesis has stabilized.
+
+### Empty-scene guard
+
+The cold-start trigger is blocked if fewer than 2 entities are visible (`n_entities < 2`). This avoids hallucinating an objective from an empty or degenerate initial board.
+
+### Ablation
+
+Set the environment variable `NOTEPAD_ENABLED=false` to disable the notepad entirely. Default is `"true"`.
+
+### LLM logging
+
+Each mechanics call is wrapped with `wrap_llm_call(kind="mechanics")` and recorded to the `.llm.jsonl` sidecar alongside planner and rule-proposer calls.
+
+### Key methods
+
+- `MechanicsHypothesis.from_llm_response(raw, frame_index)` — parse the LLM JSON response, apply field caps, and return a validated instance.
+- `MechanicsHypothesis.to_bundle_dict()` — compact dict (`objective`, `next_steps`, `confidence`, `status`) for the planner.
+- `MechanicsNotepad.should_trigger(...)` — evaluate the four triggers and cooldown.
+- `MechanicsNotepad.update(...)` — build prompt, call LLM, parse response, store hypothesis.
+- `MechanicsNotepad.reset()` — clear hypothesis on game reset.
+- `build_messages(...)` — construct the multimodal prompt (grid images + scene summaries + previous hypothesis).
+
+### Planner integration
+
+`QueryInterface` accepts a `mechanics_hypothesis` parameter. When present, the planner system prompt includes an advisory paragraph: "If a mechanics_hypothesis is provided, prefer targets that advance it. The next_steps field is advisory."
+
+---
+
 ## 7. Key design decisions
 
 **No classical learner in LLM-directed phase.** `learn_effect_context` only
@@ -311,6 +370,8 @@ unknown entries, each with full state fingerprints).
 | Rule types | `effects/rules.py` |
 | SceneState | `effects/state.py` |
 | Perception session | `perception/session/` |
+| Mechanics notepad | `planning/mechanics_notepad.py` |
+| Mechanics prompt builder | `planning/mechanics_prompt.py` |
 
 ---
 
@@ -325,17 +386,18 @@ are ~2–5 KB × ~50–150 calls/game and make "what did the LLM see?" a one-lin
 
 Event fields: `timestamp`, `guid`, `seq`, `frame_index`, `kind` (planner |
 rule_proposer), `trigger`, `messages`, `response_raw`, `latency_ms`, `ok`,
-`error`, `truncated`. Messages/responses are truncated at 20 KB per field.
+`error`, `truncated`. Messages/responses are truncated at 40 KB per field
+(`MAX_CONTENT_CHARS = 40_000` in `agents/templates/llm_logging.py`).
 
 Module: `agents/templates/llm_logging.py` — `LlmCallLogger`, `wrap_llm_call`,
 `Recorder.llm_log_path()`.
 
 ---
 
-## 10. Refactor direction — explicit per-frame pipeline
+## 10. Explicit per-frame pipeline
 
-> Status: **direction**. Not yet implemented. Captures the agreed plan for
-> refactoring `choose_action` into an explicit staged pipeline.
+> Status: **implemented**. All 4 PRs in the incremental plan have landed.
+> This section is kept as a historical record of the refactor.
 
 ### Problem
 

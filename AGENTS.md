@@ -10,10 +10,9 @@ sparse feedback). Design docs live in `docs/`.
 
 ## Key constraint
 
-The Kaggle prize track is **offline**: no external LLM APIs at evaluation, only
-bundled weights + classical compute. The perception core must run on
-`numpy` + `pillow` with **no network**. LLMs are dev-only (hypothesis proposal),
-never on the eval path.
+The perception core must run on `numpy` + `pillow` with **no network**.
+LLM inference may use bundled weights on the eval path (small local
+models are under consideration for Kaggle).
 
 ## Layout
 
