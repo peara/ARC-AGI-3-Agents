@@ -32,6 +32,8 @@ from planning.llm_rule_proposer import (
     RuleProposerFn,
     make_rule_proposer,
 )
+from planning.mechanics_notepad import MechanicsNotepad
+from planning.mechanics_prompt import build_action_legend
 from planning.probe import ProbeGoal, execute_probe
 from planning.query import QueryInterface
 from planning.rule_first import RuleFirstPolicy
@@ -78,12 +80,14 @@ class LlmCuriosity(Agent):
         self._llm_client = LLMClient()
         self.llm_call = self._llm_client.chat
         self._vision_enabled: bool = os.environ.get("LLM_VISION", "").lower() in ("true", "1", "yes")
+        self._notepad_enabled: bool = os.environ.get("NOTEPAD_ENABLED", "true").lower() in ("true", "1", "yes")
 
         # Frame counter for LLM call logging (correlates calls to frame events).
         self._frame_index = -1
 
         recorder = getattr(self, "recorder", None)
         self._llm_logger: LlmCallLogger | None
+        self._mechanics_notepad: MechanicsNotepad | None
         if recorder is not None:
             self._llm_logger = LlmCallLogger(
                 guid=recorder.guid,
@@ -96,6 +100,13 @@ class LlmCuriosity(Agent):
             self._proposer_call = wrap_llm_call(
                 self.llm_call, self._llm_logger, kind="rule_proposer"
             )
+            if self._notepad_enabled:
+                self._mechanics_notepad = MechanicsNotepad(
+                    llm_call=wrap_llm_call(self.llm_call, self._llm_logger, kind="mechanics"),
+                    vision_enabled=self._vision_enabled,
+                )
+            else:
+                self._mechanics_notepad = None
             _combined_engine = CombinedEngine(
                 llm_call=wrap_llm_call(self.llm_call, self._llm_logger, kind="grouping"),
                 vision=self._vision_enabled,
@@ -104,12 +115,22 @@ class LlmCuriosity(Agent):
             self._llm_logger = None
             self._planner_call = self.llm_call
             self._proposer_call = self.llm_call
+            if self._notepad_enabled:
+                self._mechanics_notepad = MechanicsNotepad(
+                    llm_call=self.llm_call,
+                    vision_enabled=self._vision_enabled,
+                )
+            else:
+                self._mechanics_notepad = None
             _combined_engine = CombinedEngine(llm_call=self.llm_call, vision=self._vision_enabled)
 
         self._entity_builder = EntityBuilder(combined_engine=_combined_engine)
 
         # Rule proposer (wraps llm_call with cooldown; NULL_RULE_PROPOSER on eval path — no network)
         self._rule_proposer: RuleProposerFn = make_rule_proposer(self.llm_call)
+
+        self._prev_levels_completed: int = 0
+        self._mechanics_notepad_last_rules_count: int = 0
 
         # Phase management
         self._phase: str = "random"  # "random" | "llm_directed"
@@ -176,6 +197,10 @@ class LlmCuriosity(Agent):
         self._tried_fallback_unknowns.clear()
         self._engine_step_pending = None
         self._last_engine_result = None
+        if self._mechanics_notepad is not None:
+            self._mechanics_notepad.reset()
+        self._prev_levels_completed = 0
+        self._mechanics_notepad_last_rules_count = 0
         return GameAction.RESET
 
     def _perceive(self, latest_frame: FrameData) -> FrameContext | None:
@@ -230,6 +255,68 @@ class LlmCuriosity(Agent):
         _residual = self._last_engine_result.residual if self._last_engine_result else ()
         _observed_transition = self._last_engine_result.observed_transition if self._last_engine_result else None
         _unknowns = self._last_engine_result.unknowns if self._last_engine_result else ()
+
+        # ── Mechanics notepad trigger ──────────────────────────────────
+        if self._mechanics_notepad is not None and self._scene is not None:
+            ctx = self.policy.context
+            n_confirmed = 0
+            if ctx is not None:
+                n_confirmed = len(ctx.terminal_rules) + len(ctx.relational_rules)
+            new_confirmed_rules: list[object] = []
+            if n_confirmed > self._mechanics_notepad_last_rules_count:
+                new_confirmed_rules = list(range(n_confirmed - self._mechanics_notepad_last_rules_count))
+            self._mechanics_notepad_last_rules_count = n_confirmed
+
+            levels_completed = (
+                self._scene.step_observations[-1].levels_completed
+                if self._scene.step_observations
+                else 0
+            )
+            n_entities = len(self._scene.catalog.entities)
+            diverged = self.policy.status().diverged if ctx is not None else False
+
+            frame_idx = self._scene.frame_idx
+
+            should_update = self._mechanics_notepad.should_trigger(
+                frame_index=frame_idx,
+                levels_completed=levels_completed,
+                prev_levels_completed=self._prev_levels_completed,
+                new_confirmed_rules=new_confirmed_rules,
+                diverged=diverged,
+                n_entities=n_entities,
+            )
+            if should_update:
+                recent_frames: list[list[list[int]]] = []
+                if self._scene.grid is not None:
+                    recent_frames.append(self._scene.grid)
+                recent_summaries: list[dict[str, object]] = []
+                for step in self._scene.step_observations[-8:]:
+                    summary: dict[str, object] = {
+                        "levels_completed": step.levels_completed,
+                        "controllable_id": self._scene.controllable_id(),
+                        "controllable_pos": (
+                            list(pos) if (pos := self._scene.controllable_pos()) is not None else [0, 0]
+                        ),
+                        "n_entities": n_entities,
+                        "action_taken": step.action_id,
+                    }
+                    recent_summaries.append(summary)
+
+                action_legend: dict[int, str] = {}
+                if ctx is not None:
+                    action_legend = build_action_legend(ctx.available_actions, ctx.movement_rules)
+
+                levels_delta = levels_completed - self._prev_levels_completed
+
+                self._mechanics_notepad.update(
+                    frames=recent_frames,
+                    scene_summaries=recent_summaries,
+                    action_legend=action_legend,
+                    frame_index=frame_idx,
+                    levels_completed_delta=levels_delta,
+                )
+
+            self._prev_levels_completed = levels_completed
 
         if (
             self._phase == "llm_directed"
@@ -340,6 +427,7 @@ class LlmCuriosity(Agent):
                 scene,
                 self.policy.context,
                 available_actions=actions,
+                mechanics_hypothesis=self._mechanics_notepad.to_bundle_dict() if self._mechanics_notepad else None,
             ).bundle()
             if self._llm_logger is not None:
                 self._llm_logger.trigger = "planner_cycle"
