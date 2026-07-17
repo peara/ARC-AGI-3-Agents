@@ -34,6 +34,7 @@ class QueryInterface:
         pruned_rules: tuple[Rule, ...] | list[Rule] | None = None,
         unknowns: tuple[UnknownAction, ...] | None = None,
         observed_transition: tuple[SceneState, int, SceneState] | None = None,
+        mechanics_hypothesis: dict[str, object] | None = None,
     ) -> None:
         self._scene = scene
         self._ctx = ctx
@@ -43,6 +44,7 @@ class QueryInterface:
         self._pruned_rules = pruned_rules
         self._unknowns = unknowns
         self._observed_transition = observed_transition
+        self._mechanics_hypothesis = mechanics_hypothesis
 
     def bundle(
         self,
@@ -79,6 +81,8 @@ class QueryInterface:
         result["pruned_rules"] = self._build_pruned_rules()
         result["refuted_rules"] = self._build_refuted_rules()
         result["observed_transition"] = self._build_observed_transition()
+        if self._mechanics_hypothesis is not None:
+            result["mechanics_hypothesis"] = self._mechanics_hypothesis
         return result
 
     # -- field builders -------------------------------------------------------

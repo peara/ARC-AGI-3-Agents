@@ -113,7 +113,9 @@ in the same region. Pick a completely different area or entity to explore.
 - Always have an opinion. If unsure, pick an unexplored entity to navigate toward.
 - Your `reason` should explain what you're doing AND what you'll do next — it helps you continue your plan across turns.
 - If the failure context includes `unknowns`, pick one unknown action to explore and include `"action"` in your goal.
-
+\n
+If a `mechanics_hypothesis` is provided in the scene bundle, prefer targets that advance it. The `next_steps` field is advisory — if confidence is low, still explore broadly. The hypothesis represents the LLM's best understanding of the game objective and mechanics; use it to guide exploration but do not treat it as a hard constraint.
+\n
 ## Output format
 
 Respond with a single JSON object:
