@@ -6,6 +6,7 @@ from typing import Any, Optional
 
 RECORDING_SUFFIX = ".recording.jsonl"
 LLM_LOG_SUFFIX = ".llm.jsonl"
+LOG_SUFFIX = ".logs.log"
 
 
 def get_recordings_dir() -> str:
@@ -72,6 +73,18 @@ class Recorder:
         if self.filename.endswith(RECORDING_SUFFIX):
             return self.filename[: -len(RECORDING_SUFFIX)] + LLM_LOG_SUFFIX
         return self.filename + LLM_LOG_SUFFIX
+
+    def log_path(self) -> str:
+        """Path to the sibling structured-log file for this recording.
+
+        Mirrors :meth:`llm_log_path` but for the per-recording ``.logs.log``
+        sidecar that captures ``entity.builder`` / ``effects.engine`` / etc.
+        log channels. Replaces the ``.recording.jsonl`` suffix with
+        ``.logs.log``.
+        """
+        if self.filename.endswith(RECORDING_SUFFIX):
+            return self.filename[: -len(RECORDING_SUFFIX)] + LOG_SUFFIX
+        return self.filename + LOG_SUFFIX
 
     @classmethod
     def list(cls) -> list[str]:
