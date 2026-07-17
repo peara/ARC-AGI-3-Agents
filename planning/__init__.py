@@ -1,7 +1,6 @@
 """Search and action policies over ``effects`` forward models."""
 
 from .adapters import DIM_READERS, snapshot_from_registry, snapshot_from_scene
-from .exploration import ExplorationPolicy
 from .fallback import build_fallback_goal, pick_fallback_unknown, tried_key
 from .frame_context import FrameContext
 from .heuristics import (
@@ -39,7 +38,7 @@ from .search import PlanSpec, goal_pos, plan_bfs, snapshot
 __all__ = [
     "DIM_READERS",
     "ExplorationConfig",
-    "ExplorationPolicy",
+
     "FrameContext",
     "RuleFirstPolicy",
     "NULL_RULE_PROPOSER",

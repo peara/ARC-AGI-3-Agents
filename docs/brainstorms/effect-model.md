@@ -201,7 +201,7 @@ using controllable position before the step.
 - g50t curiosity recording: ends with `GAME_OVER` — primary terminal fixture.
 
 **Session change:** extend `StepObservation` (or parallel list) with `game_state`
-and `levels_completed` so live `ExplorationPolicy` can learn terminal rules
+and `levels_completed` so live `RuleFirstPolicy` can learn terminal rules
 offline-style after each ingest.
 
 ### 2b. Counter rules
@@ -274,7 +274,7 @@ Recording loader: extend `load_recording_frames` or add `load_recording_meta(pat
 |-----------|--------|
 | `planning/search.py` | `plan_bfs` calls `predict(state, action, ctx)` instead of `predict_move` |
 | | Do not expand successors where `terminal == "game_over"` |
-| `planning/exploration.py` | Build `EffectContext` via `learn_effect_context` (not only `MovementModel`) |
+| `planning/rule_first.py` | Build `EffectContext` via `learn_effect_context_multi` (not only `MovementModel`) |
 | | Verify loop still compares predicted `pos` (terminal check optional v2) |
 | `planning/recording_eval.py` | Pass `EffectContext` into verify path |
 | `planning/adapters.py` (new) | `DIM_READERS`, `snapshot_from_scene(scene, spec)` |
@@ -356,7 +356,7 @@ Estimated order — each step should keep tests green.
    short-circuit.
 8. **Wire `plan_bfs` → `predict`** ✅ + prune `game_over`.
 9. **`learn_counter_rules`** ✅ + counter apply.
-10. **`ExplorationPolicy`** ✅ builds `EffectContext`; recording_eval updated.
+10. **`RuleFirstPolicy`** ✅ builds `EffectContext`; recording_eval updated.
 11. **Tests + manifest** ✅ + update `perception-agent.md` rung 4 note.
 
 **Defer:** overlap/`exists` (2c) unless a fixture appears.
@@ -504,7 +504,7 @@ or abstain; no latent rule promotion.
 | `effects/engine.py` | `propose_rules`, `confirm_rules`, `prune_rules`, `engine_step` ✅ |
 | `effects/engine_log.py` | `format_rule`, `diff_effect_context`, logging helpers ✅ |
 | `effects/context.py` | `proposed_rules`, `confirm_threshold`, `merge_effect_context` ✅ |
-| `planning/exploration.py` | verify loop + `engine_step`; optional `log_engine` ✅ |
+| `planning/rule_first.py` | verify loop + `engine_step`; optional `log_engine` ✅ |
 | `scripts/run_effect_engine.py` | offline replay + rule-change log ✅ |
 | `planning/recording_eval.py` | optional residual report ⬜ deferred |
 
@@ -545,7 +545,7 @@ ls20: `"expect_non_markovian": false`, `"expect_abstain_non_markovian": false`.
 3. **`effects/engine.py`** ✅ — `confirm_rules`, `prune_rules`, `propose_rules`, `engine_step`.
 4. **`propose_rules`** ✅ — `CounterRule`, `TerminalRule` (`ExistsRule` ⬜ until 2c fixture).
 5. **Counter propose for any entity in spec** ✅ — not only `role=counter` (ls20 `#17`).
-6. **Wire `ExplorationPolicy`** ✅ — verify + engine; `ExplorationConfig.log_engine`.
+6. **Wire `RuleFirstPolicy`** ✅ — verify + engine; `ExplorationConfig.log_engine`.
 7. **`recording_eval` residual report** ⬜ optional, deferred.
 8. **Tests + manifest** ✅ — `test_effects_engine.py`, `expect_abstain_non_markovian`.
 
@@ -598,7 +598,7 @@ Dev-only LLM; Kaggle eval uses compiled rules + classical `predict`, or abstain.
 - `effects/engine.py` — propose / confirm / prune (Markovian templates only)
 - `effects/engine_log.py` — rule diff formatting + logging
 - `effects/context.py` — proposed vs confirmed rule sets, `merge_effect_context`
-- `planning/exploration.py` — engine-in-the-loop verify (+ optional live log)
+- `planning/rule_first.py` — engine-in-the-loop verify (+ optional live log)
 - `scripts/run_effect_engine.py` — offline recording replay with rule-change log
 - `tests/unit/test_effects_engine.py`
 - `tests/reference_recordings.json` — `expect_abstain_non_markovian`

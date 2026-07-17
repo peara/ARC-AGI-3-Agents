@@ -354,7 +354,7 @@ uv run python scripts/plan_recording.py --manifest-case ls20-random-legal-e0-f0-
 ### Rung 6 — curiosity-driven live agent (done, v1)
 
 Code: `perception/session/` (`PerceptionSession`, `SceneSnapshot`),
-`planning/` (`ExplorationConfig`, `ExplorationPolicy`, `Planner` protocol),
+`planning/` (`ExplorationConfig`, `RuleFirstPolicy`, `Planner` protocol),
 `agents/templates/curiosity_agent.py` (`Curiosity` agent),
 `tests/unit/test_exploration.py`.
 
@@ -367,7 +367,7 @@ toward the **unknown**, closing the live loop Rung 5 could only check offline.
 Design:
 
 - **Three layers.** `PerceptionSession` owns registry + catalog and emits
-  `SceneSnapshot` after each ingest. `ExplorationPolicy` (a `Planner`) reads
+  `SceneSnapshot` after each ingest. `RuleFirstPolicy` (a `Planner`) reads
   snapshots only — no perception state. The `Curiosity` agent orchestrates:
   `session.ingest()` → `policy.on_observed()` → `policy.decide()`. An LLM planner
   swaps in at the policy slot without touching the session.
@@ -507,7 +507,7 @@ and never assigns game semantics. Downstream EffectModel and LLM planners consum
 - [x] Rung 6 (v1): curiosity-driven live agent — random cold start → controllable
       detection → BFS toward unknown → per-step verify/replan.
 - [x] Live planner agent: execute plan → re-snapshot → detect divergence → replan
-      (`ExplorationPolicy`; absorbs new blocks into the movement model).
+      (`RuleFirstPolicy`; absorbs new blocks into the movement model).
 - [x] Split perception session from planner (`perception/session/`, `planning/`).
 - [x] Degenerate-frame guard (in registry).
 - [x] Merge multi-colour movers into one entity (compound via common fate).
@@ -520,7 +520,7 @@ and never assigns game semantics. Downstream EffectModel and LLM planners consum
       become meaningful (needed for pickups/doors, not just movement).
 - [x] Additional role detectors + richer `effects.predict` (terminal + counter rules).
 - [x] Curiosity v2: confirm/refute rules by *consequence* (Markovian residuals via
-      `effects/engine.py`; wired in `ExplorationPolicy`, optional `log_engine`).
+      `effects/engine.py`; wired in `RuleFirstPolicy`, optional `log_engine`).
 - [x] Effects slice 3: rule engine (propose / confirm / prune on visible dims;
       abstain + flag on non-Markovian). See `scripts/run_effect_engine.py`.
 - [x] Effects slice 4: LLM planner + rule proposer + query interface + ProbeGoal DSL;

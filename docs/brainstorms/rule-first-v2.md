@@ -160,16 +160,11 @@ least 1 transition per entity per action. This is better for games like wa30
 where track fragmentation kills `detect_controllable` — v2 will learn rules
 from any entity that moves consistently, regardless of track breaks.
 
-## Coexistence with v1
+## Coexistence with v1 (historical)
 
-V1 (`ExplorationPolicy` + `detect_controllable` + sticky controllable) stays
-untouched. V2 (`RuleFirstPolicy` + `learn_effect_context_multi`) is a parallel
-path. The agent chooses at init time via a config flag.
-
-This enables A/B testing:
-- Same game, same perception pipeline, same LLM planner
-- Only the policy class differs
-- Compare: random-phase duration, rule coverage, win rate
+V1 (`ExplorationPolicy` + `detect_controllable` + sticky controllable) has been
+removed. `RuleFirstPolicy` is now the sole policy. The `Curiosity` agent uses
+`RuleFirstPolicy` directly.
 
 ## Total effort
 

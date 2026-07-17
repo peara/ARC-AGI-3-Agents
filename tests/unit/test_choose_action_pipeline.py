@@ -37,10 +37,10 @@ def _make_agent() -> LlmCuriosity:
     with (
         patch("agents.templates.llm_curiosity_agent.LLMClient"),
         patch("agents.templates.llm_curiosity_agent.PerceptionSession"),
-        patch("agents.templates.llm_curiosity_agent.ExplorationPolicy") as MockPolicy,
+        patch("agents.templates.llm_curiosity_agent.RuleFirstPolicy") as MockPolicy,
         patch("agents.templates.llm_curiosity_agent.ExplorationConfig"),
     ):
-        # ExplorationPolicy mock
+        # RuleFirstPolicy mock
         mock_policy = MagicMock()
         mock_policy.action_space = [1, 2, 3, 4]
         mock_policy.context = None

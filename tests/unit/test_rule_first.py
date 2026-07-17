@@ -284,6 +284,101 @@ class TestRuleFirstPolicy:
         assert 0 in rule_entity_ids, f"Entity 0 from collision rule should be included, got {rule_entity_ids}"
         assert 1 in rule_entity_ids, f"Entity 1 from collision rule should be included, got {rule_entity_ids}"
 
+    def test_divergence_detected_on_fingerprint_mismatch(self):
+        """When predicted state fingerprint doesn't match observed, diverged is True and plan is cleared."""
+        policy = RuleFirstPolicy(
+            action_space=[1, 2, 3, 4],
+            config=ExplorationConfig(min_random_steps=0, seed=42),
+        )
+
+        # Two entities with 2 frames so we can learn movement rules
+        reg, catalog = _make_registry_and_catalog(
+            positions={0: [(5, 5), (5, 6)]},
+            controllable_ids={0},
+        )
+        action_ids = (0, 1)
+        scene0 = _scene(reg, catalog, frame_idx=0, n_observed=1, action_ids=action_ids)
+
+        # Inject a context with a movement rule
+        rule = _movement_rule(entity_id=0, action=1, dr=0, dc=1)
+        policy._ctx = EffectContext(
+            movement_rules=(rule,),
+            available_actions=(1,),
+        )
+        policy._engine_ctx = policy._ctx
+
+        # record_step stores prediction: entity 0 at (5,5) + action 1 → predicted (5,6)
+        policy.on_observed(scene0)
+        policy.record_step(scene0, action=1)
+
+        # Now observe scene1 but with DIFFERENT positions (mismatch from prediction)
+        reg_mismatch, catalog_mismatch = _make_registry_and_catalog(
+            positions={0: [(10, 10), (10, 10)]},  # completely different from (5,6)
+            controllable_ids={0},
+        )
+        scene_mismatch = _scene(reg_mismatch, catalog_mismatch, frame_idx=1, n_observed=2, action_ids=action_ids)
+
+        policy.on_observed(scene_mismatch)
+
+        assert policy.status().diverged is True
+        assert policy.plan == []
+
+    def test_no_divergence_when_prediction_matches(self):
+        """When prediction matches observed state, diverged is False."""
+        policy = RuleFirstPolicy(
+            action_space=[1, 2, 3, 4],
+            config=ExplorationConfig(min_random_steps=0, seed=42),
+        )
+
+        reg, catalog = _make_registry_and_catalog(
+            positions={0: [(5, 5), (5, 6)]},
+            controllable_ids={0},
+        )
+        action_ids = (0, 1)
+        scene0 = _scene(reg, catalog, frame_idx=0, n_observed=1, action_ids=action_ids)
+
+        rule = _movement_rule(entity_id=0, action=1, dr=0, dc=1)
+        policy._ctx = EffectContext(
+            movement_rules=(rule,),
+            available_actions=(1,),
+        )
+        policy._engine_ctx = policy._ctx
+
+        # Observe scene0 at frame 0, then record step with action=1
+        # This predicts entity 0 moves from (5,5) to (5,6)
+        policy.on_observed(scene0)
+        policy.record_step(scene0, action=1)
+
+        # Observe the SAME registry/catalog at frame 1 where entity 0 IS at (5,6)
+        # This should match the predicted fingerprint
+        scene_match = _scene(reg, catalog, frame_idx=1, n_observed=2, action_ids=action_ids)
+
+        policy.on_observed(scene_match)
+
+        assert policy.status().diverged is False
+
+    def test_no_divergence_without_prediction(self):
+        """When no prediction was made (ctx=None), diverged is always False."""
+        policy = RuleFirstPolicy(
+            action_space=[1, 2, 3, 4],
+            config=ExplorationConfig(min_random_steps=0, seed=42),
+        )
+
+        reg, catalog = _make_registry_and_catalog(
+            positions={0: [(5, 5)]},
+        )
+        scene = _scene(reg, catalog, n_observed=10)
+
+        # With ctx=None, record_step cannot predict → _expect stays None
+        assert policy._ctx is None
+        policy.on_observed(scene)
+        policy.record_step(scene, action=1)
+
+        # Observe again — no prediction was made, so no divergence
+        policy.on_observed(scene)
+
+        assert policy.status().diverged is False
+
 
 # ---------------------------------------------------------------------------
 # Recording-based integration tests

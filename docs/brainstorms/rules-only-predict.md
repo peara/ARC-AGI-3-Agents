@@ -319,7 +319,7 @@ conflated with errors via `None`.
   ```
   (or a minimal state projection — positions + sizes, not the full SceneState).
 - `bundle()` includes `"unknowns"` in the default `fields` tuple so it's
-  always present. Capped at 5 by the caller (ExplorationPolicy).
+  always present. Capped at 5 by the caller (RuleFirstPolicy).
 
 #### `recording_eval.py` — line 205-211
 - `if ctx is None or not ctx.movement.motion_by_action: return None` →

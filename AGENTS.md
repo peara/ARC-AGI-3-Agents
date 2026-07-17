@@ -35,7 +35,7 @@ models are under consideration for Kaggle).
   - `residual.py` — prediction-vs-observation residual
   - `learn.py` — classical learner (cold-start only, not used in LLM-directed phase)
 - `planning/` — search + LLM planners
-  - `exploration.py` — `ExplorationPolicy`: engine step, BFS, divergence, proposal injection
+  - `rule_first.py` — `RuleFirstPolicy`: engine step, BFS, divergence, proposal injection
   - `search.py` — `plan_bfs` with unknown-state tracking
   - `probe.py` — `ProbeGoal` DSL (target predicates + action field)
   - `llm_planner.py` — LLM planner prompt, parse, validate, call. Supports `LLM_VISION=true` env var to inject grid images (multimodal).

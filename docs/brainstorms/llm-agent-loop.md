@@ -115,7 +115,7 @@ flowchart TB
   end
 
   subgraph classical [eval-safe classical]
-    EP[ExplorationPolicy / Executor]
+    EP[RuleFirstPolicy / Executor]
     BFS[plan_bfs + predict]
     RE[engine_step propose confirm prune]
     LP -->|ProbeGoal predicate| EP
@@ -133,7 +133,7 @@ flowchart TB
 - **`perception/`** — observe only; `summary()` remains the LLM-facing contract.
 - **`effects/`** — `predict`, rule store, engine lifecycle; accepts **compiled**
   rules from LLM proposer after verify (not raw natural language at predict time).
-- **`planning/`** — executes `ProbeGoal`; falls back to `ExplorationPolicy` when LLM fails.
+- **`planning/`** — executes `ProbeGoal`; falls back to `RuleFirstPolicy` when LLM fails.
 - **`agents/templates/`** — new **`LlmCuriosity`** (or extend `Curiosity`) orchestrates
   LLM calls + classical policy slot.
 
@@ -143,7 +143,7 @@ flowchart TB
 
 | Step | Mechanism |
 |------|-----------|
-| Random cold start | `ExplorationPolicy` `explore_random` until controllable + `min_random_steps` |
+| Random cold start | `RuleFirstPolicy` `explore_random` until movement rules learned + `min_random_steps` |
 | Kinematics | `learn_movement_model` / `learn_effect_context` |
 | Basic verify | Pos expectation + `engine_step` on observe (slice 3) |
 | Non-Markovian detect | Determinism beacon → `EffectContext.non_markovian` → abstain |
@@ -240,17 +240,17 @@ executes them step-by-step, and reports back to the LLM when something happens:
 ```text
 LlmCuriosity.choose_action:
   ingest → on_observed (verify + engine_step — always runs)
-  if phase == random: random action (via ExplorationPolicy)
+  if phase == random: random action (via RuleFirstPolicy)
   elif active_probe_plan: pop next action from probe plan
   elif rule_violation: report to LLM → new ProbeGoal
   elif probe_done_or_exhausted: report to LLM → new ProbeGoal
-  else: fall back to classical ExplorationPolicy
+  else: fall back to classical RuleFirstPolicy
   return action
 ```
 
-**Swap `ExplorationPolicy` behind `Planner` protocol** — the agent composes both:
+**Swap `RuleFirstPolicy` behind `Planner` protocol** — the agent composes both:
 
-- **`ExplorationPolicy`** — always present; handles Phase A cold start, classical
+- **`RuleFirstPolicy`** — always present; handles Phase A cold start, classical
   fallback, and engine lifecycle (`on_observed` → verify + `engine_step`).
 - **LLM planner** — called only when classical needs direction: after cold start,
   on rule violation, or when a probe finishes/fails. Produces `ProbeGoal`; never actions.
@@ -282,7 +282,7 @@ Previous design had a `ProbeState` dataclass with `reached_entity_ids`,
    for a problem we haven't observed. If it does repeat, we add structured
    memory then, based on the actual failure mode.
 
-`visited_cells` on `ExplorationPolicy` stays — the BFS frontier needs this for
+`visited_cells` on `RuleFirstPolicy` stays — the BFS frontier needs this for
 spatial avoidance. That's classical, not LLM memory.
 
 ## Failure context — what classical reports to LLM
@@ -341,7 +341,7 @@ If rules insufficient → `predict` abstains (honest non-Markovian).
 ### Step 4 scope — LlmCuriosity agent shell
 
 **What it is:** An `Agent` subclass that composes `PerceptionSession` +
-`ExplorationPolicy` + LLM planner into one `choose_action` loop. It is the
+`RuleFirstPolicy` + LLM planner into one `choose_action` loop. It is the
 **orchestration shell only** — it does not implement new planning or perception
 logic. All the parts it wires together already exist (Steps 1–3).
 
@@ -350,7 +350,7 @@ logic. All the parts it wires together already exist (Steps 1–3).
 | State | Type | Purpose |
 |-------|------|---------|
 | `session` | `PerceptionSession` | Ingest frames → `SceneSnapshot` (same as Curiosity) |
-| `policy` | `ExplorationPolicy` | Classical fallback + engine lifecycle (always runs `on_observed`) |
+| `policy` | `RuleFirstPolicy` | Classical fallback + engine lifecycle (always runs `on_observed`) |
 | `llm_call` | `Callable` | Injected LLM call (dev-only; `LLMClient.chat` or mock) |
 | `_probe_plan` | `list[int] \| None` | Action sequence from `execute_probe`; popped step-by-step |
 | `_failure_context` | `dict \| None` | What classical reports to LLM on rule violation / probe exhaustion |
@@ -363,7 +363,7 @@ logic. All the parts it wires together already exist (Steps 1–3).
 2. Ingest frame → session.ingest() → policy.on_observed()
    (engine verify + engine_step always runs — classical owns this)
 3. If phase == "random":
-     delegate to ExplorationPolicy.decide()
+     delegate to RuleFirstPolicy.decide()
      transition to "llm_directed" once controllable + min_random_steps
 4. If active _probe_plan:
      pop next action; return it
@@ -374,12 +374,12 @@ logic. All the parts it wires together already exist (Steps 1–3).
 7. If ProbeGoal: execute_probe(goal, scene, ctx, actions)
      → action sequence | None
    If sequence: store as _probe_plan, pop first action, return it
-8. Fallback: ExplorationPolicy.decide()
+8. Fallback: RuleFirstPolicy.decide()
 ```
 
 **What `on_observed` (inside choose_action) reports:**
 
-- `ExplorationPolicy.on_observed(scene)` already runs engine verify + `engine_step`.
+- `RuleFirstPolicy.on_observed(scene)` already runs engine verify + `engine_step`.
 - After it returns, the agent checks `policy.status().diverged` and the
   engine log for rule violations → assembles `_failure_context` for the next
   LLM call.
@@ -393,7 +393,7 @@ logic. All the parts it wires together already exist (Steps 1–3).
 - Eval bundle / Kaggle path (slice 5)
 - `ProbeState` / planner scratch (YAGNI)
 
-**Plumbing concern:** `ExplorationPolicy._ctx` (EffectContext) is needed by
+**Plumbing concern:** `RuleFirstPolicy._ctx` (EffectContext) is needed by
 `QueryInterface` and `execute_probe`. The agent accesses it from the policy.
 If `_ctx` staying private feels wrong, add a public `ctx` property — trivial,
 no design impact.
@@ -476,7 +476,7 @@ it diverges from the original plan.
   response into a `ProbeGoal`. Validated against live entity IDs. Network-free
   (takes a callable, not an API client).
 - **LlmCuriosity agent** (`agents/templates/llm_curiosity_agent.py`): composes
-  `PerceptionSession` + `ExplorationPolicy` + LLM planner. Phase gate from
+  `PerceptionSession` + `RuleFirstPolicy` + LLM planner. Phase gate from
   `random` to `llm_directed`. `choose_action` delegates to the planner when
   classical needs direction, falls back to curiosity otherwise.
 - **Cooldown circuit breaker** in `make_rule_proposer`: minimum 5 seconds

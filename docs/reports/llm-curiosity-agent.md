@@ -30,9 +30,9 @@ the proposer and the planner falls back to classical BFS.
 graph TD
     PS[PerceptionSession] --> EB[EntityBuilder<br/>reconciler + build_entities<br/>+ CombinedEngine compound grouping<br/>+ assign_roles]
     EB --> SS[SceneSnapshot]
-    SS --> EP[ExplorationPolicy]
+    SS --> RFP[RuleFirstPolicy]
     SS --> QI[QueryInterface<br/>bundle for LLM]
-    EP --> BFS[plan_bfs<br/>classical BFS]
+    RFP --> BFS[plan_bfs<br/>classical BFS]
     QI --> LP[LLM Planner<br/>ProbeGoal]
     QI --> LRP[LLM Rule Proposer<br/>Rule hypotheses]
     EP --> EE[Effects Engine<br/>predict + confirm]
@@ -51,9 +51,9 @@ graph TD
 `perception/session/` — ingests raw frames, maintains object registry, emits
 `SceneSnapshot` with entities, roles, events, step observations.
 
-### Layer 2 — ExplorationPolicy
+### Layer 2 — RuleFirstPolicy
 
-`planning/exploration.py` — owns the effects context and BFS.
+`planning/rule_first.py` — owns the effects context and BFS.
 
 - **Random cold start:** before controllable entity is detected, pick random
   actions. Classical learner (`learn_effect_context`) bootstraps initial rules.
@@ -357,7 +357,7 @@ unknown entries, each with full state fingerprints).
 |-----------|------|
 | Entity grouping | `grouping/combined_engine.py` (injected into EntityBuilder) |
 | Agent entry point | `agents/templates/llm_curiosity_agent.py` |
-| Exploration policy | `planning/exploration.py` |
+| Exploration policy | `planning/rule_first.py` |
 | BFS search | `planning/search.py` |
 | ProbeGoal DSL | `planning/probe.py` |
 | LLM planner | `planning/llm_planner.py` |
@@ -411,7 +411,7 @@ fields. Specific issues:
    inside `engine_step` (for rule lifecycle). Same inputs, same result, two
    call sites that can drift.
 
-2. **`_run_engine_step` is duplicated ~95%** between `ExplorationPolicy` and
+2. **`_run_engine_step` is duplicated ~95%** between the former `ExplorationPolicy` and
    `RuleFirstPolicy`. The only real difference is `controllable_id` handling
    and `_engine_plan_spec` implementation.
 

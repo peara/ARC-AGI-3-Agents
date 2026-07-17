@@ -274,7 +274,7 @@ confirmation, no stale cleanup.
 **Transition history store: DONE.** `effects/transition_history.py` provides
 `TransitionHistory` (unbounded in-memory `list[Transition]`) and `Transition`
 (frozen dataclass: `frame_idx`, `action`, `state_before`, `state_after`).
-Both `ExplorationPolicy` and `RuleFirstPolicy` accept an optional `history`
+Both the former `ExplorationPolicy` (now removed) and `RuleFirstPolicy` accept an optional `history`
 param and append to it in `_run_engine_step`. `LlmCuriosityAgent` creates
 the history, passes it to the policy, and exposes it as `self.history`.
 

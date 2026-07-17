@@ -179,7 +179,7 @@ procedural exploration if the hypothesis is absent or low-confidence.
 ```mermaid
 graph TD
     FRAME[Frame N] --> PERC[Perception → SceneSnapshot]
-    PERC --> POLICY[ExplorationPolicy engine_step]
+    PERC --> POLICY[RuleFirstPolicy engine_step]
     POLICY --> RULES[Rule confirmed?]
     RULES -->|yes| TRIG[Trigger check]
     PERC --> LVL[levels_completed changed?]

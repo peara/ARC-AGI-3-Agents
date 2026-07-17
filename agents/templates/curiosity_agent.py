@@ -1,7 +1,7 @@
 """Curiosity agent: perception session + exploration policy.
 
 The agent owns orchestration (env handshake, recording). Perception lives in
-``PerceptionSession``; action selection in ``ExplorationPolicy``. A future LLM
+``PerceptionSession``; action selection in ``RuleFirstPolicy``. A future LLM
 planner swaps in at the policy slot without touching the session.
 """
 
@@ -15,10 +15,10 @@ from effects.engine_step_result import run_engine_step
 from perception.session import RESET_ACTION, PerceptionSession, SceneSnapshot
 from planning import (
     ExplorationConfig,
-    ExplorationPolicy,
     PlannerStatus,
 )
 from planning.adapters import snapshot_from_scene
+from planning.rule_first import RuleFirstPolicy
 
 from ..agent import Agent
 
@@ -33,7 +33,7 @@ class Curiosity(Agent):
         seed = int(time.time() * 1_000_000) + hash(self.game_id) % 1_000_000
         random.seed(seed)
         self.session = PerceptionSession()
-        self.policy = ExplorationPolicy(
+        self.policy = RuleFirstPolicy(
             action_space=[a.value for a in GameAction if a is not GameAction.RESET],
             config=ExplorationConfig(seed=seed, log_engine=True),
         )
