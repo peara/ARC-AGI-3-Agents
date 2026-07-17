@@ -1,4 +1,4 @@
-"""LLM-directed curiosity agent: PerceptionSession + ExplorationPolicy + LLM planner.
+"""LLM-directed curiosity agent: PerceptionSession + RuleFirstPolicy + LLM planner.
 
 Classical curiosity handles random exploration and BFS movement. The LLM planner
 injects high-level probe goals (``ProbeGoal``), which ``execute_probe`` compiles
@@ -22,7 +22,6 @@ from entity import EntityBuilder
 from grouping import CombinedEngine
 from perception.session import RESET_ACTION, PerceptionSession, SceneSnapshot
 from planning.adapters import snapshot_from_scene
-from planning.exploration import ExplorationPolicy
 from planning.fallback import build_fallback_goal, pick_fallback_unknown, tried_key
 from planning.frame_context import FrameContext
 from planning.heuristics import ExplorationConfig
@@ -53,28 +52,21 @@ def _format_status(status: Any) -> str:
 
 
 class LlmCuriosity(Agent):
-    """Perception session + classical curiosity + LLM-directed probing."""
+    """Perception session + RuleFirstPolicy + LLM-directed probing."""
 
     MAX_ACTIONS = 60
 
-    def __init__(self, *args: Any, policy_version: str = "v1", **kwargs: Any) -> None:
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         seed = int(time.time() * 1_000_000) + hash(self.game_id) % 1_000_000
         random.seed(seed)
 
-        self._policy_version = policy_version
         self.session = PerceptionSession()
         action_space = [a.value for a in GameAction if a is not GameAction.RESET]
-        if policy_version == "v2":
-            self.policy = RuleFirstPolicy(
-                action_space=action_space,
-                config=ExplorationConfig(seed=seed, log_engine=True),
-            )
-        else:
-            self.policy = ExplorationPolicy(
-                action_space=action_space,
-                config=ExplorationConfig(seed=seed, log_engine=True),
-            )
+        self.policy = RuleFirstPolicy(
+            action_space=action_space,
+            config=ExplorationConfig(seed=seed, log_engine=True),
+        )
 
         # LLM client
         self._llm_client = LLMClient()
@@ -239,7 +231,7 @@ class LlmCuriosity(Agent):
             state_before, spec, action = self._engine_step_pending
             observed = snapshot_from_scene(self._scene, spec)
             if observed is not None:
-                ctrl_id = self._scene.controllable_id() if self._policy_version != "v2" else None
+                ctrl_id = None
                 result = run_engine_step(
                     ctx=self.policy.context,
                     state_before=state_before,
@@ -364,12 +356,8 @@ class LlmCuriosity(Agent):
 
         # ── Phase gate ──────────────────────────────────────────────────
         if self._phase == "random":
-            if self._policy_version == "v2":
-                if self.policy.context is not None:
-                    self._phase = "llm_directed"
-            else:
-                if scene.controllable_id() is not None and self.policy.context is not None:
-                    self._phase = "llm_directed"
+            if self.policy.context is not None:
+                self._phase = "llm_directed"
             if self._phase == "random":
                 return self.policy.decide(scene, available)
 
@@ -591,10 +579,7 @@ class LlmCuriosity(Agent):
         # including probe plan steps and LLM-directed fallbacks.  During the
         # "random" phase, policy.decide() already calls record_step internally.
         if self._phase == "llm_directed":
-            if self._policy_version == "v2":
-                self.policy.record_step(scene, action_id)
-            else:
-                self.policy.record_step(scene, scene.controllable_id(), action_id)
+            self.policy.record_step(scene, action_id)
         status = self.policy.status()
         action.reasoning = {
             "phase": self._phase,
@@ -612,13 +597,6 @@ class LlmCuriosity(Agent):
         ctx = self.policy.context
         if ctx is not None:
             data["effect_context"] = ctx.to_dict()
-        data["policy_version"] = self._policy_version
         return data
 
 
-class LlmCuriosityV2(LlmCuriosity):
-    """Rule-first (v2) variant: uses RuleFirstPolicy instead of ExplorationPolicy."""
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        kwargs.setdefault("policy_version", "v2")
-        super().__init__(*args, **kwargs)
