@@ -12,7 +12,9 @@ from effects import (
     learn_effect_context_multi,
     merge_effect_context,
 )
+from effects.predict import predict
 from effects.rules import Rule
+from effects.state import SceneState
 from perception.session import RESET_ACTION, SceneSnapshot
 
 from .adapters import snapshot_from_scene
@@ -51,6 +53,7 @@ class RuleFirstPolicy:
         self._last_scene: SceneSnapshot | None = None
         self._last_phase = "init"
         self._last_diverged = False
+        self._expect: tuple[object, ...] | None = None
         self.rng = random.Random(self.cfg.seed)
 
     # ------------------------------------------------------------------
@@ -60,6 +63,7 @@ class RuleFirstPolicy:
     def on_observed(self, scene: SceneSnapshot) -> None:
         """Verify last prediction and update exploration bookkeeping."""
         self._last_scene = scene
+        self._verify_expectation(scene)
         state = self._snapshot_state(scene)
         if state is not None:
             self.visited.add(state.fingerprint())
@@ -177,8 +181,34 @@ class RuleFirstPolicy:
         scene: SceneSnapshot,
         action: int,
     ) -> int:
-        """Record action for next observe (no-op — engine step moved to agent)."""
+        """Predict next state and store fingerprint for divergence verification."""
+        self._expect = None
+        if self._ctx is None:
+            return action
+        verify_state = self._snapshot_state(scene)
+        if verify_state is None:
+            return action
+        pred = predict(verify_state, action, self._ctx)
+        if pred.unknown:
+            return action
+        self._expect = pred.state.fingerprint()
         return action
+
+    def _verify_expectation(self, scene: SceneSnapshot) -> None:
+        """Compare predicted state fingerprint against observed state."""
+        self._last_diverged = False
+        if self._expect is None:
+            return
+        observed = self._snapshot_state(scene)
+        if observed is None:
+            self._last_diverged = True
+            self.plan = []
+            self._expect = None
+            return
+        if observed.fingerprint() != self._expect:
+            self._last_diverged = True
+            self.plan = []
+        self._expect = None
 
     # ------------------------------------------------------------------
     # Planning
@@ -223,7 +253,7 @@ class RuleFirstPolicy:
         self._last_phase = phase
         return self.rng.choice(actions)
 
-    def _snapshot_state(self, scene: SceneSnapshot) -> object | None:
+    def _snapshot_state(self, scene: SceneSnapshot) -> SceneState | None:
         """Build SceneState covering all rule-tracked entities."""
         spec = self._engine_plan_spec(scene)
         return snapshot_from_scene(scene, spec)
