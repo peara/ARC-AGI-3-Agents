@@ -71,8 +71,14 @@ class LlmCuriosity(Agent):
         # LLM client
         self._llm_client = LLMClient()
         self.llm_call = self._llm_client.chat
-        self._vision_enabled: bool = os.environ.get("LLM_VISION", "").lower() in ("true", "1", "yes")
-        self._notepad_enabled: bool = os.environ.get("NOTEPAD_ENABLED", "true").lower() in ("true", "1", "yes")
+        self._vision_enabled: bool = os.environ.get("LLM_VISION", "").lower() in (
+            "true",
+            "1",
+            "yes",
+        )
+        self._notepad_enabled: bool = os.environ.get(
+            "NOTEPAD_ENABLED", "true"
+        ).lower() in ("true", "1", "yes")
 
         # Frame counter for LLM call logging (correlates calls to frame events).
         self._frame_index = -1
@@ -94,13 +100,17 @@ class LlmCuriosity(Agent):
             )
             if self._notepad_enabled:
                 self._mechanics_notepad = MechanicsNotepad(
-                    llm_call=wrap_llm_call(self.llm_call, self._llm_logger, kind="mechanics"),
+                    llm_call=wrap_llm_call(
+                        self.llm_call, self._llm_logger, kind="mechanics"
+                    ),
                     vision_enabled=self._vision_enabled,
                 )
             else:
                 self._mechanics_notepad = None
             _combined_engine = CombinedEngine(
-                llm_call=wrap_llm_call(self.llm_call, self._llm_logger, kind="grouping"),
+                llm_call=wrap_llm_call(
+                    self.llm_call, self._llm_logger, kind="grouping"
+                ),
                 vision=self._vision_enabled,
             )
         else:
@@ -114,7 +124,9 @@ class LlmCuriosity(Agent):
                 )
             else:
                 self._mechanics_notepad = None
-            _combined_engine = CombinedEngine(llm_call=self.llm_call, vision=self._vision_enabled)
+            _combined_engine = CombinedEngine(
+                llm_call=self.llm_call, vision=self._vision_enabled
+            )
 
         self._entity_builder = EntityBuilder(combined_engine=_combined_engine)
 
@@ -161,7 +173,7 @@ class LlmCuriosity(Agent):
         fc = self._perceive(latest_frame)
         if fc is None:
             fc = self._current_frame_context()
-        
+
         if fc is None:
             fc = FrameContext(
                 scene=self.session.snapshot(),
@@ -176,7 +188,6 @@ class LlmCuriosity(Agent):
         fc = self._verify(fc)
         action_id = self._decide(latest_frame.available_actions or None)
         return self._prepare_next(action_id, fc)
-
 
     # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -202,7 +213,8 @@ class LlmCuriosity(Agent):
         self.session.ingest(latest_frame.frame, self._last_action_id)
         curr_grid = self.session._last_grid
         logical_registry, catalog = self._entity_builder.update(
-            self.session.registry, self.session.action_ids,
+            self.session.registry,
+            self.session.action_ids,
             effect_context=self.policy.context,
             curr_grid=curr_grid,
         )
@@ -244,9 +256,17 @@ class LlmCuriosity(Agent):
                 self.policy.update_context(result.ctx)
             self._engine_step_pending = None
 
-        _residual = self._last_engine_result.residual if self._last_engine_result else ()
-        _observed_transition = self._last_engine_result.observed_transition if self._last_engine_result else None
-        _unknowns = self._last_engine_result.unknowns if self._last_engine_result else ()
+        _residual = (
+            self._last_engine_result.residual if self._last_engine_result else ()
+        )
+        _observed_transition = (
+            self._last_engine_result.observed_transition
+            if self._last_engine_result
+            else None
+        )
+        _unknowns = (
+            self._last_engine_result.unknowns if self._last_engine_result else ()
+        )
 
         # ── Mechanics notepad trigger ──────────────────────────────────
         if self._mechanics_notepad is not None and self._scene is not None:
@@ -256,7 +276,9 @@ class LlmCuriosity(Agent):
                 n_confirmed = len(ctx.terminal_rules) + len(ctx.relational_rules)
             new_confirmed_rules: list[object] = []
             if n_confirmed > self._mechanics_notepad_last_rules_count:
-                new_confirmed_rules = list(range(n_confirmed - self._mechanics_notepad_last_rules_count))
+                new_confirmed_rules = list(
+                    range(n_confirmed - self._mechanics_notepad_last_rules_count)
+                )
             self._mechanics_notepad_last_rules_count = n_confirmed
 
             levels_completed = (
@@ -287,7 +309,9 @@ class LlmCuriosity(Agent):
                         "levels_completed": step.levels_completed,
                         "controllable_id": self._scene.controllable_id(),
                         "controllable_pos": (
-                            list(pos) if (pos := self._scene.controllable_pos()) is not None else [0, 0]
+                            list(pos)
+                            if (pos := self._scene.controllable_pos()) is not None
+                            else [0, 0]
                         ),
                         "n_entities": n_entities,
                         "action_taken": step.action_id,
@@ -296,7 +320,9 @@ class LlmCuriosity(Agent):
 
                 action_legend: dict[int, str] = {}
                 if ctx is not None:
-                    action_legend = build_action_legend(ctx.available_actions, ctx.movement_rules)
+                    action_legend = build_action_legend(
+                        ctx.available_actions, ctx.movement_rules
+                    )
 
                 levels_delta = levels_completed - self._prev_levels_completed
 
@@ -415,7 +441,9 @@ class LlmCuriosity(Agent):
                 scene,
                 self.policy.context,
                 available_actions=actions,
-                mechanics_hypothesis=self._mechanics_notepad.to_bundle_dict() if self._mechanics_notepad else None,
+                mechanics_hypothesis=self._mechanics_notepad.to_bundle_dict()
+                if self._mechanics_notepad
+                else None,
             ).bundle()
             if self._llm_logger is not None:
                 self._llm_logger.trigger = "planner_cycle"
@@ -514,9 +542,15 @@ class LlmCuriosity(Agent):
             return FrameContext(
                 scene=self._scene,
                 ctx=self.policy.context,
-                residual=self._last_engine_result.residual if self._last_engine_result else (),
-                observed_transition=self._last_engine_result.observed_transition if self._last_engine_result else None,
-                unknowns=self._last_engine_result.unknowns if self._last_engine_result else (),
+                residual=self._last_engine_result.residual
+                if self._last_engine_result
+                else (),
+                observed_transition=self._last_engine_result.observed_transition
+                if self._last_engine_result
+                else None,
+                unknowns=self._last_engine_result.unknowns
+                if self._last_engine_result
+                else (),
                 diverged=self.policy.status().diverged,
                 spec=self.policy._engine_plan_spec(self._scene),
             )
@@ -530,6 +564,21 @@ class LlmCuriosity(Agent):
         residual = fc.residual
         observed_transition = fc.observed_transition
         if not residual and not observed_transition:
+            return
+        # Gate: skip the LLM call when existing proposed rules already cover
+        # every residual (entity_id, dim) pair for the last action.  When all
+        # residual entries are already explained by pending proposed rules,
+        # the LLM will just re-propose the same rules → dedup rejection →
+        # wasted call (the "0/N survived" warning pattern).
+        if (
+            residual
+            and not observed_transition
+            and self._residual_covered_by_proposed(residual, ctx, self._last_action_id)
+        ):
+            log.info(
+                "Skipping rule proposer: all %d residual entries already covered by proposed rules",
+                len(residual),
+            )
             return
         bundle = QueryInterface(
             scene,
@@ -554,6 +603,36 @@ class LlmCuriosity(Agent):
                 self.policy.inject_llm_proposals(tuple(proposals))
         except Exception:
             log.exception("Rule proposer call failed")
+
+    @staticmethod
+    def _residual_covered_by_proposed(residual, ctx, last_action: int) -> bool:
+        """Return True if every (entity_id, dim) in residual has a matching proposed rule.
+
+        A proposed rule covers a residual entry when:
+        - The rule's guard has ``action == last_action``
+        - The rule has an effect with ``effect.of == entity_id`` and ``effect.dim == dim``
+
+        Residual entries with ``entity_id is None`` (terminal/global) are never
+        considered covered — terminal rules are rare and worth proposing.
+        """
+        if not ctx.proposed_rules:
+            return False
+        covered: set[tuple[int, str]] = set()
+        for rule in ctx.proposed_rules:
+            action_val = rule.guard_spec.get("action")
+            if not isinstance(action_val, int) or action_val != last_action:
+                continue
+            for eff in rule.effects:
+                if isinstance(eff.of, int):
+                    covered.add((eff.of, eff.dim))
+        if not covered:
+            return False
+        for r in residual:
+            if r.entity_id is None:
+                return False
+            if (r.entity_id, r.dim) not in covered:
+                return False
+        return True
 
     def _legal_actions(self, available: list[int] | None) -> list[int]:
         """Return legal action IDs, excluding RESET."""
@@ -598,5 +677,3 @@ class LlmCuriosity(Agent):
         if ctx is not None:
             data["effect_context"] = ctx.to_dict()
         return data
-
-

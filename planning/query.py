@@ -62,7 +62,7 @@ class QueryInterface:
         result: dict[str, object] = {}
         for field in fields:
             if field == "scene":
-                result["scene"] = self._scene.summary()
+                result["scene"] = self._filter_scene_summary(self._scene.summary())
             elif field == "action_legend":
                 result["action_legend"] = self._build_action_legend()
             elif field == "engine_rules":
@@ -72,7 +72,9 @@ class QueryInterface:
             elif field == "unknowns":
                 result["unknowns"] = self._build_unknowns()
         # Always include context_note regardless of fields filter
-        result["context_note"] = "observation-only; effects rules are learned, not ground truth"
+        result["context_note"] = (
+            "observation-only; effects rules are learned, not ground truth"
+        )
         if self._available_actions is not None:
             result["available_actions"] = list(self._available_actions)
         # Small fields first — ensures they survive JSON truncation in LLM logs
@@ -86,6 +88,30 @@ class QueryInterface:
         return result
 
     # -- field builders -------------------------------------------------------
+
+    @staticmethod
+    def _filter_scene_summary(summary: dict[str, object]) -> dict[str, object]:
+        """Drop MERGED entities from the scene summary's entities list.
+
+        MERGED entities are fragments absorbed into a compound entity (e.g.
+        border+fill of a rectangle).  They still appear in ``catalog.entities``
+        with ``lifecycle=merged`` so cross-frame identity can inherit their
+        singleton IDs, but they are not independent scene objects.  Showing
+        them to the LLM wastes context and can trigger stale-rule proposals
+        (the LLM sees motion_by_action for an entity that no longer acts
+        independently).
+        """
+        entities = summary.get("entities")
+        if not isinstance(entities, list):
+            return summary
+        filtered = [
+            e
+            for e in entities
+            if isinstance(e, dict) and e.get("lifecycle") != "merged"
+        ]
+        summary = dict(summary)
+        summary["entities"] = filtered
+        return summary
 
     MAX_GAP_ENTITIES = 5
 
@@ -127,7 +153,9 @@ class QueryInterface:
             if "orientation" not in ent.meta:
                 continue
             actions_covered = covered_actions.get(eid, set())
-            actions_unknown = sorted(all_actions - actions_covered) if all_actions else []
+            actions_unknown = (
+                sorted(all_actions - actions_covered) if all_actions else []
+            )
             gaps.append(
                 {
                     "entity_id": eid,
@@ -205,10 +233,7 @@ class QueryInterface:
         if self._unknowns is None:
             return []
         capped = self._unknowns[:5]
-        return [
-            {"action": ua.action, "state": ua.state.fingerprint()}
-            for ua in capped
-        ]
+        return [{"action": ua.action, "state": ua.state.fingerprint()} for ua in capped]
 
     def _build_observed_transition(self) -> dict[str, object]:
         if self._observed_transition is None:
