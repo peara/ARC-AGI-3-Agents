@@ -61,7 +61,11 @@ class LlmCuriosity(Agent):
         seed = int(time.time() * 1_000_000) + hash(self.game_id) % 1_000_000
         random.seed(seed)
 
-        self.session = PerceptionSession()
+        # entity_builder=None: the agent owns its own EntityBuilder with
+        # CombinedEngine (line 119). The session's default EntityBuilder would
+        # run a second, classical-only update each frame — uncoordinated with
+        # the LLM-approved compound layer. See docs/reports/llm-curiosity-agent.md.
+        self.session = PerceptionSession(entity_builder=None)
         action_space = [a.value for a in GameAction if a is not GameAction.RESET]
         self.policy = RuleFirstPolicy(
             action_space=action_space,
