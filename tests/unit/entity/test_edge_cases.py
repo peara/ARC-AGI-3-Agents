@@ -14,6 +14,7 @@ import pytest
 from entity.builder import EntityBuilder
 from perception.entities import Entity, LifecycleState
 from perception.registry import ObjectRegistry, Observation, Track
+from tests.conftest import make_mock_combined_engine
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -81,7 +82,7 @@ class TestEdgeCases:
     def test_empty_registry_produces_empty_catalog_and_clears_state(self) -> None:
         """An empty ObjectRegistry should produce an empty EntityCatalog AND
         leave the builder's _track_to_entity empty (no stale mappings)."""
-        builder = EntityBuilder()
+        builder = EntityBuilder(combined_engine=make_mock_combined_engine())
         reg = ObjectRegistry()
         reg.frame_idx = 0
         _, catalog = builder.update(reg, action_ids=[0])
@@ -97,7 +98,7 @@ class TestEdgeCases:
         """An entity whose tracks are all alive should have LifecycleState.ACTIVE.
         Additionally, the builder should record the entity in _prev_catalog_entities
         so it can track lifecycle transitions across frames."""
-        builder = EntityBuilder()
+        builder = EntityBuilder(combined_engine=make_mock_combined_engine())
 
         reg = _make_registry_with_tracks(
             _make_track(0, 1, [_make_obs(0, color=1, centroid=(5.0, 5.0))])
@@ -118,7 +119,7 @@ class TestEdgeCases:
     def test_entity_transitions_to_dormant_when_track_dies(self) -> None:
         """When a track dies, its entity should transition from ACTIVE to DORMANT
         (not simply disappear from the catalog)."""
-        builder = EntityBuilder()
+        builder = EntityBuilder(combined_engine=make_mock_combined_engine())
 
         # Frame 0: track 0 alive → ACTIVE entity
         reg0 = _make_registry_with_tracks(
@@ -147,7 +148,7 @@ class TestEdgeCases:
         """A chain of track successions (track 0 → track 1 → track 2)
         should all resolve to the SAME entity ID — the one originally assigned
         to track 0, preserved through _track_to_entity."""
-        builder = EntityBuilder()
+        builder = EntityBuilder(combined_engine=make_mock_combined_engine())
 
         # Frame 0: track 0 alive
         reg0 = _make_registry_with_tracks(
@@ -179,7 +180,7 @@ class TestEdgeCases:
         """When a track disappears for one frame, the entity should go DORMANT.
         When a successor track appears (linked by reconciler), the entity should
         reactivate (back to ACTIVE) with the SAME entity ID."""
-        builder = EntityBuilder()
+        builder = EntityBuilder(combined_engine=make_mock_combined_engine())
 
         # Frame 0: track 0 alive → ACTIVE entity with some ID
         reg0 = _make_registry_with_tracks(
@@ -229,7 +230,7 @@ class TestEdgeCases:
     def test_dead_entity_retained_in_catalog(self) -> None:
         """A DEAD entity should remain in the catalog with lifecycle=DEAD,
         not be removed. This is needed so we can assert ID non-reuse."""
-        builder = EntityBuilder(dormant_ttl=1)
+        builder = EntityBuilder(dormant_ttl=1, combined_engine=make_mock_combined_engine())
 
         # Frame 0: track 0 alive
         reg0 = _make_registry_with_tracks(

@@ -6,14 +6,15 @@ and compound ID counter management — without requiring a recording dependency.
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 from entity.builder import EntityBuilder, EntityBuilderConfig
 from entity.logical_registry import LogicalRegistry
+from grouping.engine import ConfirmedGroup, MemberLabel
 from grouping.features import EntityFeature
-from grouping.proposal import GroupProposal
 from perception.entities import Entity, EntityCatalog, LifecycleState
 from perception.registry import ObjectRegistry, Observation, Track
+from tests.conftest import make_mock_combined_engine
 
 
 # ---------------------------------------------------------------------------
@@ -64,22 +65,25 @@ def _make_feature(
     )
 
 
-def _co_movement_proposal(
-    group_id: int,
+def _make_merge_group(
     member_ids: set[int],
-    actions_matched: list[int] | None = None,
-) -> GroupProposal:
-    return GroupProposal(
-        group_id=group_id,
+    heuristic: str = "co_movement",
+) -> ConfirmedGroup:
+    """Create a ConfirmedGroup with relation='merge' for testing."""
+    return ConfirmedGroup(
         member_ids=frozenset(member_ids),
-        heuristic="co_movement",
-        evidence={"actions_matched": actions_matched or [1, 2]},
+        relation="merge",
+        heuristic=heuristic,
+        members=tuple(
+            MemberLabel(entity_id=eid, role="unknown", label="")
+            for eid in sorted(member_ids)
+        ),
+        confidence=1,
     )
 
 
 def _minimal_builder() -> EntityBuilder:
-    config = EntityBuilderConfig(compound_min_actions=2)
-    return EntityBuilder(config=config)
+    return EntityBuilder(combined_engine=make_mock_combined_engine())
 
 
 # ---------------------------------------------------------------------------
@@ -90,33 +94,24 @@ def _minimal_builder() -> EntityBuilder:
 class TestApplyCompoundGrouping:
     """Tests for EntityBuilder._apply_compound_grouping."""
 
-    def test_compound_formed_when_co_movement_confirms(self) -> None:
-        """When co_movement returns a confirmed proposal, entities are merged."""
+    def test_compound_formed_when_confirmed_merge_group(self) -> None:
+        """When CombinedEngine returns a merge group, entities are merged."""
         builder = _minimal_builder()
         catalog = _make_catalog({
             0: _make_entity(0, members={10, 11}),
             1: _make_entity(1, members={20, 21}),
             2: _make_entity(2, members={30}),
         })
-        features = {
-            0: _make_feature(entity_id=0, ever_moves=True),
-            1: _make_feature(entity_id=1, ever_moves=True),
-        }
-        proposals = [
-            _co_movement_proposal(group_id=0, member_ids={0, 1}),
-        ]
 
-        with (
-            patch("entity.builder.extract_features", return_value=features),
-            patch("entity.builder.co_movement", return_value=proposals),
-        ):
-            result = builder._apply_compound_grouping(
-                _make_logical_registry(),
-                catalog,
-                [1, 2],
-            )
+        merge_group = _make_merge_group(member_ids={0, 1})
+        builder._combined_engine.update = MagicMock(return_value=[merge_group])
 
-        # A compound entity should have been created
+        result = builder._apply_compound_grouping(
+            _make_logical_registry(),
+            catalog,
+            [1, 2],
+        )
+
         compound_entities = [
             e for e in result.entities.values()
             if e.composition == "compound"
@@ -126,37 +121,30 @@ class TestApplyCompoundGrouping:
         assert 0 in builder._compound_members
         assert 1 in builder._compound_members
 
-    def test_no_proposals_no_compound(self) -> None:
-        """When co_movement returns nothing, no compound is formed."""
+    def test_no_confirmed_groups_no_compound(self) -> None:
+        """When CombinedEngine returns no groups, no compound is formed."""
         builder = _minimal_builder()
         catalog = _make_catalog({
             0: _make_entity(0, members={10}),
             1: _make_entity(1, members={20}),
         })
-        features = {
-            0: _make_feature(entity_id=0, ever_moves=True),
-            1: _make_feature(entity_id=1, ever_moves=True),
-        }
 
-        with (
-            patch("entity.builder.extract_features", return_value=features),
-            patch("entity.builder.co_movement", return_value=[]),
-        ):
-            result = builder._apply_compound_grouping(
-                _make_logical_registry(),
-                catalog,
-                [1, 2],
-            )
+        builder._combined_engine.update = MagicMock(return_value=[])
 
-        # No compound entity created
+        result = builder._apply_compound_grouping(
+            _make_logical_registry(),
+            catalog,
+            [1, 2],
+        )
+
         compound_entities = [
             e for e in result.entities.values()
             if e.composition == "compound"
         ]
         assert len(compound_entities) == 0
 
-    def test_compound_dissolved_when_proposals_disappear(self) -> None:
-        """When proposals disappear, existing compound is dissolved."""
+    def test_compound_dissolved_when_groups_disappear(self) -> None:
+        """When confirmed groups disappear, existing compound is dissolved."""
         builder = _minimal_builder()
         # Pre-establish a compound
         builder._compound_members = frozenset({0, 1})
@@ -169,21 +157,15 @@ class TestApplyCompoundGrouping:
             1: _make_entity(1, members={20}, lifecycle=LifecycleState.MERGED),
             5: _make_entity(5, members={10, 20}, composition="compound"),
         })
-        features = {
-            0: _make_feature(entity_id=0, ever_moves=True),
-            1: _make_feature(entity_id=1, ever_moves=True),
-        }
 
-        # No proposals returned → compound should dissolve
-        with (
-            patch("entity.builder.extract_features", return_value=features),
-            patch("entity.builder.co_movement", return_value=[]),
-        ):
-            result = builder._apply_compound_grouping(
-                _make_logical_registry(),
-                catalog,
-                [1, 2],
-            )
+        # No confirmed groups → compound should dissolve
+        builder._combined_engine.update = MagicMock(return_value=[])
+
+        result = builder._apply_compound_grouping(
+            _make_logical_registry(),
+            catalog,
+            [1, 2],
+        )
 
         # Compound entity should be DEAD, members restored
         compound_ent = result.entities[5]
@@ -197,62 +179,31 @@ class TestApplyCompoundGrouping:
         assert builder._compound_members is None
         assert builder._compound_entity_id is None
 
-    def test_proposal_with_non_moving_entity_rejected(self) -> None:
-        """A proposal where not all members ever_moves should be rejected."""
+    def test_non_merge_relation_ignored(self) -> None:
+        """A ConfirmedGroup with relation='nest' does NOT trigger compound."""
         builder = _minimal_builder()
         catalog = _make_catalog({
             0: _make_entity(0, members={10}),
             1: _make_entity(1, members={20}),
         })
-        features = {
-            0: _make_feature(entity_id=0, ever_moves=True),
-            1: _make_feature(entity_id=1, ever_moves=False),
-        }
-        proposals = [
-            _co_movement_proposal(group_id=0, member_ids={0, 1}),
-        ]
 
-        with (
-            patch("entity.builder.extract_features", return_value=features),
-            patch("entity.builder.co_movement", return_value=proposals),
-        ):
-            result = builder._apply_compound_grouping(
-                _make_logical_registry(),
-                catalog,
-                [1, 2],
-            )
+        nest_group = ConfirmedGroup(
+            member_ids=frozenset({0, 1}),
+            relation="nest",
+            heuristic="containment",
+            members=(
+                MemberLabel(entity_id=0, role="container", label="a"),
+                MemberLabel(entity_id=1, role="dynamic", label="b"),
+            ),
+            confidence=1,
+        )
+        builder._combined_engine.update = MagicMock(return_value=[nest_group])
 
-        compound_entities = [
-            e for e in result.entities.values()
-            if e.composition == "compound"
-        ]
-        assert len(compound_entities) == 0
-
-    def test_proposal_below_min_actions_rejected(self) -> None:
-        """A proposal with fewer than compound_min_actions matched actions is rejected."""
-        builder = _minimal_builder()
-        catalog = _make_catalog({
-            0: _make_entity(0, members={10}),
-            1: _make_entity(1, members={20}),
-        })
-        features = {
-            0: _make_feature(entity_id=0, ever_moves=True),
-            1: _make_feature(entity_id=1, ever_moves=True),
-        }
-        # Only 1 action matched, below compound_min_actions=2
-        proposals = [
-            _co_movement_proposal(group_id=0, member_ids={0, 1}, actions_matched=[1]),
-        ]
-
-        with (
-            patch("entity.builder.extract_features", return_value=features),
-            patch("entity.builder.co_movement", return_value=proposals),
-        ):
-            result = builder._apply_compound_grouping(
-                _make_logical_registry(),
-                catalog,
-                [1, 2],
-            )
+        result = builder._apply_compound_grouping(
+            _make_logical_registry(),
+            catalog,
+            [1, 2],
+        )
 
         compound_entities = [
             e for e in result.entities.values()
@@ -556,23 +507,15 @@ class TestCompoundReuseId:
             0: _make_entity(0, members={10}),
             1: _make_entity(1, members={20}),
         })
-        features = {
-            0: _make_feature(entity_id=0, ever_moves=True),
-            1: _make_feature(entity_id=1, ever_moves=True),
-        }
-        proposals = [
-            _co_movement_proposal(group_id=0, member_ids={0, 1}),
-        ]
 
-        with (
-            patch("entity.builder.extract_features", return_value=features),
-            patch("entity.builder.co_movement", return_value=proposals),
-        ):
-            result = builder._apply_compound_grouping(
-                _make_logical_registry(),
-                catalog,
-                [1, 2],
-            )
+        merge_group = _make_merge_group(member_ids={0, 1})
+        builder._combined_engine.update = MagicMock(return_value=[merge_group])
+
+        result = builder._apply_compound_grouping(
+            _make_logical_registry(),
+            catalog,
+            [1, 2],
+        )
 
         # Compound ID should be reused
         assert 42 in result.entities
@@ -590,25 +533,15 @@ class TestCompoundReuseId:
             1: _make_entity(1, members={20}),
             2: _make_entity(2, members={30}),
         })
-        features = {
-            0: _make_feature(entity_id=0, ever_moves=True),
-            1: _make_feature(entity_id=1, ever_moves=True),
-            2: _make_feature(entity_id=2, ever_moves=True),
-        }
-        # Now entity 2 is also in the proposal — members changed
-        proposals = [
-            _co_movement_proposal(group_id=0, member_ids={0, 1, 2}),
-        ]
+        # Now entity 2 is also in the group — members changed
+        merge_group = _make_merge_group(member_ids={0, 1, 2})
+        builder._combined_engine.update = MagicMock(return_value=[merge_group])
 
-        with (
-            patch("entity.builder.extract_features", return_value=features),
-            patch("entity.builder.co_movement", return_value=proposals),
-        ):
-            result = builder._apply_compound_grouping(
-                _make_logical_registry(),
-                catalog,
-                [1, 2],
-            )
+        result = builder._apply_compound_grouping(
+            _make_logical_registry(),
+            catalog,
+            [1, 2],
+        )
 
         # A new compound ID should be minted (not 42)
         compound = [e for e in result.entities.values() if e.composition == "compound"]

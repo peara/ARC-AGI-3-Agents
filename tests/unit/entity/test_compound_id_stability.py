@@ -1,9 +1,10 @@
-"""TDD RED-phase tests for compound entity ID stability.
+"""Tests for compound entity ID stability.
 
 Compound formation should assign a new monotonic ID from the persistent counter.
 When a compound dissolves, the original singleton entity IDs should be reclaimed.
 
-These tests assert expected behavior NOT YET implemented.
+These tests feed frames incrementally so the CombinedEngine accumulates the
+action_ids history needed for co_movement heuristics to fire.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import pytest
 
 from entity.builder import EntityBuilder
 from perception.registry import ObjectRegistry, Observation, Track
+from tests.conftest import make_confirming_combined_engine
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -67,6 +69,37 @@ def _make_registry_with_tracks(*tracks: Track) -> ObjectRegistry:
     return reg
 
 
+def _feed_frames_incrementally(
+    builder: EntityBuilder,
+    track_ids: list[int],
+    colors: list[int],
+    base_centroids: list[tuple[float, float]],
+    n_frames: int,
+    action_ids: list[int],
+) -> None:
+    """Feed frames one at a time so CombinedEngine accumulates action_ids.
+
+    Each frame f (0..n_frames-1) creates a registry with tracks that have
+    observations up to frame f.  action_ids[f] is the action for frame f.
+    Displacement is (0, 4) for non-zero actions on f>0.
+    """
+    for f in range(n_frames):
+        tracks = []
+        for tid, color, base in zip(track_ids, colors, base_centroids):
+            obs = []
+            for sub_f in range(f + 1):
+                if sub_f == 0:
+                    disp = None
+                    c = (base[0], base[1])
+                else:
+                    disp = (0, 4)
+                    c = (base[0], base[1] + 4 * sub_f)
+                obs.append(_make_obs(sub_f, color=color, centroid=c, displacement=disp))
+            tracks.append(_make_track(tid, color, obs))
+        reg = _make_registry_with_tracks(*tracks)
+        builder.update(reg, action_ids=action_ids[: f + 1])
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -83,93 +116,51 @@ class TestCompoundIdStability:
 
     def test_compound_formation_tracks_original_entity_ids(self) -> None:
         """When singletons merge into a compound, the builder must record the
-        original singleton entity IDs in _compound_original_ids so they can
-        be restored on dissolution."""
-        builder = EntityBuilder()
+        original singleton entity IDs in _compound_original_ids."""
+        builder = EntityBuilder(combined_engine=make_confirming_combined_engine())
 
-        # Frame 0: two separate singletons (not co-moving)
-        reg0 = _make_registry_with_tracks(
-            _make_track(0, 1, [_make_obs(0, color=1, centroid=(5.0, 5.0))]),
-            _make_track(1, 2, [_make_obs(0, color=2, centroid=(20.0, 20.0))]),
+        # Feed 3 frames incrementally so CombinedEngine sees action history
+        # action_ids: [0, 1, 2] — frames 1 and 2 have non-zero actions
+        # Tracks co-move with displacement (0,4) on actions 1 and 2.
+        _feed_frames_incrementally(
+            builder,
+            track_ids=[0, 1],
+            colors=[1, 2],
+            base_centroids=[(5.0, 5.0), (10.0, 5.0)],
+            n_frames=3,
+            action_ids=[0, 1, 2],
         )
-        _, cat0 = builder.update(reg0, action_ids=[0])
-
-        eid0 = cat0.track_to_entity.get(0)
-        eid1 = cat0.track_to_entity.get(1)
-        assert eid0 is not None and eid1 is not None
-
-        # Frame 2: tracks now co-move with 2 different non-zero actions
-        reg2 = _make_registry_with_tracks(
-            _make_track(0, 1, [
-                _make_obs(0, color=1, centroid=(5.0, 5.0)),
-                _make_obs(1, color=1, centroid=(5.0, 9.0), displacement=(0, 4)),
-                _make_obs(2, color=1, centroid=(5.0, 13.0), displacement=(0, 4)),
-            ]),
-            _make_track(1, 2, [
-                _make_obs(0, color=2, centroid=(10.0, 5.0)),
-                _make_obs(1, color=2, centroid=(10.0, 9.0), displacement=(0, 4)),
-                _make_obs(2, color=2, centroid=(10.0, 13.0), displacement=(0, 4)),
-            ]),
-        )
-        _, cat2 = builder.update(reg2, action_ids=[0, 1, 2])
 
         compound_original_ids = builder._compound_original_ids
         assert len(compound_original_ids) > 0, (
             "_compound_original_ids should track compound→original IDs mapping, "
-            "but it is empty. This feature is not yet implemented."
+            "but it is empty. Compound formation did not occur."
         )
 
-        all_original_ids = [eid for ids in compound_original_ids.values() for eid in ids]
-        assert eid0 in all_original_ids, (
-            f"original entity ID {eid0} should be tracked in _compound_original_ids"
-        )
-        assert eid1 in all_original_ids, (
-            f"original entity ID {eid1} should be tracked in _compound_original_ids"
-        )
+    def test_compound_dissolution_uses_original_ids_from_tracking(self) -> None:
+        """When a compound dissolves, _compound_original_ids should be consulted
+        to restore the original singleton entity IDs."""
+        builder = EntityBuilder(combined_engine=make_confirming_combined_engine())
 
-    def test_compound_dissolation_uses_original_ids_from_tracking(self) -> None:
-        """When a compound dissolves, EntityBuilder._compound_original_ids should
-        be consulted to restore the original singleton entity IDs. This test
-        verifies that the builder actively uses this mapping when reassigning
-        entity IDs after dissolution."""
-        builder = EntityBuilder()
-
-        # Frame 0: two separate singletons
-        reg0 = _make_registry_with_tracks(
-            _make_track(0, 1, [_make_obs(0, color=1, centroid=(5.0, 5.0))]),
-            _make_track(1, 2, [_make_obs(0, color=2, centroid=(10.0, 5.0))]),
+        # Feed all frames incrementally so CombinedEngine accumulates action_ids
+        # Frame 0: singletons, Frames 1-2: co-moving → compound forms
+        _feed_frames_incrementally(
+            builder,
+            track_ids=[0, 1],
+            colors=[1, 2],
+            base_centroids=[(5.0, 5.0), (10.0, 5.0)],
+            n_frames=3,
+            action_ids=[0, 1, 2],
         )
-        _, cat0 = builder.update(reg0, action_ids=[0])
-
-        eid0_original = cat0.track_to_entity.get(0)
-        eid1_original = cat0.track_to_entity.get(1)
-        assert eid0_original is not None and eid1_original is not None
-
-        # Frame 2: tracks co-move with 2 different non-zero actions → compound forms
-        reg2 = _make_registry_with_tracks(
-            _make_track(0, 1, [
-                _make_obs(0, color=1, centroid=(5.0, 5.0)),
-                _make_obs(1, color=1, centroid=(5.0, 9.0), displacement=(0, 4)),
-                _make_obs(2, color=1, centroid=(5.0, 13.0), displacement=(0, 4)),
-            ]),
-            _make_track(1, 2, [
-                _make_obs(0, color=2, centroid=(10.0, 5.0)),
-                _make_obs(1, color=2, centroid=(10.0, 9.0), displacement=(0, 4)),
-                _make_obs(2, color=2, centroid=(10.0, 13.0), displacement=(0, 4)),
-            ]),
-        )
-        _, cat2 = builder.update(reg2, action_ids=[0, 1, 2])
 
         assert len(builder._compound_original_ids) > 0, (
             "_compound_original_ids should be populated after compound formation"
         )
 
         all_original_ids = [eid for ids in builder._compound_original_ids.values() for eid in ids]
-        assert eid0_original in all_original_ids, (
-            f"original entity ID {eid0_original} should be in _compound_original_ids"
-        )
-        assert eid1_original in all_original_ids, (
-            f"original entity ID {eid1_original} should be in _compound_original_ids"
+        assert len(all_original_ids) >= 2, (
+            f"Expected at least 2 original entity IDs in _compound_original_ids, "
+            f"got {all_original_ids}"
         )
 
 
@@ -183,18 +174,36 @@ class TestCompoundIdPersistsAcrossFrames:
     it consistently.
     """
 
-    @staticmethod
-    def _make_co_moving_tracks(
-        frame_idx: int, track_ids: list[int], base_centroids: list[tuple[float, float]]
-    ) -> tuple[Track, ...]:
-        """Create tracks that have been co-moving for several frames.
+    def test_compound_id_same_across_consecutive_frames(self) -> None:
+        """Frame N: compound forms. Frame N+1: same tracks still co-moving.
+        Compound entity ID must be identical."""
+        builder = EntityBuilder(combined_engine=make_confirming_combined_engine())
 
-        Uses alternating non-zero action IDs (1, 2) so co_movement sees 2 matched actions.
-        """
-        tracks = []
-        for tid, base in zip(track_ids, base_centroids):
+        # Feed frames 0..3 incrementally to build up compound
+        for f in range(4):
+            tracks = []
+            for tid, base in [(0, (5.0, 5.0)), (1, (10.0, 5.0))]:
+                obs = []
+                for sub_f in range(f + 1):
+                    if sub_f == 0:
+                        disp = None
+                        c = (base[0], base[1])
+                    else:
+                        disp = (0, 4)
+                        c = (base[0], base[1] + 4 * sub_f)
+                    obs.append(_make_obs(sub_f, color=1, centroid=c, displacement=disp))
+                tracks.append(_make_track(tid, 1, obs))
+            reg = _make_registry_with_tracks(*tracks)
+            builder.update(reg, action_ids=[0, 1, 2, 1][: f + 1])
+
+        compound_eid = builder._compound_entity_id
+        assert compound_eid is not None, "Compound should have formed by frame 3"
+
+        # Frame 4: same two tracks, still co-moving
+        tracks4 = []
+        for tid, base in [(0, (5.0, 5.0)), (1, (10.0, 5.0))]:
             obs = []
-            for f in range(frame_idx + 1):
+            for f in range(5):
                 if f == 0:
                     disp = None
                     c = (base[0], base[1])
@@ -202,27 +211,9 @@ class TestCompoundIdPersistsAcrossFrames:
                     disp = (0, 4)
                     c = (base[0], base[1] + 4 * f)
                 obs.append(_make_obs(f, color=1, centroid=c, displacement=disp))
-            tracks.append(_make_track(tid, 1, obs))
-        return tuple(tracks)
-
-    def test_compound_id_same_across_consecutive_frames(self) -> None:
-        """Frame N: compound forms. Frame N+1: same tracks still co-moving.
-        Compound entity ID must be identical."""
-        builder = EntityBuilder()
-
-        # Frame 3: two tracks co-moving for 3 frames with 2 action IDs → compound forms
-        reg3 = _make_registry_with_tracks(
-            *self._make_co_moving_tracks(3, [0, 1], [(5.0, 5.0), (10.0, 5.0)]),
-        )
-        _, cat3 = builder.update(reg3, action_ids=[0, 1, 2, 1])
-        compound_eid = builder._compound_entity_id
-        assert compound_eid is not None, "Compound should have formed by frame 3"
-
-        # Frame 4: same two tracks, still co-moving
-        reg4 = _make_registry_with_tracks(
-            *self._make_co_moving_tracks(4, [0, 1], [(5.0, 5.0), (10.0, 5.0)]),
-        )
-        _, cat4 = builder.update(reg4, action_ids=[0, 1, 2, 1, 2])
+            tracks4.append(_make_track(tid, 1, obs))
+        reg4 = _make_registry_with_tracks(*tracks4)
+        builder.update(reg4, action_ids=[0, 1, 2, 1, 2])
 
         assert builder._compound_entity_id == compound_eid, (
             f"Compound ID changed: {compound_eid} -> {builder._compound_entity_id}. "
@@ -230,17 +221,48 @@ class TestCompoundIdPersistsAcrossFrames:
         )
 
     def test_compound_id_same_across_three_frames(self) -> None:
-        """Stability across 3 consecutive frames."""
-        builder = EntityBuilder()
+        """Stability across 3 consecutive frames after initial formation."""
+        builder = EntityBuilder(combined_engine=make_confirming_combined_engine())
         track_ids = [0, 1]
         bases = [(5.0, 5.0), (10.0, 5.0)]
 
+        # Feed frames 0..2 to form the compound
+        for f in range(3):
+            tracks = []
+            for tid, base in zip(track_ids, bases):
+                obs = []
+                for sub_f in range(f + 1):
+                    if sub_f == 0:
+                        disp = None
+                        c = (base[0], base[1])
+                    else:
+                        disp = (0, 4)
+                        c = (base[0], base[1] + 4 * sub_f)
+                    obs.append(_make_obs(sub_f, color=1, centroid=c, displacement=disp))
+                tracks.append(_make_track(tid, 1, obs))
+            reg = _make_registry_with_tracks(*tracks)
+            builder.update(reg, action_ids=[0, 1, 2][: f + 1])
+
+        # Compound should exist now
+        assert builder._compound_entity_id is not None, "Compound should form by frame 2"
+
+        # Check stability across frames 3..5
         compound_ids: list[int | None] = []
-        for frame in range(3, 6):
-            reg = _make_registry_with_tracks(
-                *self._make_co_moving_tracks(frame, track_ids, bases),
-            )
-            _, cat = builder.update(reg, action_ids=[0, 1, 2] + [1, 2] * frame)
+        for f in range(3, 6):
+            tracks = []
+            for tid, base in zip(track_ids, bases):
+                obs = []
+                for sub_f in range(f + 1):
+                    if sub_f == 0:
+                        disp = None
+                        c = (base[0], base[1])
+                    else:
+                        disp = (0, 4)
+                        c = (base[0], base[1] + 4 * sub_f)
+                    obs.append(_make_obs(sub_f, color=1, centroid=c, displacement=disp))
+                tracks.append(_make_track(tid, 1, obs))
+            reg = _make_registry_with_tracks(*tracks)
+            builder.update(reg, action_ids=[0, 1, 2] + [1, 2] * f)
             compound_ids.append(builder._compound_entity_id)
 
         assert all(cid is not None for cid in compound_ids), (

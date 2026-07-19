@@ -2,8 +2,82 @@ import os
 import shutil
 
 import pytest
-
 from arcengine import FrameData, GameState
+
+
+def make_mock_llm():
+    """Return a mock LLM callable that rejects all grouping proposals.
+
+    Use this in tests that need an EntityBuilder/CombinedEngine but don't
+    care about compound formation. It returns a valid JSON verdict list
+    with a single reject verdict for proposal_id 0.
+    """
+    import json
+
+    def _mock(messages):
+        return json.dumps([
+            {
+                "proposal_id": 0,
+                "verdict": "reject",
+                "relation": "none",
+                "members": [],
+                "reason": "mock reject",
+            }
+        ])
+
+    return _mock
+
+
+def make_mock_combined_engine():
+    """Return a CombinedEngine whose update() returns no confirmed groups.
+
+    Equivalent to the old classical-only fallback where no compounds form.
+    The heuristic engine is bypassed entirely to avoid crashes on minimal
+    test registries with empty shape_keys.
+    """
+    from grouping.combined_engine import CombinedEngine
+
+    engine = CombinedEngine(llm_call=make_mock_llm())
+    engine.update = lambda *args, **kwargs: []
+    return engine
+
+
+def make_confirming_combined_engine():
+    """Return a CombinedEngine that confirms all merge proposals via LLM.
+
+    Use in tests that need compounds to actually form. The LLM mock confirms
+    every proposal as a merge group. Heuristics still run normally, but the
+    LLM adjudication always confirms. Uses a low readiness threshold so
+    co-movement fires with minimal observations.
+    """
+    import json
+
+    from grouping.combined_engine import CombinedEngine
+    from grouping.readiness import ReadinessConfig
+
+    call_count = [0]
+
+    def _confirming_llm(messages):
+        call_count[0] += 1
+        return json.dumps([
+            {
+                "proposal_id": 0,
+                "verdict": "confirm",
+                "relation": "merge",
+                "members": [],
+                "reason": "test confirm",
+            }
+        ])
+
+    return CombinedEngine(
+        llm_call=_confirming_llm,
+        config=ReadinessConfig(co_movement_min_actions=1),
+    )
+
+
+@pytest.fixture
+def mock_combined_engine():
+    return make_mock_combined_engine()
 
 
 def get_test_recordings_dir():

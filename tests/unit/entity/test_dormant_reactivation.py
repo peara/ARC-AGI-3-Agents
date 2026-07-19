@@ -14,6 +14,7 @@ import pytest
 from entity.builder import EntityBuilder
 from perception.entities import LifecycleState
 from perception.registry import ObjectRegistry, Observation, Track
+from tests.conftest import make_mock_combined_engine
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -81,7 +82,7 @@ class TestDormantReactivation:
     def test_dormant_entity_keeps_same_id_on_reactivation(self) -> None:
         """An entity that goes dormant and then reactivates (via successor track)
         should keep the same entity ID it had before going dormant."""
-        builder = EntityBuilder()
+        builder = EntityBuilder(combined_engine=make_mock_combined_engine())
 
         # Frame 0: track 0 alive
         reg0 = _make_registry_with_tracks(
@@ -156,7 +157,7 @@ class TestDormantReactivation:
     def test_dormant_entity_becomes_dead_after_ttl(self) -> None:
         """A dormant entity should transition to DEAD after exceeding the dormant TTL."""
         dormant_ttl = 2
-        builder = EntityBuilder(dormant_ttl=dormant_ttl)
+        builder = EntityBuilder(dormant_ttl=dormant_ttl, combined_engine=make_mock_combined_engine())
 
         # Frame 0: track 0 alive
         reg0 = _make_registry_with_tracks(
@@ -223,7 +224,7 @@ class TestDormantReactivation:
     def test_dormant_entity_preserves_members_during_ttl_window(self) -> None:
         """A dormant entity should retain its member track IDs during the TTL window,
         enabling reactivation when a successor appears."""
-        builder = EntityBuilder(dormant_ttl=3)
+        builder = EntityBuilder(dormant_ttl=3, combined_engine=make_mock_combined_engine())
 
         # Frame 0: track 0 alive
         reg0 = _make_registry_with_tracks(

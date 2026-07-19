@@ -11,6 +11,7 @@ import pytest
 
 from entity.builder import EntityBuilder
 from perception.registry import ObjectRegistry, Observation, Track
+from tests.conftest import make_mock_combined_engine
 
 # ---------------------------------------------------------------------------
 # Helpers (duplicated locally — do NOT extract to conftest)
@@ -89,7 +90,7 @@ class TestEntityIdStability:
         """After EntityBuilder.update(), _track_to_entity should map each
         track ID to its assigned entity ID. This internal dict is the
         cross-frame memory that enables stable IDs."""
-        builder = EntityBuilder()
+        builder = EntityBuilder(combined_engine=make_mock_combined_engine())
 
         # Frame 0: two tracks
         reg0 = _make_registry_with_tracks(
@@ -119,7 +120,7 @@ class TestEntityIdStability:
         """The _next_entity_id counter should advance each time an entity is
         created. After creating N entities, _next_entity_id should be >= N.
         This counter is what ensures entity IDs are globally unique."""
-        builder = EntityBuilder()
+        builder = EntityBuilder(combined_engine=make_mock_combined_engine())
 
         reg0 = _make_registry_with_tracks(
             _make_track(0, 1, [_make_obs(0, color=1, centroid=(5.0, 5.0))]),
@@ -136,7 +137,7 @@ class TestEntityIdStability:
         """When track A dies and track B is its reconciled successor, the entity
         for B should inherit A's entity ID. The _track_to_entity dict should
         map B's track ID to A's original entity ID."""
-        builder = EntityBuilder()
+        builder = EntityBuilder(combined_engine=make_mock_combined_engine())
 
         reg0 = _make_registry_with_tracks(
             _make_track(0, 5, [

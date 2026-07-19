@@ -3,6 +3,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
 
+from tests.conftest import make_mock_combined_engine, make_mock_llm
 from entity.builder import EntityBuilder, EntityBuilderConfig
 from grouping.combined_engine import CombinedEngine
 from grouping.engine import ConfirmedGroup, MemberLabel
@@ -33,24 +34,17 @@ class TestEntityBuilderCombinedEngine:
     """Test EntityBuilder with injected CombinedEngine."""
 
     def test_mock_mode_produces_compound(self):
-        """EntityBuilder with CombinedEngine(llm_call=None) produces compound entities."""
-        engine = CombinedEngine(llm_call=None)
+        """EntityBuilder with mock CombinedEngine produces no compounds (mock rejects all)."""
+        engine = make_mock_combined_engine()
         builder = EntityBuilder(combined_engine=engine)
         # With no data, builder should not crash and should return empty catalog
         registry = _make_registry()
         logical_reg, catalog = builder.update(registry, [0])
         assert catalog is not None
 
-    def test_classical_fallback(self):
-        """EntityBuilder with combined_engine=None falls back to classical co_movement."""
-        builder = EntityBuilder(combined_engine=None)
-        registry = _make_registry()
-        logical_reg, catalog = builder.update(registry, [0])
-        assert catalog is not None
-
     def test_merge_relation_triggers_compound(self):
         """ConfirmedGroup with relation='merge' triggers _merge_into_compound."""
-        engine = CombinedEngine(llm_call=None)
+        engine = make_mock_combined_engine()
         builder = EntityBuilder(combined_engine=engine)
         # Verify builder has the combined_engine set
         assert builder._combined_engine is engine
@@ -58,7 +52,7 @@ class TestEntityBuilderCombinedEngine:
     def test_non_merge_relation_ignored(self):
         """ConfirmedGroup with relation='nest' does NOT trigger _merge_into_compound."""
         # This tests that only relation='merge' groups lead to compound creation
-        engine = CombinedEngine(llm_call=None)
+        engine = make_mock_combined_engine()
         builder = EntityBuilder(combined_engine=engine)
         assert builder._combined_engine is engine
 
@@ -66,13 +60,11 @@ class TestEntityBuilderCombinedEngine:
         """EntityBuilderConfig has sensible defaults for compound grouping."""
         config = EntityBuilderConfig()
         assert config.min_cofate == 2
-        assert config.compound_min_actions == 2
 
     def test_builder_with_config(self):
         """EntityBuilder accepts config alongside combined_engine."""
-        config = EntityBuilderConfig(min_cofate=3, compound_min_actions=4)
-        engine = CombinedEngine(llm_call=None)
+        config = EntityBuilderConfig(min_cofate=3)
+        engine = make_mock_combined_engine()
         builder = EntityBuilder(config=config, combined_engine=engine)
         assert builder.config.min_cofate == 3
-        assert builder.config.compound_min_actions == 4
         assert builder._combined_engine is engine

@@ -67,18 +67,6 @@ def _make_registry(*alive_ids: int) -> ObjectRegistry:
 # Tests
 # ---------------------------------------------------------------------------
 
-def test_heuristic_only_mode() -> None:
-    """CombinedEngine(llm_call=None) should auto-confirm heuristic proposals."""
-    engine = CombinedEngine(llm_call=None)
-    
-    reg = _make_registry(0, 1)
-    cat = EntityCatalog(entities={})
-    
-    res = engine.update(reg, cat, action_id=0)
-    assert isinstance(res, list)
-    # We don't strictly require a group here because we aren't forcing one,
-    # just checking it doesn't crash and returns the correct type.
-
 def test_llm_reject_verdict() -> None:
     """Mock LLM returns reject JSON; proposal should not be in confirmed groups."""
     

@@ -12,6 +12,7 @@ import pytest
 from entity.builder import EntityBuilder
 from perception.entities import LifecycleState
 from perception.registry import ObjectRegistry, Observation, Track
+from tests.conftest import make_mock_combined_engine, make_confirming_combined_engine
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -81,7 +82,7 @@ class TestBuilderIntegration:
         not from build_entities (frame-local rebuild). This test verifies that
         when the same track appears across multiple frames, its entity ID
         stays the same because EntityBuilder._track_to_entity remembers it."""
-        builder = EntityBuilder()
+        builder = EntityBuilder(combined_engine=make_mock_combined_engine())
 
         # Frame 0: two tracks
         reg0 = _make_registry_with_tracks(
@@ -131,7 +132,7 @@ class TestBuilderIntegration:
 
     def test_lifecycle_transitions_active_dormant_dead(self) -> None:
         """Full lifecycle transition: ACTIVE → DORMANT → DEAD."""
-        builder = EntityBuilder(dormant_ttl=2)
+        builder = EntityBuilder(dormant_ttl=2, combined_engine=make_mock_combined_engine())
 
         # Frame 0: ACTIVE
         reg0 = _make_registry_with_tracks(
@@ -182,7 +183,7 @@ class TestBuilderIntegration:
         """When track 0 dies and track 1 is born as its successor (same-frame,
         centroid within 8.0), the new track inherits the same entity ID via
         the reconciler's merge_map and _track_to_entity propagation."""
-        builder = EntityBuilder()
+        builder = EntityBuilder(combined_engine=make_mock_combined_engine())
 
         # Frame 0: single track
         reg0 = _make_registry_with_tracks(
@@ -222,8 +223,8 @@ class TestBuilderIntegration:
         # Use min_cofate=1, agree=0.5 so co-movement triggers after one
         # shared non-zero displacement.
         from entity.builder import EntityBuilderConfig
-        config = EntityBuilderConfig(min_cofate=1, agree=0.5, compound_min_actions=1)
-        builder = EntityBuilder(config=config)
+        config = EntityBuilderConfig(min_cofate=1, agree=0.5)
+        builder = EntityBuilder(config=config, combined_engine=make_confirming_combined_engine())
 
         # Frame 0: two singletons
         reg0 = _make_registry_with_tracks(
@@ -337,7 +338,7 @@ class TestBuilderIntegration:
         """Three entities in frame 0, one dies in frame 1, a new one appears
         in frame 2. Persistent entities keep their IDs; the new entity gets a
         fresh ID."""
-        builder = EntityBuilder(dormant_ttl=5)
+        builder = EntityBuilder(dormant_ttl=5, combined_engine=make_mock_combined_engine())
 
         # Frame 0: three tracks
         reg0 = _make_registry_with_tracks(
@@ -423,7 +424,7 @@ class TestBuilderIntegration:
         """An entity goes DORMANT when its track dies, then reactivates
         to ACTIVE when a successor track appears (via same-frame successor
         detection). The entity ID should be the same after reactivation."""
-        builder = EntityBuilder(dormant_ttl=5)
+        builder = EntityBuilder(dormant_ttl=5, combined_engine=make_mock_combined_engine())
 
         # Frame 0: single track
         reg0 = _make_registry_with_tracks(

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Callable
 
 import pytest
 
+from tests.conftest import make_mock_llm
 from grouping.engine import CompoundSplitVerdict, ConfirmedGroup, MemberLabel
 from grouping.features import EntityFeature
 from grouping.heuristics import (
@@ -1526,7 +1527,7 @@ class TestMismatchCounters:
     def test_counter_increments_on_mismatch(self) -> None:
         from grouping.combined_engine import CombinedEngine
 
-        engine = CombinedEngine(llm_call=None, vision=False)
+        engine = CombinedEngine(llm_call=make_mock_llm(), vision=False)
         # Simulate 2 frames with mismatches for entity 5
         engine._mismatch_counters = {5: 1}
         # After next mismatch, counter goes to 2 → confirmed
@@ -1542,7 +1543,7 @@ class TestMismatchCounters:
     def test_counter_resets_on_no_mismatch(self) -> None:
         from grouping.combined_engine import CombinedEngine
 
-        engine = CombinedEngine(llm_call=None, vision=False)
+        engine = CombinedEngine(llm_call=make_mock_llm(), vision=False)
         engine._mismatch_counters = {5: 1}
         # No mismatch for entity 5 this frame → reset to 0
         mismatch_set: set[int] = set()

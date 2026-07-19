@@ -25,6 +25,7 @@ from entity.reconciler import (
     _normalize_shape,
 )
 from perception.registry import ObjectRegistry, Observation, Track
+from tests.conftest import make_mock_combined_engine
 
 
 # ---------------------------------------------------------------------------
@@ -543,7 +544,7 @@ class TestSameFrameSuccessors:
         """Dead track and born track at the same frame, centroid within 8.0
         units → linked by _same_frame_successors."""
         from entity.builder import EntityBuilder
-        builder = EntityBuilder()
+        builder = EntityBuilder(combined_engine=make_mock_combined_engine())
 
         dead_track = _make_track(
             0, 1,
@@ -563,7 +564,7 @@ class TestSameFrameSuccessors:
     def test_gap0_no_link_beyond_distance(self) -> None:
         """Dead and born at same frame but centroid > 8.0 apart → no link."""
         from entity.builder import EntityBuilder
-        builder = EntityBuilder()
+        builder = EntityBuilder(combined_engine=make_mock_combined_engine())
 
         dead_track = _make_track(
             0, 1,
@@ -583,7 +584,7 @@ class TestSameFrameSuccessors:
     def test_gap0_already_in_merge_map_skipped(self) -> None:
         """Dead track already in merge_map should be skipped."""
         from entity.builder import EntityBuilder
-        builder = EntityBuilder()
+        builder = EntityBuilder(combined_engine=make_mock_combined_engine())
 
         dead_track = _make_track(
             0, 1,
@@ -604,7 +605,7 @@ class TestSameFrameSuccessors:
     def test_gap0_different_frame_no_link(self) -> None:
         """Dead track last at frame 0, born track at frame 1 → no gap=0 link."""
         from entity.builder import EntityBuilder
-        builder = EntityBuilder()
+        builder = EntityBuilder(combined_engine=make_mock_combined_engine())
 
         dead_track = _make_track(
             0, 1,
@@ -624,7 +625,7 @@ class TestSameFrameSuccessors:
     def test_gap0_nearest_claimed_first(self) -> None:
         """Two born tracks at same frame: nearest dead track wins the closest born."""
         from entity.builder import EntityBuilder
-        builder = EntityBuilder()
+        builder = EntityBuilder(combined_engine=make_mock_combined_engine())
 
         dead_a = _make_track(
             0, 1,

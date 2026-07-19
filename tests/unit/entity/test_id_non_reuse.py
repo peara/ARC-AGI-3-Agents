@@ -14,6 +14,7 @@ import pytest
 from entity.builder import EntityBuilder
 from perception.entities import LifecycleState
 from perception.registry import ObjectRegistry, Observation, Track
+from tests.conftest import make_mock_combined_engine
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -82,7 +83,7 @@ class TestIdNonReuse:
         """After entity E dies and its ID becomes unavailable, a brand-new
         entity (unrelated track) should get a fresh ID from _next_entity_id,
         not E's old ID. The _next_entity_id counter must only go up."""
-        builder = EntityBuilder(dormant_ttl=1)
+        builder = EntityBuilder(dormant_ttl=1, combined_engine=make_mock_combined_engine())
 
         # Frame 0: track 0 → entity with some ID
         reg0 = _make_registry_with_tracks(
@@ -126,7 +127,7 @@ class TestIdNonReuse:
         """The _next_entity_id counter should only increase, never decrease.
         After creating entities across multiple frames, the counter should
         reflect the total number of entity IDs ever assigned."""
-        builder = EntityBuilder()
+        builder = EntityBuilder(combined_engine=make_mock_combined_engine())
 
         # Frame 0: three singleton tracks → three entities
         reg0 = _make_registry_with_tracks(

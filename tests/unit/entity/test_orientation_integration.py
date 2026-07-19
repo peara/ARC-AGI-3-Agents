@@ -11,6 +11,7 @@ import pytest
 
 from entity.builder import EntityBuilder
 from perception.registry import ObjectRegistry, Observation, Track
+from tests.conftest import make_mock_combined_engine, make_confirming_combined_engine
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -94,7 +95,7 @@ class TestOrientationIntegration:
     def test_singleton_orientation(self) -> None:
         """A singleton entity with >=2 cells gets orientation in SceneState
         when its cell shape rotates between frames."""
-        builder = EntityBuilder()
+        builder = EntityBuilder(combined_engine=make_mock_combined_engine())
 
         # Frame 0: entity with L-shape cells at (10, 5)
         cells_f0 = _translate(L_SHAPE, 10, 5)
@@ -134,7 +135,7 @@ class TestOrientationIntegration:
 
     def test_orientation_accumulates(self) -> None:
         """Orientation accumulates across frames and wraps around mod 4."""
-        builder = EntityBuilder()
+        builder = EntityBuilder(combined_engine=make_mock_combined_engine())
 
         cells_f0 = _translate(L_SHAPE, 10, 5)
         cells_f1 = _translate(L_ROT90, 10, 5)
@@ -199,7 +200,7 @@ class TestOrientationIntegration:
 
     def test_dormant_reset(self) -> None:
         """When an entity goes dormant and reactivates, orientation resets to 0."""
-        builder = EntityBuilder(dormant_ttl=5)
+        builder = EntityBuilder(dormant_ttl=5, combined_engine=make_mock_combined_engine())
 
         cells_f0 = _translate(L_SHAPE, 10, 5)
         cells_f1 = _translate(L_ROT90, 10, 5)
@@ -262,8 +263,8 @@ class TestOrientationIntegration:
         detect_rotation, not from extract_orientation of member tracks."""
         from entity.builder import EntityBuilderConfig
 
-        config = EntityBuilderConfig(min_cofate=1, agree=0.5, compound_min_actions=1)
-        builder = EntityBuilder(config=config)
+        config = EntityBuilderConfig(min_cofate=1, agree=0.5)
+        builder = EntityBuilder(config=config, combined_engine=make_confirming_combined_engine())
 
         # Frame 0: two singletons that will form a compound
         reg0 = _make_registry_with_tracks(
