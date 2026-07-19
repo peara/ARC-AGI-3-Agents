@@ -178,20 +178,6 @@ class EntityBuilder:
             dict(catalog.track_to_entity),
         )
 
-        # 3b. Track compound original IDs for compounds created by common-fate
-        for eid, ent in catalog.entities.items():
-            if ent.composition == "compound" and eid not in self._compound_original_ids:
-                orig = sorted(
-                    {
-                        oid
-                        for tid in ent.members
-                        for oid in [self._track_to_entity.get(tid)]
-                        if oid is not None
-                    }
-                )
-                if orig:
-                    self._compound_original_ids[eid] = orig
-
         # 4. Compound grouping: merge co-moving entities into one compound
         catalog = self._apply_compound_grouping(
             self._logical_registry, catalog, action_ids, effect_context,
