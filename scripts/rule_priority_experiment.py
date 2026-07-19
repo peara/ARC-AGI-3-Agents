@@ -79,7 +79,6 @@ def run_experiment() -> list[FrameResult]:
 
     config = EntityBuilderConfig(
         reconciler=ReconcilerConfig(max_frame_gap=3),
-        compound_min_actions=2,
     )
     builder = EntityBuilder(config=config)
     registry = ObjectRegistry()
@@ -126,7 +125,7 @@ def run_experiment() -> list[FrameResult]:
                 c = compounds[0]
                 real_compound_id = c.id
                 real_compound_members = frozenset(
-                    builder._compound_original_ids.get(c.id, [])
+                    builder._compound_original_entity_ids(c)
                 )
             ctrl = catalog.controllable()
             real_controllable_id = ctrl.id if ctrl else None
@@ -161,7 +160,7 @@ def run_experiment() -> list[FrameResult]:
                 matched = p.evidence.get("actions_matched", [])
                 if not isinstance(matched, (list, tuple)):
                     continue
-                if len(matched) < config.compound_min_actions:
+                if len(matched) < 2:
                     continue
                 confirmed_proposals.append(p.member_ids)
 

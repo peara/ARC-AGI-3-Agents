@@ -43,14 +43,14 @@ class TestEntityBuilderCombinedEngine:
         assert catalog is not None
 
     def test_merge_relation_triggers_compound(self):
-        """ConfirmedGroup with relation='merge' triggers _merge_into_compound."""
+        """ConfirmedGroup with relation='merge' triggers compound formation."""
         engine = make_mock_combined_engine()
         builder = EntityBuilder(combined_engine=engine)
         # Verify builder has the combined_engine set
         assert builder._combined_engine is engine
 
     def test_non_merge_relation_ignored(self):
-        """ConfirmedGroup with relation='nest' does NOT trigger _merge_into_compound."""
+        """ConfirmedGroup with relation='nest' does NOT trigger compound formation."""
         # This tests that only relation='merge' groups lead to compound creation
         engine = make_mock_combined_engine()
         builder = EntityBuilder(combined_engine=engine)

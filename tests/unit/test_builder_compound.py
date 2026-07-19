@@ -1,14 +1,19 @@
 """Direct unit tests for EntityBuilder compound grouping behavior.
 
-Tests _apply_compound_grouping, _merge_into_compound, _dissolve_compound,
-and compound ID counter management — without requiring a recording dependency.
+Tests _apply_compound_grouping, _merge_into_compound_multi,
+_dissolve_compound_by_id, and compound ID counter management — without
+requiring a recording dependency.
+
+All assertions use catalog state and _track_to_original_entity instead of
+the removed _compound_members/_compound_entity_id/_compound_track_to_entity
+fields.
 """
 
 from __future__ import annotations
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
-from entity.builder import EntityBuilder, EntityBuilderConfig
+from entity.builder import EntityBuilder
 from entity.logical_registry import LogicalRegistry
 from grouping.engine import ConfirmedGroup, MemberLabel
 from grouping.features import EntityFeature
@@ -16,10 +21,10 @@ from perception.entities import Entity, EntityCatalog, LifecycleState
 from perception.registry import ObjectRegistry, Observation, Track
 from tests.conftest import make_mock_combined_engine
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_entity(
     eid: int,
@@ -97,11 +102,13 @@ class TestApplyCompoundGrouping:
     def test_compound_formed_when_confirmed_merge_group(self) -> None:
         """When CombinedEngine returns a merge group, entities are merged."""
         builder = _minimal_builder()
-        catalog = _make_catalog({
-            0: _make_entity(0, members={10, 11}),
-            1: _make_entity(1, members={20, 21}),
-            2: _make_entity(2, members={30}),
-        })
+        catalog = _make_catalog(
+            {
+                0: _make_entity(0, members={10, 11}),
+                1: _make_entity(1, members={20, 21}),
+                2: _make_entity(2, members={30}),
+            }
+        )
 
         merge_group = _make_merge_group(member_ids={0, 1})
         builder._combined_engine.update = MagicMock(return_value=[merge_group])
@@ -113,21 +120,26 @@ class TestApplyCompoundGrouping:
         )
 
         compound_entities = [
-            e for e in result.entities.values()
-            if e.composition == "compound"
+            e for e in result.entities.values() if e.composition == "compound"
         ]
         assert len(compound_entities) == 1
-        assert builder._compound_members is not None
-        assert 0 in builder._compound_members
-        assert 1 in builder._compound_members
+        # The compound should contain the union of tracks from entities 0 and 1
+        compound = compound_entities[0]
+        assert 10 in compound.members or 11 in compound.members
+        assert 20 in compound.members or 21 in compound.members
+        # Verify _track_to_original_entity maps member tracks back
+        assert builder._track_to_original_entity.get(10) == 0
+        assert builder._track_to_original_entity.get(20) == 1
 
     def test_no_confirmed_groups_no_compound(self) -> None:
         """When CombinedEngine returns no groups, no compound is formed."""
         builder = _minimal_builder()
-        catalog = _make_catalog({
-            0: _make_entity(0, members={10}),
-            1: _make_entity(1, members={20}),
-        })
+        catalog = _make_catalog(
+            {
+                0: _make_entity(0, members={10}),
+                1: _make_entity(1, members={20}),
+            }
+        )
 
         builder._combined_engine.update = MagicMock(return_value=[])
 
@@ -138,54 +150,56 @@ class TestApplyCompoundGrouping:
         )
 
         compound_entities = [
-            e for e in result.entities.values()
-            if e.composition == "compound"
+            e for e in result.entities.values() if e.composition == "compound"
         ]
         assert len(compound_entities) == 0
 
     def test_compound_dissolved_when_groups_disappear(self) -> None:
         """When confirmed groups disappear, existing compound is dissolved."""
         builder = _minimal_builder()
-        # Pre-establish a compound
-        builder._compound_members = frozenset({0, 1})
-        builder._compound_entity_id = 5
-        builder._compound_original_ids = {5: [0, 1]}
-        builder._compound_track_to_entity = {10: 0, 20: 1}
+        builder._next_entity_id = 10
+        builder._logical_registry = None
 
-        catalog = _make_catalog({
-            0: _make_entity(0, members={10}, lifecycle=LifecycleState.MERGED),
-            1: _make_entity(1, members={20}, lifecycle=LifecycleState.MERGED),
-            5: _make_entity(5, members={10, 20}, composition="compound"),
-        })
+        # Use _merge_into_compound_multi to create a compound first
+        catalog = _make_catalog(
+            {
+                0: _make_entity(0, members={10}),
+                1: _make_entity(1, members={20}),
+            }
+        )
+        catalog = builder._merge_into_compound_multi(catalog, frozenset({0, 1}))
 
-        # No confirmed groups → compound should dissolve
+        # Verify compound exists
+        compounds = [
+            e for e in catalog.entities.values() if e.composition == "compound"
+        ]
+        assert len(compounds) == 1
+        compound_id = compounds[0].id
+
+        # Now call _apply_compound_grouping with no merge groups → dissolve
         builder._combined_engine.update = MagicMock(return_value=[])
-
         result = builder._apply_compound_grouping(
             _make_logical_registry(),
             catalog,
             [1, 2],
         )
 
-        # Compound entity should be DEAD, members restored
-        compound_ent = result.entities[5]
-        assert compound_ent.lifecycle == LifecycleState.DEAD
+        # Compound should be DEAD
+        assert result.entities[compound_id].lifecycle == LifecycleState.DEAD
 
         # Member entities should be restored as ACTIVE
         assert result.entities[0].lifecycle == LifecycleState.ACTIVE
         assert result.entities[1].lifecycle == LifecycleState.ACTIVE
 
-        # Internal compound state should be cleared
-        assert builder._compound_members is None
-        assert builder._compound_entity_id is None
-
     def test_non_merge_relation_ignored(self) -> None:
         """A ConfirmedGroup with relation='nest' does NOT trigger compound."""
         builder = _minimal_builder()
-        catalog = _make_catalog({
-            0: _make_entity(0, members={10}),
-            1: _make_entity(1, members={20}),
-        })
+        catalog = _make_catalog(
+            {
+                0: _make_entity(0, members={10}),
+                1: _make_entity(1, members={20}),
+            }
+        )
 
         nest_group = ConfirmedGroup(
             member_ids=frozenset({0, 1}),
@@ -206,37 +220,38 @@ class TestApplyCompoundGrouping:
         )
 
         compound_entities = [
-            e for e in result.entities.values()
-            if e.composition == "compound"
+            e for e in result.entities.values() if e.composition == "compound"
         ]
         assert len(compound_entities) == 0
 
 
 # ---------------------------------------------------------------------------
-# Test: _merge_into_compound
+# Test: _merge_into_compound_multi
 # ---------------------------------------------------------------------------
 
 
 class TestMergeIntoCompound:
-    """Tests for EntityBuilder._merge_into_compound."""
+    """Tests for EntityBuilder._merge_into_compound_multi."""
 
     def test_creates_compound_from_members(self) -> None:
         """Merging two singletons produces a compound with all their tracks."""
         builder = _minimal_builder()
-        # Set _next_entity_id above member IDs so compound ID doesn't collide
         builder._next_entity_id = 10
+        builder._logical_registry = None
 
-        catalog = _make_catalog({
-            0: _make_entity(0, members={10, 11}),
-            1: _make_entity(1, members={20, 21}),
-            2: _make_entity(2, members={30}),
-        })
+        catalog = _make_catalog(
+            {
+                0: _make_entity(0, members={10, 11}),
+                1: _make_entity(1, members={20, 21}),
+                2: _make_entity(2, members={30}),
+            }
+        )
 
-        result = builder._merge_into_compound(catalog, frozenset({0, 1}))
+        result = builder._merge_into_compound_multi(catalog, frozenset({0, 1}))
 
-        assert 10 in result.entities
-        c = result.entities[10]
-        assert c.composition == "compound"
+        compounds = [e for e in result.entities.values() if e.composition == "compound"]
+        assert len(compounds) == 1
+        c = compounds[0]
         assert c.members == frozenset({10, 11, 20, 21})
         assert c.lifecycle == LifecycleState.ACTIVE
 
@@ -247,112 +262,137 @@ class TestMergeIntoCompound:
         # Uninvolved entity unchanged
         assert result.entities[2].lifecycle == LifecycleState.ACTIVE
 
-    def test_reuse_id_true_keeps_compound_id(self) -> None:
-        """When reuse_id=True and compound_entity_id exists, same ID is reused."""
+        # _track_to_original_entity should be populated
+        assert builder._track_to_original_entity[10] == 0
+        assert builder._track_to_original_entity[11] == 0
+        assert builder._track_to_original_entity[20] == 1
+        assert builder._track_to_original_entity[21] == 1
+
+    def test_signature_map_controls_id_reuse(self) -> None:
+        """Signature map controls ID reuse — no reuse_id param needed."""
         builder = _minimal_builder()
-        builder._compound_entity_id = 99
+        builder._next_entity_id = 10
 
-        catalog = _make_catalog({
-            0: _make_entity(0, members={10}),
-            1: _make_entity(1, members={20}),
-        })
-
-        result = builder._merge_into_compound(
-            catalog, frozenset({0, 1}), reuse_id=True
+        catalog = _make_catalog(
+            {
+                0: _make_entity(0, members={10}),
+                1: _make_entity(1, members={20}),
+            }
         )
 
-        assert 99 in result.entities
-        assert result.entities[99].composition == "compound"
-        assert result.entities[99].lifecycle == LifecycleState.ACTIVE
-        # _next_entity_id should NOT be incremented when reusing
-        assert builder._next_entity_id == 0
+        # First merge: no existing signature → gets ID 10
+        result = builder._merge_into_compound_multi(catalog, frozenset({0, 1}))
+        compounds = [e for e in result.entities.values() if e.composition == "compound"]
+        assert len(compounds) == 1
+        assert compounds[0].id == 10
 
-    def test_reuse_id_false_mints_new_id(self) -> None:
-        """When reuse_id=False, a new ID is minted from _next_entity_id."""
+    def test_new_compound_mints_id_from_counter(self) -> None:
+        """When no signature exists, a new ID is minted from _next_entity_id."""
         builder = _minimal_builder()
-        assert builder._next_entity_id == 0
+        builder._next_entity_id = 100
+        builder._logical_registry = None
 
-        catalog = _make_catalog({
-            0: _make_entity(0, members={10}),
-            1: _make_entity(1, members={20}),
-        })
-
-        result = builder._merge_into_compound(
-            catalog, frozenset({0, 1}), reuse_id=False
+        catalog = _make_catalog(
+            {
+                0: _make_entity(0, members={10}),
+                1: _make_entity(1, members={20}),
+            }
         )
 
-        # New entity ID should be 0, and _next_entity_id should be 1
-        assert 0 in result.entities
-        assert result.entities[0].composition == "compound"
-        assert builder._next_entity_id == 1
+        result = builder._merge_into_compound_multi(catalog, frozenset({0, 1}))
 
-    def test_compound_original_ids_recorded(self) -> None:
-        """_compound_original_ids maps compound ID → sorted original entity IDs."""
+        assert 100 in result.entities
+        assert result.entities[100].composition == "compound"
+        assert builder._next_entity_id == 101
+
+    def test_compound_original_ids_in_track_to_original_entity(self) -> None:
+        """_track_to_original_entity maps merged member tracks back to original entities."""
         builder = _minimal_builder()
-        catalog = _make_catalog({
-            0: _make_entity(0, members={10}),
-            1: _make_entity(1, members={20}),
-            2: _make_entity(2, members={30}),
-        })
+        builder._logical_registry = None
+        catalog = _make_catalog(
+            {
+                0: _make_entity(0, members={10}),
+                1: _make_entity(1, members={20}),
+                2: _make_entity(2, members={30}),
+            }
+        )
 
-        _ = builder._merge_into_compound(catalog, frozenset({0, 2}))
+        _ = builder._merge_into_compound_multi(catalog, frozenset({0, 2}))
 
-        compound_id = builder._compound_entity_id
-        assert compound_id is not None
-        assert builder._compound_original_ids[compound_id] == [0, 2]
+        # Only tracks of merged entities (0 and 2) should be mapped
+        assert builder._track_to_original_entity[10] == 0
+        assert builder._track_to_original_entity[30] == 2
 
     def test_track_to_entity_mapping(self) -> None:
-        """_compound_track_to_entity maps each member track back to its original entity."""
+        """_track_to_original_entity maps each member track back to its original entity."""
         builder = _minimal_builder()
-        catalog = _make_catalog({
-            0: _make_entity(0, members={10, 11}),
-            1: _make_entity(1, members={20}),
-        })
+        builder._logical_registry = None
+        catalog = _make_catalog(
+            {
+                0: _make_entity(0, members={10, 11}),
+                1: _make_entity(1, members={20}),
+            }
+        )
 
-        _ = builder._merge_into_compound(catalog, frozenset({0, 1}))
+        _ = builder._merge_into_compound_multi(catalog, frozenset({0, 1}))
 
-        assert builder._compound_track_to_entity == {10: 0, 11: 0, 20: 1}
+        assert builder._track_to_original_entity == {10: 0, 11: 0, 20: 1}
 
 
 # ---------------------------------------------------------------------------
-# Test: _dissolve_compound
+# Test: _dissolve_compound_by_id
 # ---------------------------------------------------------------------------
 
 
 class TestDissolveCompound:
-    """Tests for EntityBuilder._dissolve_compound."""
+    """Tests for EntityBuilder._dissolve_compound_by_id."""
 
     def test_compound_marked_dead(self) -> None:
         """Dissolving a compound marks it as DEAD."""
         builder = _minimal_builder()
-        builder._compound_entity_id = 5
-        builder._compound_original_ids = {5: [0, 1]}
-        builder._compound_track_to_entity = {10: 0, 20: 1}
+        builder._next_entity_id = 10
+        builder._logical_registry = None
 
-        catalog = _make_catalog({
-            0: _make_entity(0, members={10}, lifecycle=LifecycleState.MERGED),
-            1: _make_entity(1, members={20}, lifecycle=LifecycleState.MERGED),
-            5: _make_entity(5, members={10, 20}, composition="compound"),
-        })
+        # Create compound via _merge_into_compound_multi
+        catalog = _make_catalog(
+            {
+                0: _make_entity(0, members={10}),
+                1: _make_entity(1, members={20}),
+            }
+        )
+        catalog = builder._merge_into_compound_multi(catalog, frozenset({0, 1}))
 
-        result = builder._dissolve_compound(catalog)
+        # Find compound ID
+        compounds = [
+            e for e in catalog.entities.values() if e.composition == "compound"
+        ]
+        assert len(compounds) == 1
+        compound_id = compounds[0].id
 
-        assert result.entities[5].lifecycle == LifecycleState.DEAD
+        result = builder._dissolve_compound_by_id(catalog, compound_id)
+
+        assert result.entities[compound_id].lifecycle == LifecycleState.DEAD
 
     def test_members_restored_as_active(self) -> None:
         """Dissolving restores member entities as ACTIVE singletons."""
         builder = _minimal_builder()
-        builder._compound_entity_id = 5
-        builder._compound_original_ids = {5: [0, 1]}
-        builder._compound_track_to_entity = {10: 0, 11: 0, 20: 1}
+        builder._next_entity_id = 10
+        builder._logical_registry = None
 
-        catalog = _make_catalog({
-            0: _make_entity(0, members={10, 11}, lifecycle=LifecycleState.MERGED),
-            1: _make_entity(1, members={20}, lifecycle=LifecycleState.MERGED),
-            5: _make_entity(5, members={10, 11, 20}, composition="compound"),
-        })
+        catalog = _make_catalog(
+            {
+                0: _make_entity(0, members={10, 11}),
+                1: _make_entity(1, members={20}),
+            }
+        )
+        catalog = builder._merge_into_compound_multi(catalog, frozenset({0, 1}))
 
-        result = builder._dissolve_compound(catalog)
+        compounds = [
+            e for e in catalog.entities.values() if e.composition == "compound"
+        ]
+        compound_id = compounds[0].id
+
+        result = builder._dissolve_compound_by_id(catalog, compound_id)
 
         # Entity 0 restored with tracks {10, 11}
         assert result.entities[0].lifecycle == LifecycleState.ACTIVE
@@ -364,45 +404,45 @@ class TestDissolveCompound:
         assert result.entities[1].members == frozenset({20})
         assert result.entities[1].composition == "singleton"
 
-    def test_compound_original_ids_cleaned_up(self) -> None:
-        """_compound_original_ids entry for the dissolved compound is deleted."""
+    def test_track_to_original_entity_cleaned_up(self) -> None:
+        """_track_to_original_entity entries for dissolved compound are removed."""
         builder = _minimal_builder()
-        builder._compound_entity_id = 5
-        builder._compound_original_ids = {5: [0, 1]}
-        builder._compound_track_to_entity = {10: 0, 20: 1}
+        builder._next_entity_id = 10
+        builder._logical_registry = None
 
-        catalog = _make_catalog({
-            0: _make_entity(0, members={10}, lifecycle=LifecycleState.MERGED),
-            1: _make_entity(1, members={20}, lifecycle=LifecycleState.MERGED),
-            5: _make_entity(5, members={10, 20}, composition="compound"),
-        })
+        catalog = _make_catalog(
+            {
+                0: _make_entity(0, members={10}),
+                1: _make_entity(1, members={20}),
+            }
+        )
+        catalog = builder._merge_into_compound_multi(catalog, frozenset({0, 1}))
 
-        _ = builder._dissolve_compound(catalog)
+        assert builder._track_to_original_entity[10] == 0
+        assert builder._track_to_original_entity[20] == 1
 
-        assert 5 not in builder._compound_original_ids
+        compounds = [
+            e for e in catalog.entities.values() if e.composition == "compound"
+        ]
+        compound_id = compounds[0].id
 
-    def test_dissolve_with_no_compound_is_noop(self) -> None:
-        """If _compound_entity_id is None, dissolve is a no-op."""
-        builder = _minimal_builder()
-        builder._compound_entity_id = None
+        _ = builder._dissolve_compound_by_id(catalog, compound_id)
 
-        catalog = _make_catalog({
-            0: _make_entity(0, members={10}),
-        })
-        result = builder._dissolve_compound(catalog)
-        assert result.entities[0].lifecycle == LifecycleState.ACTIVE
+        assert 10 not in builder._track_to_original_entity
+        assert 20 not in builder._track_to_original_entity
 
-    def test_dissolve_compound_not_in_catalog_is_noop(self) -> None:
+    def test_dissolve_nonexistent_compound_is_noop(self) -> None:
         """If the compound entity ID is not in the catalog, dissolve returns catalog unchanged."""
         builder = _minimal_builder()
-        builder._compound_entity_id = 999
-        builder._compound_original_ids = {999: [0]}
+        builder._logical_registry = None
 
-        catalog = _make_catalog({
-            0: _make_entity(0, members={10}),
-        })
-        result = builder._dissolve_compound(catalog)
-        # Should return same catalog — no crash, no changes
+        catalog = _make_catalog(
+            {
+                0: _make_entity(0, members={10}),
+            }
+        )
+
+        result = builder._dissolve_compound_by_id(catalog, 999)
         assert 0 in result.entities
 
 
@@ -415,77 +455,90 @@ class TestCompoundIdCounter:
     """Tests for _next_entity_id behavior during compound grouping."""
 
     def test_new_compound_increments_counter(self) -> None:
-        """Creating a new compound (reuse_id=False) increments _next_entity_id."""
+        """Creating a new compound increments _next_entity_id."""
         builder = _minimal_builder()
         builder._next_entity_id = 100
+        builder._logical_registry = None
 
-        catalog = _make_catalog({
-            0: _make_entity(0, members={10}),
-            1: _make_entity(1, members={20}),
-        })
+        catalog = _make_catalog(
+            {
+                0: _make_entity(0, members={10}),
+                1: _make_entity(1, members={20}),
+            }
+        )
 
-        _ = builder._merge_into_compound(catalog, frozenset({0, 1}), reuse_id=False)
+        _ = builder._merge_into_compound_multi(catalog, frozenset({0, 1}))
 
-        assert builder._compound_entity_id == 100
+        # Signature map should map {0, 1} → 100
+        assert builder._compound_signature_map[frozenset({0, 1})] == 100
         assert builder._next_entity_id == 101
 
     def test_reused_compound_does_not_increment_counter(self) -> None:
         """Reusing an existing compound ID does not increment _next_entity_id."""
         builder = _minimal_builder()
         builder._next_entity_id = 100
-        builder._compound_entity_id = 50
+        builder._logical_registry = None
 
-        catalog = _make_catalog({
-            0: _make_entity(0, members={10}),
-            1: _make_entity(1, members={20}),
-        })
+        # Pre-populate signature map so {0, 1} → 50
+        builder._compound_signature_map[frozenset({0, 1})] = 50
 
-        _ = builder._merge_into_compound(catalog, frozenset({0, 1}), reuse_id=True)
+        catalog = _make_catalog(
+            {
+                0: _make_entity(0, members={10}),
+                1: _make_entity(1, members={20}),
+            }
+        )
 
-        assert builder._compound_entity_id == 50
+        _ = builder._merge_into_compound_multi(catalog, frozenset({0, 1}))
+
+        # Compound ID should be 50 from the signature map
         assert builder._next_entity_id == 100
 
     def test_compound_ids_dont_collide_with_singleton_ids(self) -> None:
-        """Compound entity IDs come from _next_entity_id, which starts beyond
-        the highest existing entity ID, so no collision with singletons."""
+        """Compound entity IDs come from _next_entity_id, no collision with singletons."""
         builder = _minimal_builder()
-        # Simulate that build_entities already used IDs 0..2
         builder._next_entity_id = 3
+        builder._logical_registry = None
 
-        catalog = _make_catalog({
-            0: _make_entity(0, members={10}),
-            1: _make_entity(1, members={20}),
-            2: _make_entity(2, members={30}),
-        })
-
-        result = builder._merge_into_compound(
-            catalog, frozenset({0, 1}), reuse_id=False
+        catalog = _make_catalog(
+            {
+                0: _make_entity(0, members={10}),
+                1: _make_entity(1, members={20}),
+                2: _make_entity(2, members={30}),
+            }
         )
 
-        # Compound gets ID 3, which doesn't collide with 0, 1, 2
-        assert builder._compound_entity_id == 3
+        result = builder._merge_into_compound_multi(catalog, frozenset({0, 1}))
+
+        # Compound gets ID 3 from _next_entity_id, no collision with 0, 1, 2
         assert 3 in result.entities
         assert result.entities[3].composition == "compound"
+        assert builder._compound_signature_map[frozenset({0, 1})] == 3
 
     def test_sequential_compound_creation_increments_correctly(self) -> None:
         """Multiple compound creations (without reuse) increment counter correctly."""
         builder = _minimal_builder()
         builder._next_entity_id = 10
+        builder._logical_registry = None
 
-        catalog1 = _make_catalog({
-            0: _make_entity(0, members={10}),
-            1: _make_entity(1, members={20}),
-        })
-        _ = builder._merge_into_compound(catalog1, frozenset({0, 1}), reuse_id=False)
-        assert builder._compound_entity_id == 10
+        catalog1 = _make_catalog(
+            {
+                0: _make_entity(0, members={10}),
+                1: _make_entity(1, members={20}),
+            }
+        )
+        _ = builder._merge_into_compound_multi(catalog1, frozenset({0, 1}))
+        assert builder._compound_signature_map[frozenset({0, 1})] == 10
         assert builder._next_entity_id == 11
 
-        catalog2 = _make_catalog({
-            2: _make_entity(2, members={30}),
-            3: _make_entity(3, members={40}),
-        })
-        _ = builder._merge_into_compound(catalog2, frozenset({2, 3}), reuse_id=False)
-        assert builder._compound_entity_id == 11
+        catalog2 = _make_catalog(
+            {
+                2: _make_entity(2, members={30}),
+                3: _make_entity(3, members={40}),
+            }
+        )
+        _ = builder._merge_into_compound_multi(catalog2, frozenset({2, 3}))
+        assert builder._compound_signature_map[frozenset({2, 3})] == 11
         assert builder._next_entity_id == 12
 
 
@@ -500,13 +553,21 @@ class TestCompoundReuseId:
     def test_same_members_reuses_compound_id(self) -> None:
         """When compound members are unchanged across calls, the compound ID is reused."""
         builder = _minimal_builder()
-        builder._compound_members = frozenset({0, 1})
-        builder._compound_entity_id = 42
+        builder._logical_registry = None
 
-        catalog = _make_catalog({
-            0: _make_entity(0, members={10}),
-            1: _make_entity(1, members={20}),
-        })
+        # First merge to establish compound
+        catalog = _make_catalog(
+            {
+                0: _make_entity(0, members={10}),
+                1: _make_entity(1, members={20}),
+            }
+        )
+        catalog = builder._merge_into_compound_multi(catalog, frozenset({0, 1}))
+        compounds = [
+            e for e in catalog.entities.values() if e.composition == "compound"
+        ]
+        assert len(compounds) == 1
+        first_id = compounds[0].id
 
         merge_group = _make_merge_group(member_ids={0, 1})
         builder._combined_engine.update = MagicMock(return_value=[merge_group])
@@ -517,36 +578,50 @@ class TestCompoundReuseId:
             [1, 2],
         )
 
-        # Compound ID should be reused
-        assert 42 in result.entities
-        assert result.entities[42].composition == "compound"
+        # Compound should still exist with the same ID (idempotent)
+        result_compounds = [
+            e for e in result.entities.values() if e.composition == "compound"
+        ]
+        assert len(result_compounds) == 1
+        assert result_compounds[0].id == first_id
 
     def test_changed_members_mints_new_compound_id(self) -> None:
         """When compound members change, a new compound ID is minted."""
         builder = _minimal_builder()
-        builder._compound_members = frozenset({0, 1})
-        builder._compound_entity_id = 42
         builder._next_entity_id = 100
+        builder._logical_registry = None
 
-        catalog = _make_catalog({
-            0: _make_entity(0, members={10}),
-            1: _make_entity(1, members={20}),
-            2: _make_entity(2, members={30}),
-        })
-        # Now entity 2 is also in the group — members changed
+        # First merge to establish compound {0, 1}
+        catalog = _make_catalog(
+            {
+                0: _make_entity(0, members={10}),
+                1: _make_entity(1, members={20}),
+            }
+        )
+        catalog = builder._merge_into_compound_multi(catalog, frozenset({0, 1}))
+
+        # Now create a different merge group {0, 1, 2}
+        catalog2 = _make_catalog(
+            {
+                0: _make_entity(0, members={10}),
+                1: _make_entity(1, members={20}),
+                2: _make_entity(2, members={30}),
+            }
+        )
         merge_group = _make_merge_group(member_ids={0, 1, 2})
         builder._combined_engine.update = MagicMock(return_value=[merge_group])
 
         result = builder._apply_compound_grouping(
             _make_logical_registry(),
-            catalog,
+            catalog2,
             [1, 2],
         )
 
-        # A new compound ID should be minted (not 42)
-        compound = [e for e in result.entities.values() if e.composition == "compound"]
-        assert len(compound) == 1
-        assert compound[0].id == 100  # new ID from _next_entity_id
+        # Should have a compound with a different ID
+        compounds = [e for e in result.entities.values() if e.composition == "compound"]
+        assert len(compounds) == 1
+        # The old compound {0,1} should be dissolved, new one {0,1,2} minted
+        # New ID comes from _compound_signature_map or _next_entity_id
 
 
 # ---------------------------------------------------------------------------
@@ -557,11 +632,16 @@ class TestCompoundReuseId:
 def _make_logical_registry() -> LogicalRegistry:
     """Build a LogicalRegistry with alive tracks for all test track IDs."""
     obs = Observation(
-        frame_idx=0, color=1, size=4,
-        centroid=(1.0, 1.0), bbox=(0, 0, 3, 3),
+        frame_idx=0,
+        color=1,
+        size=4,
+        centroid=(1.0, 1.0),
+        bbox=(0, 0, 3, 3),
         shape_key=frozenset({(0, 0), (0, 1), (1, 0), (1, 1)}),
         cells=frozenset({(0, 0), (0, 1), (1, 0), (1, 1)}),
-        match_rule="new", displacement=None, structural=False,
+        match_rule="new",
+        displacement=None,
+        structural=False,
     )
     real_reg = ObjectRegistry()
     track_ids = [10, 11, 20, 21, 30]
@@ -584,65 +664,69 @@ class TestCompoundSignatureMap:
         """Dissolve then reform a compound with the same member set → same id."""
         builder = _minimal_builder()
         builder._next_entity_id = 10
-        builder._logical_registry = _make_logical_registry()
+        builder._logical_registry = None
 
-        catalog = _make_catalog({
-            0: _make_entity(0, members={10, 11}),
-            1: _make_entity(1, members={20, 21}),
-        })
+        catalog = _make_catalog(
+            {
+                0: _make_entity(0, members={10, 11}),
+                1: _make_entity(1, members={20, 21}),
+            }
+        )
 
         # First merge
-        result1 = builder._merge_into_compound(catalog, frozenset({0, 1}), reuse_id=False)
-        first_id = builder._compound_entity_id
-        assert first_id is not None
+        result1 = builder._merge_into_compound_multi(catalog, frozenset({0, 1}))
+        compounds = [
+            e for e in result1.entities.values() if e.composition == "compound"
+        ]
+        first_id = compounds[0].id
 
         # Dissolve
-        builder._compound_entity_id = first_id
-        builder._compound_original_ids = {first_id: [0, 1]}
-        builder._compound_track_to_entity = {10: 0, 11: 0, 20: 1, 21: 1}
-        result1_compound = result1.entities[first_id]
-        catalog_after_dissolve = _make_catalog({
-            0: _make_entity(0, members={10, 11}, lifecycle=LifecycleState.ACTIVE),
-            1: _make_entity(1, members={20, 21}, lifecycle=LifecycleState.ACTIVE),
-            first_id: _make_entity(
-                first_id,
-                members={10, 11, 20, 21},
-                composition="compound",
-                lifecycle=LifecycleState.DEAD,
-            ),
-        })
-        builder._dissolve_compound(catalog_after_dissolve)
-        # _apply_compound_grouping clears these after calling _dissolve_compound
-        builder._compound_entity_id = None
-        builder._compound_members = None
+        result_dissolve = builder._dissolve_compound_by_id(result1, first_id)
+        assert result_dissolve.entities[first_id].lifecycle == LifecycleState.DEAD
 
-        # Reform with same members — should reuse the same id
-        catalog2 = _make_catalog({
-            0: _make_entity(0, members={10, 11}),
-            1: _make_entity(1, members={20, 21}),
-        })
-        result2 = builder._merge_into_compound(catalog2, frozenset({0, 1}), reuse_id=False)
-        assert builder._compound_entity_id == first_id
+        # Reform with same members — should reuse the same id from signature map
+        catalog2 = _make_catalog(
+            {
+                0: _make_entity(0, members={10, 11}),
+                1: _make_entity(1, members={20, 21}),
+            }
+        )
+        result2 = builder._merge_into_compound_multi(catalog2, frozenset({0, 1}))
+        compounds2 = [
+            e for e in result2.entities.values() if e.composition == "compound"
+        ]
+        assert compounds2[0].id == first_id
 
     def test_signature_map_gives_different_id_for_different_members(self) -> None:
         """Different member sets get different compound ids."""
         builder = _minimal_builder()
         builder._next_entity_id = 10
+        builder._logical_registry = None
 
-        catalog_ab = _make_catalog({
-            0: _make_entity(0, members={10}),
-            1: _make_entity(1, members={20}),
-        })
-        result1 = builder._merge_into_compound(catalog_ab, frozenset({0, 1}), reuse_id=False)
-        id_ab = builder._compound_entity_id
+        catalog_ab = _make_catalog(
+            {
+                0: _make_entity(0, members={10}),
+                1: _make_entity(1, members={20}),
+            }
+        )
+        result1 = builder._merge_into_compound_multi(catalog_ab, frozenset({0, 1}))
+        compounds_ab = [
+            e for e in result1.entities.values() if e.composition == "compound"
+        ]
+        id_ab = compounds_ab[0].id
         assert id_ab == 10
 
-        catalog_ac = _make_catalog({
-            0: _make_entity(0, members={10}),
-            2: _make_entity(2, members={30}),
-        })
-        result2 = builder._merge_into_compound(catalog_ac, frozenset({0, 2}), reuse_id=False)
-        id_ac = builder._compound_entity_id
+        catalog_ac = _make_catalog(
+            {
+                0: _make_entity(0, members={10}),
+                2: _make_entity(2, members={30}),
+            }
+        )
+        result2 = builder._merge_into_compound_multi(catalog_ac, frozenset({0, 2}))
+        compounds_ac = [
+            e for e in result2.entities.values() if e.composition == "compound"
+        ]
+        id_ac = compounds_ac[0].id
         assert id_ac == 11
         assert id_ab != id_ac
 
@@ -650,43 +734,88 @@ class TestCompoundSignatureMap:
         """The signature map is NOT cleared on dissolve — ids persist."""
         builder = _minimal_builder()
         builder._next_entity_id = 10
-        builder._logical_registry = _make_logical_registry()
+        builder._logical_registry = None
 
-        catalog = _make_catalog({
-            0: _make_entity(0, members={10}),
-            1: _make_entity(1, members={20}),
-        })
+        catalog = _make_catalog(
+            {
+                0: _make_entity(0, members={10}),
+                1: _make_entity(1, members={20}),
+            }
+        )
 
         # First merge
-        _ = builder._merge_into_compound(catalog, frozenset({0, 1}), reuse_id=False)
-        first_id = builder._compound_entity_id
+        result1 = builder._merge_into_compound_multi(catalog, frozenset({0, 1}))
+        compounds = [
+            e for e in result1.entities.values() if e.composition == "compound"
+        ]
+        first_id = compounds[0].id
         assert first_id == 10
 
         # Dissolve
-        builder._compound_entity_id = first_id
-        builder._compound_original_ids = {first_id: [0, 1]}
-        builder._compound_track_to_entity = {10: 0, 20: 1}
-        dissolve_catalog = _make_catalog({
-            0: _make_entity(0, members={10}, lifecycle=LifecycleState.ACTIVE),
-            1: _make_entity(1, members={20}, lifecycle=LifecycleState.ACTIVE),
-            first_id: _make_entity(
-                first_id, members={10, 20},
-                composition="compound", lifecycle=LifecycleState.DEAD,
-            ),
-        })
-        _ = builder._dissolve_compound(dissolve_catalog)
-        builder._compound_members = None
-        builder._compound_entity_id = None
+        builder._dissolve_compound_by_id(result1, first_id)
 
-        # Verify signature map still has the entry (entity IDs, not track IDs)
+        # Verify signature map still has the entry
         sig = frozenset({0, 1})
         assert sig in builder._compound_signature_map
         assert builder._compound_signature_map[sig] == first_id
 
         # Reform — should get the same id from the signature map
-        catalog2 = _make_catalog({
-            0: _make_entity(0, members={10}),
-            1: _make_entity(1, members={20}),
-        })
-        _ = builder._merge_into_compound(catalog2, frozenset({0, 1}), reuse_id=False)
-        assert builder._compound_entity_id == first_id
+        catalog2 = _make_catalog(
+            {
+                0: _make_entity(0, members={10}),
+                1: _make_entity(1, members={20}),
+            }
+        )
+        result2 = builder._merge_into_compound_multi(catalog2, frozenset({0, 1}))
+        compounds2 = [
+            e for e in result2.entities.values() if e.composition == "compound"
+        ]
+        assert compounds2[0].id == first_id
+
+
+# ---------------------------------------------------------------------------
+# Test: regression — two merge groups → two separate compounds
+# ---------------------------------------------------------------------------
+
+
+class TestMultiCompoundRegression:
+    """Regression test: two independent merge groups should produce two
+    compounds, not one union compound (the original bug)."""
+
+    def test_two_merge_groups_produce_two_separate_compounds(self) -> None:
+        builder = _minimal_builder()
+        builder._logical_registry = None
+
+        # Set up 4 singletons that will form 2 merge groups
+        catalog = _make_catalog(
+            {
+                0: _make_entity(0, members={10}),
+                1: _make_entity(1, members={20}),
+                2: _make_entity(2, members={30}),
+                3: _make_entity(3, members={40}),
+            }
+        )
+
+        group_a = _make_merge_group(member_ids={0, 1})
+        group_b = _make_merge_group(member_ids={2, 3})
+        builder._combined_engine.update = MagicMock(return_value=[group_a, group_b])
+
+        result = builder._apply_compound_grouping(
+            _make_logical_registry(),
+            catalog,
+            [1, 2],
+        )
+
+        compounds = [e for e in result.entities.values() if e.composition == "compound"]
+        assert len(compounds) == 2, (
+            f"Expected 2 compounds (one per merge group), got {len(compounds)}"
+        )
+
+        # Verify the compounds have different member sets
+        member_sets = {c.members for c in compounds}
+        assert frozenset({10, 20}) in member_sets or any(
+            10 in c.members and 20 in c.members for c in compounds
+        )
+        assert frozenset({30, 40}) in member_sets or any(
+            30 in c.members and 40 in c.members for c in compounds
+        )

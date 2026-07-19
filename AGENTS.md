@@ -25,7 +25,7 @@ models are under consideration for Kaggle).
 - `entity/` — entity identity layer (re-identification + composition + roles)
   - `reconciler.py` — temporal successor: links dead tracks to born tracks (rotation, color change, compound co-transition)
   - `logical_registry.py` — `LogicalRegistry`: wraps `ObjectRegistry` with a merge map
-  - `builder.py` — `EntityBuilder`: one-function API (`update()` every frame → `LogicalRegistry` + `EntityCatalog`)
+  - `builder.py` — `EntityBuilder`: one-function API (`update()` every frame → `LogicalRegistry` + `EntityCatalog`). Compounds are catalog-driven: each confirmed merge group produces an independent compound entity. No single-compound state — uses `_track_to_original_entity` + `_compound_signature_map` + the catalog as the source of truth.
 - `effects/` — forward prediction + rule engine
   - `predict.py` — state prediction (checks confirmed + proposed rules)
   - `engine.py` — online learner: inject proposals, predict, compute residual, confirm
@@ -46,6 +46,7 @@ models are under consideration for Kaggle).
   - `heuristics.py` — `co_movement`, `same_shape`, `containment`, `adjacency`, `static_bounded`
   - `readiness.py` — `ReadinessConfig` + `apply_gates()` — per-heuristic readiness thresholds (eliminates cold-start noise)
   - `resolver.py` — `resolve_conflicts()` — suppress adjacency covered by containment
+  - `combined_engine.py` — `CombinedEngine`: orchestrator with supersession (strict-subset merge groups removed from `_confirmed`)
   - `engine.py` — `GroupingEngine`: one-function API (`update()` every frame → `list[ConfirmedGroup]`)
   - `proposal.py` — `GroupProposal` / `ProposedGroup` frozen dataclasses
   - `llm_probe.py` — standalone script: replay recording → heuristics → LLM → verdicts

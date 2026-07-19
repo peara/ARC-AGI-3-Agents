@@ -226,6 +226,41 @@ new proposals are present, so the standalone compound review adds about 7 extra
 LLM calls per 101 frames.  When new proposals are present, the compound review
 is effectively free.
 
+## Multi-compound model
+
+As of the catalog-driven refactor, EntityBuilder supports **multiple independent compounds** simultaneously. Each confirmed merge group from `CombinedEngine` produces its own compound entity in the catalog.
+
+### Key changes from the single-compound model
+
+1. **No single-compound state.** The old fields `_compound_members`, `_compound_entity_id`, `_compound_track_to_entity`, and `_compound_original_ids` have been removed. Compound state is now derived from the catalog:
+   - `_compounds_in_catalog(catalog)` returns all ACTIVE compound entities
+   - `_compound_original_entity_ids(comp)` derives original singleton entity IDs from `_track_to_original_entity`
+   - `_find_compound_by_member_entity_ids(catalog, entity_ids)` finds a compound by its member entity IDs
+   - `_dissolve_compound_by_id(catalog, compound_id)` dissolves a single compound
+   - `_merge_into_compound_multi(catalog, member_entity_ids)` merges entities into a compound (idempotent)
+   - `_compounds_with_known_prediction(ctx)` returns compound IDs with known predictions
+
+2. **`_track_to_original_entity`** (a flat `dict[int, int]`) replaces `_compound_track_to_entity`. It maps every compound member's track ID back to its original singleton entity ID. This is the single source of truth for dissolve/persist decisions.
+
+3. **`_compound_signature_map`** provides stable compound ID reuse. A compound with the same member entity IDs (`frozenset[int]`) gets the same ID across dissolve/reform cycles.
+
+4. **Per-compound prediction veto.** When `effect_context` is provided, `predict()` is called once per frame. Compounds whose position is known are preserved even when their merge group disappears (e.g., because a track died during rotation).
+
+5. **Supersession in CombinedEngine.** When a merge group `{0,9,10}` is confirmed after `{0,10}` was already confirmed, the strict-subset group `{0,10}` is removed from `_confirmed`. This prevents stale subset groups from inflating compounds.
+
+### Known limitation
+
+`_track_to_original_entity` entries for dead tracks are not cleaned up. Track IDs are unique and never reused, so stale entries leak harmlessly. This is acceptable because the map is only consulted for compound members, and dead tracks cannot be members.
+
+### Flow: how merge groups become compounds
+
+1. `CombinedEngine.update()` returns confirmed groups, with supersession already applied.
+2. `_apply_compound_grouping` extracts merge groups: `merge_groups = [g for g in confirmed if g.relation == "merge"]`
+3. It computes `desired_sets = {frozenset(g.member_ids) for g in merge_groups}` — each set represents one compound.
+4. Current compounds in the catalog are dissolved if their original entity IDs are not in `desired_sets`, unless prediction veto preserves them.
+5. Each desired set not already present becomes a compound via `_merge_into_compound_multi`.
+6. If no merge groups exist, all remaining compounds are dissolved (unless vetoed).
+
 **How split verdicts flow through the system.**
 
 1. `CombinedEngine._apply_compound_split_verdicts()` receives a list of
@@ -237,15 +272,15 @@ is effectively free.
    - If fewer than 2 members remain after ejection, the group is dissolved
      (removed from `self._confirmed`).
 3. `EntityBuilder._apply_compound_grouping()` then inspects the confirmed merge
-   groups returned by `CombinedEngine.update()`.  If the member set is a strict
-   subset of the previous compound's members, it checks whether all members were
-   ejected:
-   - If *all* members were ejected, `EntityBuilder._dissolve_compound()` is
+   groups returned by `CombinedEngine.update()`.  Each merge group produces its
+   own independent compound via `_merge_into_compound_multi()`.  If a group's
+   member set shrinks or disappears:
+   - If *all* members were ejected, `EntityBuilder._dissolve_compound_by_id()` is
      called.  The compound entity transitions to `DEAD` and its former members
      are restored as `ACTIVE` singletons in the catalog.
-   - If only *some* members were ejected, the existing `_merge_into_compound()`
-     call with `reuse_id=True` rebuilds the compound from the smaller member
-     set, preserving the same entity ID.
+   - If only *some* members were ejected, `_merge_into_compound_multi()`
+     rebuilds the compound from the smaller member set, reusing the same
+     compound ID via `_compound_signature_map`.
 
 This flow ensures that bad compounds are caught and corrected without
 requiring the agent to restart its entity tracking from scratch.

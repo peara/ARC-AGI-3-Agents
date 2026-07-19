@@ -69,7 +69,6 @@ def run_experiment() -> list[FrameData]:
 
     config = EntityBuilderConfig(
         reconciler=ReconcilerConfig(max_frame_gap=3),
-        compound_min_actions=2,
     )
     builder = EntityBuilder(config=config)
     registry = ObjectRegistry()
@@ -108,9 +107,9 @@ def run_experiment() -> list[FrameData]:
                 c = compounds[0]
                 real_compound_id = c.id
                 real_compound_members = c.members
-                # Get original_ids from builder's internal map
+                # Get original_ids from builder's internal helper
                 real_compound_original_ids = tuple(
-                    builder._compound_original_ids.get(c.id, ())
+                    builder._compound_original_entity_ids(c)
                 )
 
             ctrl = catalog.controllable()

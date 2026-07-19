@@ -5,6 +5,9 @@ When a compound dissolves, the original singleton entity IDs should be reclaimed
 
 These tests feed frames incrementally so the CombinedEngine accumulates the
 action_ids history needed for co_movement heuristics to fire.
+
+All assertions use catalog state and _track_to_original_entity instead of
+the removed _compound_entity_id/_compound_original_ids fields.
 """
 
 from __future__ import annotations
@@ -109,19 +112,16 @@ def _feed_frames_incrementally(
 class TestCompoundIdStability:
     """Compound formation/dissolution ID behavior.
 
-    These tests verify that EntityBuilder._compound_original_ids maps
-    compound entity IDs to the original singleton entity IDs, enabling
-    ID restoration on compound dissolution.
+    These tests verify that _track_to_original_entity correctly maps
+    compound member tracks to their original singleton entity IDs,
+    enabling ID restoration on compound dissolution.
     """
 
     def test_compound_formation_tracks_original_entity_ids(self) -> None:
-        """When singletons merge into a compound, the builder must record the
-        original singleton entity IDs in _compound_original_ids."""
+        """When singletons merge into a compound, _track_to_original_entity
+        should map member tracks back to their original entity IDs."""
         builder = EntityBuilder(combined_engine=make_confirming_combined_engine())
 
-        # Feed 3 frames incrementally so CombinedEngine sees action history
-        # action_ids: [0, 1, 2] — frames 1 and 2 have non-zero actions
-        # Tracks co-move with displacement (0,4) on actions 1 and 2.
         _feed_frames_incrementally(
             builder,
             track_ids=[0, 1],
@@ -131,19 +131,26 @@ class TestCompoundIdStability:
             action_ids=[0, 1, 2],
         )
 
-        compound_original_ids = builder._compound_original_ids
-        assert len(compound_original_ids) > 0, (
-            "_compound_original_ids should track compound→original IDs mapping, "
+        # After compound formation, _track_to_original_entity should be populated
+        assert len(builder._track_to_original_entity) > 0, (
+            "_track_to_original_entity should track tid→original entity ID mapping, "
             "but it is empty. Compound formation did not occur."
         )
 
+        # The compound should exist in the catalog
+        assert builder._catalog is not None
+        compounds = [
+            e for e in builder._catalog.entities.values() if e.composition == "compound"
+        ]
+        assert len(compounds) > 0, (
+            "At least one compound should exist after co-movement"
+        )
+
     def test_compound_dissolution_uses_original_ids_from_tracking(self) -> None:
-        """When a compound dissolves, _compound_original_ids should be consulted
+        """When a compound dissolves, _track_to_original_entity should be consulted
         to restore the original singleton entity IDs."""
         builder = EntityBuilder(combined_engine=make_confirming_combined_engine())
 
-        # Feed all frames incrementally so CombinedEngine accumulates action_ids
-        # Frame 0: singletons, Frames 1-2: co-moving → compound forms
         _feed_frames_incrementally(
             builder,
             track_ids=[0, 1],
@@ -153,14 +160,15 @@ class TestCompoundIdStability:
             action_ids=[0, 1, 2],
         )
 
-        assert len(builder._compound_original_ids) > 0, (
-            "_compound_original_ids should be populated after compound formation"
+        assert len(builder._track_to_original_entity) > 0, (
+            "_track_to_original_entity should be populated after compound formation"
         )
 
-        all_original_ids = [eid for ids in builder._compound_original_ids.values() for eid in ids]
-        assert len(all_original_ids) >= 2, (
-            f"Expected at least 2 original entity IDs in _compound_original_ids, "
-            f"got {all_original_ids}"
+        # Verify at least 2 original entity IDs are represented
+        original_entity_ids = set(builder._track_to_original_entity.values())
+        assert len(original_entity_ids) >= 2, (
+            f"Expected at least 2 original entity IDs in _track_to_original_entity, "
+            f"got {original_entity_ids}"
         )
 
 
@@ -179,7 +187,6 @@ class TestCompoundIdPersistsAcrossFrames:
         Compound entity ID must be identical."""
         builder = EntityBuilder(combined_engine=make_confirming_combined_engine())
 
-        # Feed frames 0..3 incrementally to build up compound
         for f in range(4):
             tracks = []
             for tid, base in [(0, (5.0, 5.0)), (1, (10.0, 5.0))]:
@@ -196,8 +203,14 @@ class TestCompoundIdPersistsAcrossFrames:
             reg = _make_registry_with_tracks(*tracks)
             builder.update(reg, action_ids=[0, 1, 2, 1][: f + 1])
 
-        compound_eid = builder._compound_entity_id
-        assert compound_eid is not None, "Compound should have formed by frame 3"
+        assert builder._catalog is not None
+        compounds = [
+            e
+            for e in builder._catalog.entities.values()
+            if e.composition == "compound" and e.lifecycle.value == "active"
+        ]
+        assert len(compounds) > 0, "Compound should have formed by frame 3"
+        compound_eid = compounds[0].id
 
         # Frame 4: same two tracks, still co-moving
         tracks4 = []
@@ -215,8 +228,15 @@ class TestCompoundIdPersistsAcrossFrames:
         reg4 = _make_registry_with_tracks(*tracks4)
         builder.update(reg4, action_ids=[0, 1, 2, 1, 2])
 
-        assert builder._compound_entity_id == compound_eid, (
-            f"Compound ID changed: {compound_eid} -> {builder._compound_entity_id}. "
+        assert builder._catalog is not None
+        compounds_after = [
+            e
+            for e in builder._catalog.entities.values()
+            if e.composition == "compound" and e.lifecycle.value == "active"
+        ]
+        assert len(compounds_after) > 0, "Compound should persist"
+        assert compounds_after[0].id == compound_eid, (
+            f"Compound ID changed: {compound_eid} -> {compounds_after[0].id}. "
             f"Persistent compounds must keep their entity ID."
         )
 
@@ -226,7 +246,6 @@ class TestCompoundIdPersistsAcrossFrames:
         track_ids = [0, 1]
         bases = [(5.0, 5.0), (10.0, 5.0)]
 
-        # Feed frames 0..2 to form the compound
         for f in range(3):
             tracks = []
             for tid, base in zip(track_ids, bases):
@@ -244,7 +263,13 @@ class TestCompoundIdPersistsAcrossFrames:
             builder.update(reg, action_ids=[0, 1, 2][: f + 1])
 
         # Compound should exist now
-        assert builder._compound_entity_id is not None, "Compound should form by frame 2"
+        assert builder._catalog is not None
+        compounds = [
+            e
+            for e in builder._catalog.entities.values()
+            if e.composition == "compound" and e.lifecycle.value == "active"
+        ]
+        assert len(compounds) > 0, "Compound should form by frame 2"
 
         # Check stability across frames 3..5
         compound_ids: list[int | None] = []
@@ -263,7 +288,13 @@ class TestCompoundIdPersistsAcrossFrames:
                 tracks.append(_make_track(tid, 1, obs))
             reg = _make_registry_with_tracks(*tracks)
             builder.update(reg, action_ids=[0, 1, 2] + [1, 2] * f)
-            compound_ids.append(builder._compound_entity_id)
+            assert builder._catalog is not None
+            frame_compounds = [
+                e
+                for e in builder._catalog.entities.values()
+                if e.composition == "compound" and e.lifecycle.value == "active"
+            ]
+            compound_ids.append(frame_compounds[0].id if frame_compounds else None)
 
         assert all(cid is not None for cid in compound_ids), (
             "Compound should persist across all frames"

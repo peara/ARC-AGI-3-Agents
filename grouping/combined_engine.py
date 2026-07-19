@@ -160,7 +160,9 @@ class CombinedEngine:
 
         # --- Step 4: Adjudicate new proposals via LLM ---
         if new_proposals:
-            self._adjudicate(new_proposals, features, should_split, confirmed_mismatches)
+            self._adjudicate(
+                new_proposals, features, should_split, confirmed_mismatches
+            )
 
         # --- Step 5: Compound review when gate fires but no new proposals ---
         if not new_proposals and should_split and self._confirmed:
@@ -169,11 +171,9 @@ class CombinedEngine:
         # --- Track compound member IDs for next frame's comparison ---
         merge_groups = [g for g in self._confirmed.values() if g.relation == "merge"]
         if len(merge_groups) == 1:
-            all_ids: set[int] = set()
-            for g in merge_groups:
-                all_ids |= g.member_ids
-            self._prev_compound_member_ids = frozenset(all_ids)
+            self._prev_compound_member_ids = frozenset(merge_groups[0].member_ids)
         else:
+            # Multiple merge groups or none: single-union tracking is misleading
             self._prev_compound_member_ids = None
 
         merge_count = sum(1 for g in self._confirmed.values() if g.relation == "merge")
@@ -284,6 +284,7 @@ class CombinedEngine:
 
         self._apply_verdicts(verdicts, proposals, features)
         self._apply_compound_split_verdicts(compound_verdicts)
+        self._apply_supersession()
 
     def _adjudicate_compound_review(
         self,
@@ -418,7 +419,8 @@ class CombinedEngine:
                 log.warning(
                     "compound_review: dropped verdict — compound_index=%d out of range "
                     "(n_confirmed=%d)",
-                    cv.compound_index, len(confirmed_list),
+                    cv.compound_index,
+                    len(confirmed_list),
                 )
                 continue
             key = key_order[cv.compound_index]
@@ -485,6 +487,41 @@ class CombinedEngine:
             self._states.pop(key, None)
         for key, _ejected, updated in updates:
             self._confirmed[key] = updated
+
+    def _apply_supersession(self) -> None:
+        """Remove strict-subset merge groups from _confirmed.
+
+        When a merge group G has member_ids that are a strict subset of
+        another merge group H's member_ids, G is superseded and removed.
+        Only merge-relation groups are compared; non-merge groups (e.g.
+        "containment") are left untouched.
+        """
+        merge_groups = {
+            key: group
+            for key, group in self._confirmed.items()
+            if group.relation == "merge"
+        }
+        if len(merge_groups) < 2:
+            return
+
+        items = list(merge_groups.items())
+        to_remove: list[tuple[str, frozenset[int]]] = []
+
+        for i, (key_i, group_i) in enumerate(items):
+            for j, (key_j, group_j) in enumerate(items):
+                if i == j:
+                    continue
+                if group_i.member_ids < group_j.member_ids:
+                    to_remove.append(key_i)
+                    log.info(
+                        "supersession: removed key=%s superseded_by=%s",
+                        key_i,
+                        key_j,
+                    )
+                    break
+
+        for key in to_remove:
+            self._confirmed.pop(key, None)
 
     def _apply_verdicts(
         self,
