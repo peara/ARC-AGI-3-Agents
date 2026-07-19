@@ -161,17 +161,30 @@ def _validate_compound_entry(
     """
     compound_index = entry.get("compound_index")
     if not isinstance(compound_index, int) or compound_index < 0 or compound_index >= n_compounds:
-        # Fall back: derive compound_index from proposal_id offset
         pid = entry.get("proposal_id")
-        if isinstance(pid, int) and pid >= 0 and n_proposals > 0:
+        if isinstance(pid, int) and pid >= 0:
             compound_index = pid - n_proposals
             if compound_index < 0 or compound_index >= n_compounds:
+                log.warning(
+                    "compound_review: dropped verdict — proposal_id=%d maps to "
+                    "compound_index=%d (n_proposals=%d, n_compounds=%d)",
+                    pid, compound_index, n_proposals, n_compounds,
+                )
                 return None
         else:
+            log.warning(
+                "compound_review: dropped verdict — no compound_index or proposal_id "
+                "(entry keys=%s)",
+                sorted(entry.keys()) if isinstance(entry, dict) else type(entry).__name__,
+            )
             return None
 
     verdict = entry.get("verdict")
     if verdict not in ("confirm", "split"):
+        log.warning(
+            "compound_review: dropped verdict — invalid verdict=%r (compound_index=%d)",
+            verdict, compound_index,
+        )
         return None
 
     members: list[dict] = []

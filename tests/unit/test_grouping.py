@@ -1322,7 +1322,7 @@ class TestValidateCompoundEntry:
         assert result is None
 
     def test_fallback_proposal_id_without_n_proposals(self) -> None:
-        """When proposal_id present but n_proposals=0, fallback fails."""
+        """When proposal_id present and n_proposals=0, fallback still works."""
         from grouping.llm_engine import _validate_compound_entry
 
         entry = {
@@ -1332,7 +1332,8 @@ class TestValidateCompoundEntry:
             "reason": "ok",
         }
         result = _validate_compound_entry(entry, n_compounds=2, n_proposals=0)
-        assert result is None
+        assert result is not None
+        assert result.compound_index == 0
 
     def test_members_with_invalid_role(self) -> None:
         from grouping.llm_engine import _validate_compound_entry
