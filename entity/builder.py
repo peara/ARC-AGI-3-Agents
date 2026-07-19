@@ -228,11 +228,25 @@ class EntityBuilder:
                 ctrl_id,
             )
         self._prev_controllable_id = ctrl_id
+        if controllable and controllable.composition == "compound":
+            orig_entity_ids = sorted(
+                eid
+                for tid in controllable.members
+                for eid in [self._compound_track_to_entity.get(tid)]
+                if eid is not None
+            )
+            member_display: str | None = (
+                f"tracks={sorted(controllable.members)} entities={orig_entity_ids}"
+            )
+        else:
+            member_display = (
+                str(sorted(controllable.members)) if controllable else None
+            )
         log.info(
-            "frame=%d controllable: id=%s members=%s role=%s lifecycle=%s",
+            "frame=%d controllable: id=%s %s role=%s lifecycle=%s",
             frame_idx,
             ctrl_id,
-            sorted(controllable.members) if controllable else None,
+            member_display,
             controllable.role if controllable else None,
             controllable.lifecycle.value if controllable else None,
         )
