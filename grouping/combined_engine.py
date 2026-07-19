@@ -44,18 +44,18 @@ class CombinedEngine:
 
     Call .update() every frame.  Returns the full snapshot of confirmed groups.
 
-    When *llm_call* is None the engine operates in heuristic-only mode:
-    heuristic proposals are auto-confirmed and stale detection splits are
-    applied without LLM involvement.
+    *llm_call* is required — the engine always adjudicates proposals via the LLM.
     """
 
     def __init__(
         self,
-        llm_call: _LLMCall | None = None,
+        llm_call: _LLMCall,
         vision: bool = True,
         config: ReadinessConfig | None = None,
     ) -> None:
-        self._llm_call: _LLMCall | None = llm_call
+        if llm_call is None:
+            raise ValueError("llm_call is required (was None)")
+        self._llm_call: _LLMCall = llm_call
         self._vision: bool = vision
         self._config: ReadinessConfig = config or ReadinessConfig()
         self._heuristic_engine: HeuristicGroupingEngine = HeuristicGroupingEngine(
@@ -158,15 +158,12 @@ class CombinedEngine:
             self._prev_compound_member_ids, features, confirmed_mismatches
         )
 
-        # --- Step 4: Adjudicate new proposals via LLM (or auto-confirm) ---
-        if new_proposals and self._llm_call is not None:
+        # --- Step 4: Adjudicate new proposals via LLM ---
+        if new_proposals:
             self._adjudicate(new_proposals, features, should_split, confirmed_mismatches)
-        elif new_proposals and self._llm_call is None:
-            # Heuristic-only mode: auto-confirm every new proposal.
-            self._auto_confirm(new_proposals)
 
         # --- Step 5: Compound review when gate fires but no new proposals ---
-        if not new_proposals and should_split and self._confirmed and self._llm_call is not None:
+        if not new_proposals and should_split and self._confirmed:
             self._adjudicate_compound_review(features, confirmed_mismatches)
 
         # --- Track compound member IDs for next frame's comparison ---
@@ -536,39 +533,6 @@ class CombinedEngine:
                 group = ConfirmedGroup(
                     member_ids=frozenset(p.member_ids),
                     relation=v.relation,
-                    heuristic=p.heuristic,
-                    members=member_labels,
-                    confidence=state.support,
-                )
-                self._confirmed[key] = group
-
-    def _auto_confirm(self, proposals: list[GroupProposal]) -> None:
-        """Auto-confirm heuristic proposals (no LLM)."""
-        for p in proposals:
-            key = (p.heuristic, frozenset(p.member_ids))
-            if key in self._confirmed or key in self._rejected:
-                continue
-
-            member_labels = tuple(
-                MemberLabel(entity_id=eid, role="unknown", label="")
-                for eid in sorted(p.member_ids)
-            )
-
-            state = self._states.get(key)
-            if state is None:
-                state = _ProposalState(
-                    verdict="confirm",
-                    relation="none",
-                    members=member_labels,
-                )
-                self._states[key] = state
-            state.support += 1
-            state.last_seen_frame = self._frame_count
-
-            if state.support >= _CONFIRM_THRESHOLD and key not in self._confirmed:
-                group = ConfirmedGroup(
-                    member_ids=frozenset(p.member_ids),
-                    relation="none",
                     heuristic=p.heuristic,
                     members=member_labels,
                     confidence=state.support,

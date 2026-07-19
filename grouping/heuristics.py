@@ -124,12 +124,16 @@ def co_movement(features: dict[int, EntityFeature]) -> list[GroupProposal]:
 
 
 def _normalize_shape_key(sk: frozenset[tuple[int, int]]) -> frozenset[tuple[int, int]]:
+    if not sk:
+        return frozenset()
     min_r = min(r for r, _ in sk)
     min_c = min(c for _, c in sk)
     return frozenset((r - min_r, c - min_c) for r, c in sk)
 
 
 def _canonical_shape_key(sk: frozenset[tuple[int, int]]) -> frozenset[tuple[int, int]]:
+    if not sk:
+        return frozenset()
     variants: list[frozenset[tuple[int, int]]] = []
     for flip_r in (1, -1):
         for flip_c in (1, -1):

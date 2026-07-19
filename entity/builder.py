@@ -7,24 +7,17 @@ engine (grouping).  Owns four concerns:
    across rotation, colour-change, and disappearance/reappearance events.
 2. **Entity composition** (``build_entities``): group logical tracks into
    entities by common-fate co-movement.
-3. **Compound grouping** (CombinedEngine or classical co_movement): when
-   two or more entities co-move, confirm them as a compound entity.  This
-   reduces the entity count for the LLM bundle and stabilises identity.
-   Individual member tracks are kept for role detection —
-   ``detect_controllable`` maps a controllable member track to the
-   containing compound entity.
+3. **Compound grouping** (``CombinedEngine``): when two or more entities
+   co-move, confirm them as a compound entity.  This reduces the entity
+   count for the LLM bundle and stabilises identity.  Individual member
+   tracks are kept for role detection — ``detect_controllable`` maps a
+   controllable member track to the containing compound entity.
 
-   When a ``CombinedEngine`` is injected, LLM adjudication filters bad
-   compounds *before* role assignment.  When ``combined_engine`` is None,
-   the classical ``co_movement`` heuristic is used (backward compat).
+   A ``CombinedEngine`` must be injected — LLM adjudication filters bad
+   compounds *before* role assignment.
 
 4. **Role assignment** (``assign_roles``): detect controllable and counter
    entities.  Runs **once**, on the final catalog (after compound grouping).
-
-EntityBuilder optionally uses LLM adjudication via an injected
-``CombinedEngine``; falls back to classical ``co_movement`` when
-``combined_engine=None``.  The perception core remains network-free — LLM
-calls happen inside CombinedEngine only when explicitly configured.
 """
 
 from __future__ import annotations
@@ -41,8 +34,6 @@ from effects.context import EffectContext
 from effects.predict import predict
 from effects.state import SceneState
 from entity.roles import assign_roles
-from grouping.features import extract_features
-from grouping.heuristics import co_movement
 from perception.entities import (
     Entity,
     EntityCatalog,
@@ -66,7 +57,6 @@ class EntityBuilderConfig:
     reconciler: ReconcilerConfig = ReconcilerConfig()
     min_cofate: int = 2
     agree: float = 0.8
-    compound_min_actions: int = 2
 
 
 class EntityBuilder:
@@ -81,7 +71,7 @@ class EntityBuilder:
         config: EntityBuilderConfig | None = None,
         *,
         dormant_ttl: int = 3,
-        combined_engine: CombinedEngine | None = None,
+        combined_engine: CombinedEngine,
     ) -> None:
         self.config = config or EntityBuilderConfig()
         self._combined_engine = combined_engine
@@ -340,19 +330,12 @@ class EntityBuilder:
         *,
         curr_grid: Sequence[Sequence[int]] | None = None,
     ) -> EntityCatalog:
-        """Find co-moving entities, merge into a compound entity.
+        """Apply confirmed merge groups from CombinedEngine as compound entities.
 
-        When ``self._combined_engine`` is set, delegates compound detection
-        to ``CombinedEngine.update()`` which runs heuristics + LLM
-        adjudication.  Only groups with ``relation == "merge"`` trigger
-        ``_merge_into_compound``; other relations are metadata only.
-
-        When ``self._combined_engine`` is None, falls back to the classical
-        ``co_movement`` heuristic (backward compat).
-
-        Only alive entities are considered for new proposals — dead
-        entities retain stale features that produce spurious matches.
-        Multiple confirmed proposals are merged into one compound.
+        Delegates compound detection to ``CombinedEngine.update()`` which
+        runs heuristics + LLM adjudication.  Only groups with
+        ``relation == "merge"`` trigger ``_merge_into_compound``; other
+        relations are metadata only.
 
         If *effect_context* is provided and a previous SceneState is
         available, predict() is called to check whether the compound
@@ -360,214 +343,112 @@ class EntityBuilder:
         result, the compound is preserved even when co-movement fails
         to find it (e.g. because a track died during rotation).
         """
-        # Check whether predict() knows the compound's movement.
         prediction_known = self._is_prediction_known(effect_context)
 
-        if self._combined_engine is not None:
-            # --- CombinedEngine path ---
-            confirmed = self._combined_engine.update(
-                cast(ObjectRegistry, logical_reg),
-                catalog,
-                action_ids[-1] if action_ids else 0,
-                curr_grid=curr_grid,
-            )
-            merge_groups = [g for g in confirmed if g.relation == "merge"]
+        confirmed = self._combined_engine.update(
+            cast(ObjectRegistry, logical_reg),
+            catalog,
+            action_ids[-1] if action_ids else 0,
+            curr_grid=curr_grid,
+        )
+        merge_groups = [g for g in confirmed if g.relation == "merge"]
 
-            if merge_groups:
-                all_member_ids: set[int] = set()
-                for g in merge_groups:
-                    all_member_ids |= g.member_ids
+        if merge_groups:
+            all_member_ids: set[int] = set()
+            for g in merge_groups:
+                all_member_ids |= g.member_ids
 
+            if not all_member_ids:
+                return catalog
+
+            # When confirmed member_ids is a strict subset of the
+            # previous compound and prediction says the compound
+            # should persist, reject the false-positive subset and
+            # keep the previous compound instead.
+            if (
+                self._compound_members is not None
+                and prediction_known
+                and frozenset(all_member_ids) != self._compound_members
+                and frozenset(all_member_ids).issubset(self._compound_members)
+            ):
+                log.info(
+                    "compound subset rejected (prediction known): "
+                    "proposed=%s previous=%s",
+                    sorted(all_member_ids),
+                    sorted(self._compound_members),
+                )
+                return self._merge_into_compound(
+                    catalog, self._compound_members, reuse_id=True
+                )
+
+            # Check if some members were ejected by a split verdict
+            # from the compound review flow.
+            if (
+                self._compound_members is not None
+                and frozenset(all_member_ids) != self._compound_members
+            ):
+                ejected = self._compound_members - frozenset(all_member_ids)
+                if ejected:
+                    log.info(
+                        "compound members ejected by split verdict: %s -> %s "
+                        "(ejected=%s)",
+                        sorted(self._compound_members),
+                        sorted(all_member_ids),
+                        sorted(ejected),
+                    )
+                # If no members remain (all ejected), dissolve the compound.
                 if not all_member_ids:
+                    log.info(
+                        "compound dissolved (all members ejected): previous=%s",
+                        sorted(self._compound_members),
+                    )
+                    catalog = self._dissolve_compound(catalog)
+                    self._compound_members = None
+                    self._compound_entity_id = None
+                    self._compound_track_to_entity = {}
                     return catalog
 
-                # When confirmed member_ids is a strict subset of the
-                # previous compound and prediction says the compound
-                # should persist, reject the false-positive subset and
-                # keep the previous compound instead.
-                if (
-                    self._compound_members is not None
-                    and prediction_known
-                    and frozenset(all_member_ids) != self._compound_members
-                    and frozenset(all_member_ids).issubset(self._compound_members)
-                ):
+            prev_members = self._compound_members
+            self._compound_members = frozenset(all_member_ids)
+
+            members_unchanged = prev_members == self._compound_members
+            if not members_unchanged:
+                if prev_members is None:
                     log.info(
-                        "compound subset rejected (prediction known): "
-                        "proposed=%s previous=%s",
-                        sorted(all_member_ids),
+                        "compound formed: members=%s",
                         sorted(self._compound_members),
                     )
-                    return self._merge_into_compound(
-                        catalog, self._compound_members, reuse_id=True
-                    )
-
-                # Check if some members were ejected by a split verdict
-                # from the compound review flow.
-                if (
-                    self._compound_members is not None
-                    and frozenset(all_member_ids) != self._compound_members
-                ):
-                    ejected = self._compound_members - frozenset(all_member_ids)
-                    if ejected:
-                        log.info(
-                            "compound members ejected by split verdict: %s -> %s "
-                            "(ejected=%s)",
-                            sorted(self._compound_members),
-                            sorted(all_member_ids),
-                            sorted(ejected),
-                        )
-                    # If no members remain (all ejected), dissolve the compound.
-                    if not all_member_ids:
-                        log.info(
-                            "compound dissolved (all members ejected): previous=%s",
-                            sorted(self._compound_members),
-                        )
-                        catalog = self._dissolve_compound(catalog)
-                        self._compound_members = None
-                        self._compound_entity_id = None
-                        self._compound_track_to_entity = {}
-                        return catalog
-
-                prev_members = self._compound_members
-                self._compound_members = frozenset(all_member_ids)
-
-                members_unchanged = prev_members == self._compound_members
-                if not members_unchanged:
-                    if prev_members is None:
-                        log.info(
-                            "compound formed: members=%s",
-                            sorted(self._compound_members),
-                        )
-                    else:
-                        log.info(
-                            "compound members changed: %s -> %s",
-                            sorted(prev_members),
-                            sorted(self._compound_members),
-                        )
-
-                return self._merge_into_compound(
-                    catalog, frozenset(all_member_ids),
-                    reuse_id=prev_members == frozenset(all_member_ids),
-                )
-
-            # No merge groups found.
-            if self._compound_members is not None:
-                if prediction_known:
+                else:
                     log.info(
-                        "compound preserved (prediction known): members=%s",
+                        "compound members changed: %s -> %s",
+                        sorted(prev_members),
                         sorted(self._compound_members),
                     )
-                    return self._merge_into_compound(
-                        catalog, self._compound_members, reuse_id=True
-                    )
-                log.info(
-                    "compound dissolved: members=%s",
-                    sorted(self._compound_members),
-                )
-                catalog = self._dissolve_compound(catalog)
-                self._compound_members = None
-                self._compound_entity_id = None
-                self._compound_track_to_entity = {}
-            return catalog
 
-        # --- Classical fallback (co_movement heuristic) ---
-        features = extract_features(
-            cast(ObjectRegistry, logical_reg), catalog, action_ids
-        )
-
-        alive_eids = {
-            eid
-            for eid, ent in catalog.entities.items()
-            if any(
-                logical_reg.tracks.get(tid) is not None
-                and logical_reg.tracks[tid].alive
-                for tid in ent.members
+            return self._merge_into_compound(
+                catalog, frozenset(all_member_ids),
+                reuse_id=prev_members == frozenset(all_member_ids),
             )
-        }
-        alive_features = {
-            eid: f for eid, f in features.items() if eid in alive_eids
-        }
 
-        proposals = co_movement(alive_features)
-        classical_confirmed: list[frozenset[int]] = []
-        for p in proposals:
-            member_feats = [
-                alive_features[eid] for eid in p.member_ids if eid in alive_features
-            ]
-            if not all(f.ever_moves for f in member_feats):
-                continue
-            matched = p.evidence.get("actions_matched", [])
-            if not isinstance(matched, (list, tuple)):
-                continue
-            if len(matched) < self.config.compound_min_actions:
-                continue
-            classical_confirmed.append(p.member_ids)
-
-        if not classical_confirmed:
-            if self._compound_members is not None:
-                if prediction_known:
-                    log.info(
-                        "compound preserved (prediction known): members=%s",
-                        sorted(self._compound_members),
-                    )
-                    return self._merge_into_compound(
-                        catalog, self._compound_members, reuse_id=True
-                    )
+        # No merge groups found.
+        if self._compound_members is not None:
+            if prediction_known:
                 log.info(
-                    "compound dissolved: members=%s",
+                    "compound preserved (prediction known): members=%s",
                     sorted(self._compound_members),
                 )
-                catalog = self._dissolve_compound(catalog)
-                self._compound_members = None
-                self._compound_entity_id = None
-                self._compound_track_to_entity = {}
-            return catalog
-
-        all_member_ids: set[int] = set()
-        for ids in classical_confirmed:
-            all_member_ids |= ids
-
-        if not all_member_ids:
-            return catalog
-
-        # When co-movement finds a subset of the previous compound members
-        # but prediction says the compound should persist, reject the
-        # false-positive subset and keep the previous compound instead.
-        if (
-            self._compound_members is not None
-            and prediction_known
-            and frozenset(all_member_ids) != self._compound_members
-            and frozenset(all_member_ids).issubset(self._compound_members)
-        ):
+                return self._merge_into_compound(
+                    catalog, self._compound_members, reuse_id=True
+                )
             log.info(
-                "compound subset rejected (prediction known): proposed=%s previous=%s",
-                sorted(all_member_ids),
+                "compound dissolved: members=%s",
                 sorted(self._compound_members),
             )
-            return self._merge_into_compound(
-                catalog, self._compound_members, reuse_id=True
-            )
-
-        prev_members = self._compound_members
-        self._compound_members = frozenset(all_member_ids)
-
-        members_unchanged = prev_members == self._compound_members
-        if not members_unchanged:
-            if prev_members is None:
-                log.info(
-                    "compound formed: members=%s",
-                    sorted(self._compound_members),
-                )
-            else:
-                log.info(
-                    "compound members changed: %s -> %s",
-                    sorted(prev_members),
-                    sorted(self._compound_members),
-                )
-
-        return self._merge_into_compound(
-            catalog, frozenset(all_member_ids), reuse_id=members_unchanged
-        )
+            catalog = self._dissolve_compound(catalog)
+            self._compound_members = None
+            self._compound_entity_id = None
+            self._compound_track_to_entity = {}
+        return catalog
 
     def _merge_into_compound(
         self,

@@ -34,8 +34,14 @@ RESET_ACTION = 0
 def _default_entity_builder() -> EntityBuilder:
     """Create a default EntityBuilder (avoids importing entity at module level)."""
     from entity.builder import EntityBuilder as _EB
+    from grouping.combined_engine import CombinedEngine
 
-    return _EB()
+    import json
+
+    def _reject_llm(messages: list[dict[str, str]]) -> str:
+        return json.dumps([{"proposal_id": 0, "verdict": "reject", "relation": "none", "members": [], "reason": "mock reject"}])
+
+    return _EB(combined_engine=CombinedEngine(llm_call=_reject_llm))
 
 
 def _grid_fingerprint(grid: Grid) -> str:
