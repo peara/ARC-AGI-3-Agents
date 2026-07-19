@@ -8,7 +8,7 @@ from typing import cast
 
 from .context import EffectContext, add_refuted_rule
 from .counter_evidence import CounterEvidence
-from .engine_log import log_effect_context_diff
+from .engine_log import format_rule, log_effect_context_diff
 from .predict import predict
 from .residual import ResidualEntry, compute_residual
 from .rules import Effect, Rule
@@ -234,13 +234,14 @@ def inject_llm_proposals(
             proposed_keys.add(key)
             existing_keys.add(key)
             added += 1
-    if added:
-        log.info(
-            "inject_llm_proposals: +%d new (of %d proposed), total proposed=%d",
-            added,
-            len(llm_proposals),
-            len(proposed),
-        )
+    n_dup = len(llm_proposals) - added
+    log.info(
+        "inject_llm_proposals: +%d new, %d duplicate (of %d input) → proposed=%d total",
+        added,
+        n_dup,
+        len(llm_proposals),
+        len(proposed),
+    )
     return replace(ctx, proposed_rules=tuple(proposed))
 
 
@@ -407,7 +408,7 @@ def confirm_rules(
     for rule, _bucket in all_rules:
         if _rule_matches_observation(rule, state_before, action, observed):
             updated = _bump_support(updated, rule)
-            bumped.append(f"{rule.kind}[{rule.key()}]")
+            bumped.append(format_rule(rule))
     if bumped:
         log.info("confirm_rules: bumped %d rules: %s", len(bumped), bumped)
     before_counts = (
@@ -454,23 +455,23 @@ def prune_rules(
     pruned: list[str] = []
     for rule in ctx.proposed_rules:
         if _rule_mispredicted(rule, state_before, action, observed, residual):
-            pruned.append(f"proposed[{rule.key()}]")
+            pruned.append(format_rule(rule))
             continue
         proposed.append(rule)
 
-    def _filter_with_prune(rules: list[Rule], bucket: str) -> list[Rule]:
+    def _filter_with_prune(rules: list[Rule]) -> list[Rule]:
         kept: list[Rule] = []
         for r in rules:
             if _rule_mispredicted(r, state_before, action, observed, residual):
-                pruned.append(f"{bucket}[{r.key()}]")
+                pruned.append(format_rule(r))
             else:
                 kept.append(r)
         return kept
 
-    terminal = _filter_with_prune(terminal, "terminal")
-    relational = _filter_with_prune(relational, "relational")
-    movement = _filter_with_prune(movement, "movement")
-    collision = _filter_with_prune(collision, "collision")
+    terminal = _filter_with_prune(terminal)
+    relational = _filter_with_prune(relational)
+    movement = _filter_with_prune(movement)
+    collision = _filter_with_prune(collision)
 
     if pruned:
         log.info("prune_rules: removed %d: %s", len(pruned), pruned)
@@ -554,7 +555,7 @@ def _refute_contradicted_rules(
         log.info(
             "refute_rules: moved %d to refuted: %s",
             len(refuted_rules),
-            [f"{r.kind}[{r.key()}]" for r in refuted_rules],
+            [format_rule(r) for r in refuted_rules],
         )
 
     return updated

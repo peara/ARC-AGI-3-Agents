@@ -19,7 +19,11 @@ from effects.rules import Rule
 from effects.transition_history import TransitionHistory
 from vision.render import make_multimodal_user_message
 
-from .llm_rule_proposer import SYSTEM_PROMPT, parse_proposals, validate_proposal
+from .llm_rule_proposer import (
+    SYSTEM_PROMPT,
+    parse_proposals,
+    validate_proposal_with_reason,
+)
 from .probe import ProbeGoal
 
 log = logging.getLogger(__name__)
@@ -427,10 +431,24 @@ def _extract_engine_rules(bundle: dict[str, object]) -> list[Rule]:
     objects, so we convert back via ``dsl_to_rule``.  Including ``proposed``
     rules prevents the LLM from re-proposing rules already pending.
     """
+    return _extract_engine_rules_with_counts(bundle)[0]
+
+
+def _extract_engine_rules_with_counts(
+    bundle: dict[str, object],
+) -> tuple[list[Rule], int, int]:
+    """Like ``_extract_engine_rules`` but also returns per-bucket counts.
+
+    Returns ``(rules, n_confirmed, n_proposed)`` where ``n_confirmed`` and
+    ``n_proposed`` are the number of rules successfully parsed from the
+    ``confirmed`` and ``proposed`` buckets respectively.
+    """
     engine_rules_val = bundle.get("engine_rules", {})
     if not isinstance(engine_rules_val, dict):
-        return []
+        return [], 0, 0
     out: list[Rule] = []
+    n_confirmed = 0
+    n_proposed = 0
     for field in ("confirmed", "proposed"):
         val = engine_rules_val.get(field, [])
         if not isinstance(val, list):
@@ -439,9 +457,13 @@ def _extract_engine_rules(bundle: dict[str, object]) -> list[Rule]:
             if isinstance(entry, dict):
                 try:
                     out.append(dsl_to_rule(entry))
+                    if field == "confirmed":
+                        n_confirmed += 1
+                    else:
+                        n_proposed += 1
                 except (KeyError, ValueError, TypeError):
                     continue
-    return out
+    return out, n_confirmed, n_proposed
 
 
 def call_rule_proposer(
@@ -452,6 +474,7 @@ def call_rule_proposer(
     history: TransitionHistory | None = None,
     ctx: EffectContext | None = None,
     spec: _ProjectionSpec | None = None,
+    frame_index: int | None = None,
 ) -> list[Rule]:
     """Orchestrate LLM-based rule proposal: build prompt → call LLM → parse → validate → dedup.
 
@@ -486,6 +509,9 @@ def call_rule_proposer(
     spec:
         Optional projection spec (entities, dims, include_terminal) for
         validation. Required if *history* is provided.
+    frame_index:
+        Optional frame number for log correlation. When provided, log lines
+        emitted by this call are prefixed with ``frame=N ``.
 
     Returns
     -------
@@ -493,6 +519,7 @@ def call_rule_proposer(
         Validated, deduplicated rule proposals. Returns ``[]`` on any error.
     """
     try:
+        _fpfx = f"frame={frame_index} " if frame_index is not None else ""
         messages = _build_rule_proposer_messages(bundle, residual, failure_context)
         raw = llm_call(messages)
         proposals = parse_proposals(raw)
@@ -500,33 +527,64 @@ def call_rule_proposer(
         scene_entities = _extract_scene_entities(bundle)
 
         rules: list[Rule] = []
+        rejection_reasons: dict[str, int] = {}
         for proposal in proposals:
-            rule = validate_proposal(proposal, scene_entities)
+            rule, reason = validate_proposal_with_reason(proposal, scene_entities)
             if rule is not None:
                 rules.append(rule)
+            else:
+                rejection_reasons[reason] = rejection_reasons.get(reason, 0) + 1
 
-        # Dedup against confirmed engine rules
-        existing_keys = {r.key() for r in _extract_engine_rules(bundle)}
+        if rejection_reasons:
+            reasons_str = ", ".join(
+                f"{r}={n}" for r, n in sorted(rejection_reasons.items(), key=lambda x: -x[1])
+            )
+            log.info(
+                "%svalidate_proposal: %d accepted, %d rejected (%s)",
+                _fpfx,
+                len(rules),
+                len(rejection_reasons),
+                reasons_str,
+            )
+
+        existing_rules, n_confirmed, n_proposed = _extract_engine_rules_with_counts(bundle)
+        existing_keys = {r.key() for r in existing_rules}
         seen_keys: set[tuple[object, ...]] = set()
         unique: list[Rule] = []
+        n_dup_internal = 0
         for rule in rules:
             k = rule.key()
-            if k not in existing_keys and k not in seen_keys:
-                unique.append(rule)
-                seen_keys.add(k)
+            if k in seen_keys:
+                n_dup_internal += 1
+                continue
+            if k in existing_keys:
+                continue
+            unique.append(rule)
+            seen_keys.add(k)
 
         log.info(
-            "rule_proposer: parsed=%d validated=%d deduped=%d (existing=%d)",
+            "%srule_proposer: parsed=%d valid=%d duplicate=%d new=%d "
+            "(engine: confirmed=%d proposed=%d, llm_internal_dup=%d)",
+            _fpfx,
             len(proposals),
             len(rules),
+            len(rules) - len(unique),
             len(unique),
-            len(existing_keys),
+            n_confirmed,
+            n_proposed,
+            n_dup_internal,
         )
         if not unique and proposals:
+            n_failed_validation = len(proposals) - len(rules)
+            n_dup = len(rules)
             log.warning(
-                "rule_proposer: 0/%d proposals survived validation. "
+                "%srule_proposer: 0/%d proposals became new rules — "
+                "%d failed schema validation, %d duplicate of existing rules. "
                 "raw snippet: %.400s",
+                _fpfx,
                 len(proposals),
+                n_failed_validation,
+                n_dup,
                 raw,
             )
 
@@ -547,7 +605,7 @@ def call_rule_proposer(
                 if rule.is_positional_guard:
                     parts.append(f"guard={rule.guard_spec}")
                 parts.append(f"support={rule.support}")
-                log.info("rule_proposer: + %s", " ".join(parts))
+                log.info("%srule_proposer: + %s", _fpfx, " ".join(parts))
             return unique
 
         # --- Validation loop: max 3 total attempts (1 initial + 2 retries) ---
@@ -571,7 +629,8 @@ def call_rule_proposer(
             if not counter_evidence:
                 # All rules passed validation
                 log.info(
-                    "validation_loop: attempt %d, %d proposals passed",
+                    "%svalidation_loop: attempt %d, %d proposals passed",
+                    _fpfx,
                     attempt,
                     len(unique),
                 )
@@ -586,7 +645,7 @@ def call_rule_proposer(
                     if rule.is_positional_guard:
                         parts.append(f"guard={rule.guard_spec}")
                     parts.append(f"support={rule.support}")
-                    log.info("rule_proposer: + %s", " ".join(parts))
+                    log.info("%srule_proposer: + %s", _fpfx, " ".join(parts))
                 return unique
 
             if attempt >= max_attempts:
@@ -607,7 +666,8 @@ def call_rule_proposer(
                     r for r in unique if r.key() not in fired_keys_in_ce
                 ]
                 log.info(
-                    "validation_loop: attempt %d, %d proposals passed",
+                    "%svalidation_loop: attempt %d, %d proposals passed (max retries)",
+                    _fpfx,
                     attempt,
                     len(passing),
                 )
@@ -622,12 +682,13 @@ def call_rule_proposer(
                     if rule.is_positional_guard:
                         parts.append(f"guard={rule.guard_spec}")
                     parts.append(f"support={rule.support}")
-                    log.info("rule_proposer: + %s", " ".join(parts))
+                    log.info("%srule_proposer: + %s", _fpfx, " ".join(parts))
                 return passing
 
             # Counter-evidence found — retry
             log.info(
-                "validation_loop: attempt %d, %d failures, retrying",
+                "%svalidation_loop: attempt %d, %d failures, retrying",
+                _fpfx,
                 attempt,
                 len(counter_evidence),
             )
@@ -663,7 +724,7 @@ def call_rule_proposer(
                     if rule.is_positional_guard:
                         parts.append(f"guard={rule.guard_spec}")
                     parts.append(f"support={rule.support}")
-                    log.info("rule_proposer: + %s", " ".join(parts))
+                    log.info("%srule_proposer: + %s", _fpfx, " ".join(parts))
                 return unique
 
             # Append assistant response + counter-evidence user message
@@ -686,12 +747,26 @@ def call_rule_proposer(
             raw = llm_call(messages)
             proposals = parse_proposals(raw)
 
-            # Re-validate proposals against scene entities
             rules = []
+            retry_rejection_reasons: dict[str, int] = {}
             for proposal in proposals:
-                rule = validate_proposal(proposal, scene_entities)
+                rule, reason = validate_proposal_with_reason(proposal, scene_entities)
                 if rule is not None:
                     rules.append(rule)
+                else:
+                    retry_rejection_reasons[reason] = retry_rejection_reasons.get(reason, 0) + 1
+
+            if retry_rejection_reasons:
+                reasons_str = ", ".join(
+                    f"{r}={n}" for r, n in sorted(retry_rejection_reasons.items(), key=lambda x: -x[1])
+                )
+                log.info(
+                    "%svalidate_proposal (retry): %d accepted, %d rejected (%s)",
+                    _fpfx,
+                    len(rules),
+                    len(retry_rejection_reasons),
+                    reasons_str,
+                )
 
             # Re-dedup against existing + refuted keys
             seen_keys = set()
@@ -707,26 +782,27 @@ def call_rule_proposer(
                     seen_keys.add(k)
 
             log.info(
-                "rule_proposer: retry parsed=%d validated=%d deduped=%d "
+                "%srule_proposer: retry parsed=%d valid=%d duplicate=%d new=%d "
                 "(existing=%d, refuted=%d)",
+                _fpfx,
                 len(proposals),
                 len(rules),
+                len(rules) - len(unique),
                 len(unique),
                 len(existing_keys),
                 len(refuted_keys),
             )
 
             if not unique:
-                # No proposals survived validation on retry
                 return []
 
             attempt += 1
 
-        # Unreachable, but satisfy type checker
         return unique
     except Exception as exc:
         log.warning(
-            "rule_proposer: exception %r — raw snippet: %.400s",
+            "%srule_proposer: exception %r — raw snippet: %.400s",
+            _fpfx,
             exc,
             raw if "raw" in locals() else "<no response>",
             exc_info=True,

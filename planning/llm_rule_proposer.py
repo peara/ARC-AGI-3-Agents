@@ -310,41 +310,53 @@ def validate_proposal(proposal: dict, scene_entities: dict[int, dict]) -> Rule |
 
     Returns a ``Rule`` on success, ``None`` on any failure.
     """
+    return validate_proposal_with_reason(proposal, scene_entities)[0]
+
+
+def validate_proposal_with_reason(
+    proposal: dict, scene_entities: dict[int, dict]
+) -> tuple[Rule | None, str]:
+    """Like ``validate_proposal`` but also returns a rejection reason string.
+
+    Returns ``(rule, reason)`` where ``rule`` is ``None`` on failure and
+    ``reason`` is a short categorisation of the rejection (or ``""`` on
+    success). Used by ``call_rule_proposer`` to emit an INFO-level rejection
+    summary without needing DEBUG enabled.
+    """
     kind = proposal.get("kind")
     if kind not in ("delta", "terminal", "movement", "collision"):
         log.debug("validate_proposal: reject kind=%r", kind)
-        return None
+        return None, f"bad_kind:{kind!r}"
 
     guard = proposal.get("guard")
     support = proposal.get("support")
 
     if not isinstance(guard, dict):
         log.debug("validate_proposal: reject guard not dict=%r", guard)
-        return None
+        return None, "guard_not_dict"
     if not isinstance(support, int):
         log.debug("validate_proposal: reject support not int=%r", support)
-        return None
+        return None, "support_not_int"
 
     try:
         clauses = parse_guard_clauses(guard)
     except Exception as exc:
         log.debug("validate_proposal: reject guard parse error=%r", exc)
-        return None
+        return None, "guard_parse_error"
     if clauses and not any(c.get("has_action") or c.get("has_pos") or c.get("has_overlaps") for c in clauses):
         log.debug("validate_proposal: reject guard no recognized clauses=%r", guard)
-        return None
+        return None, "guard_no_clauses"
 
     if kind == "movement":
         effects = proposal.get("effects")
         if not isinstance(effects, list):
-            return None
+            return None, "effects_not_list"
         for eff in effects:
             if not isinstance(eff, dict):
-                return None
+                return None, "effect_not_dict"
             for key in ("dim", "of", "op", "value"):
                 if key not in eff:
-                    return None
-            # Normalize compass letters in orientation effects
+                    return None, f"effect_missing:{key}"
             if eff.get("dim") == "orientation" and isinstance(eff.get("value"), str):
                 from effects.state import COMPASS_TO_ORIENT
                 compass = eff["value"].upper()
@@ -354,7 +366,7 @@ def validate_proposal(proposal: dict, scene_entities: dict[int, dict]) -> Rule |
                     log.debug(
                         "validate_proposal: reject unknown compass value=%r", eff["value"]
                     )
-                    return None
+                    return None, f"bad_compass:{eff['value']!r}"
         referenced_ids = _extract_entity_ids(guard)
         for eff in effects:
             of_val = eff.get("of")
@@ -368,23 +380,21 @@ def validate_proposal(proposal: dict, scene_entities: dict[int, dict]) -> Rule |
                     eid,
                     sorted(scene_entities),
                 )
-                return None
+                return None, f"unknown_eid:{eid}"
     elif kind == "collision":
         effects = proposal.get("effects")
         if not isinstance(effects, list):
-            return None
+            return None, "effects_not_list"
         for eff in effects:
             if not isinstance(eff, dict):
-                return None
+                return None, "effect_not_dict"
             for key in ("dim", "of", "op"):
                 if key not in eff:
-                    return None
-            # "value" key is optional for revert ops; default to ""
+                    return None, f"effect_missing:{key}"
             if eff.get("op") != "revert" and "value" not in eff:
-                return None
-        # Must have at least one revert effect
+                return None, "effect_missing:value"
         if not any(eff.get("op") == "revert" for eff in effects):
-            return None
+            return None, "no_revert_effect"
         referenced_ids = _extract_entity_ids(guard)
         for eff in effects:
             of_val = eff.get("of")
@@ -398,18 +408,14 @@ def validate_proposal(proposal: dict, scene_entities: dict[int, dict]) -> Rule |
                     eid,
                     sorted(scene_entities),
                 )
-                return None
+                return None, f"unknown_eid:{eid}"
     else:
         effect = proposal.get("effect")
         if not isinstance(effect, dict):
-            return None
+            return None, "effect_not_dict"
 
-        # --- collect entity IDs from guard and effect ---
         referenced_ids = _extract_entity_ids(guard) | _extract_entity_ids(effect)
 
-        # For terminal effects, the "of" in the effect may be None
-        # (controllable placeholder); guard position clause provides the real
-        # entity. We still validate non-placeholder IDs.
         for eid in referenced_ids:
             if eid not in _CONTROLLABLE_IDS and eid not in scene_entities:
                 log.debug(
@@ -417,32 +423,30 @@ def validate_proposal(proposal: dict, scene_entities: dict[int, dict]) -> Rule |
                     eid,
                     sorted(scene_entities),
                 )
-                return None
+                return None, f"unknown_eid:{eid}"
 
         dim = effect.get("dim")
         if not isinstance(dim, str):
-            return None
+            return None, "dim_not_str"
 
-        # For terminal effects, validate terminal value
         if kind == "terminal":
             terminal_val = effect.get("terminal")
             if terminal_val not in ("win", "game_over"):
-                return None
+                return None, f"bad_terminal:{terminal_val!r}"
 
-        # For delta effects, validate delta is non-zero
         if kind == "delta":
             delta_val = effect.get("delta")
             if not isinstance(delta_val, int) or delta_val == 0:
-                return None
+                return None, "delta_zero_or_nonint"
 
     try:
         rule = dsl_to_rule(proposal)
     except (ValueError, KeyError, TypeError) as exc:
         log.debug("validate_proposal: reject dsl_to_rule error=%r proposal=%r", exc, proposal)
-        return None
+        return None, "dsl_to_rule_error"
 
     log.info("validate_proposal: accept kind=%s effects=%d", rule.kind, len(rule.effects))
-    return rule
+    return rule, ""
 
 
 # ---------------------------------------------------------------------------

@@ -531,6 +531,14 @@ class LlmCuriosity(Agent):
         observed_transition = fc.observed_transition
         if not residual and not observed_transition:
             return
+        trigger = "residual" if residual else "observed_transition"
+        log.info(
+            "frame=%d rule_proposer: triggered (%s, residual=%d, transition=%s)",
+            self._frame_index,
+            trigger,
+            len(residual),
+            bool(observed_transition),
+        )
         bundle = QueryInterface(
             scene,
             ctx,
@@ -548,10 +556,22 @@ class LlmCuriosity(Agent):
             for r in residual
         ]
         try:
-            proposals = call_rule_proposer(bundle, residual_dicts, self._proposer_call)
+            proposals = call_rule_proposer(
+                bundle, residual_dicts, self._proposer_call,
+                frame_index=self._frame_index,
+            )
             if proposals:
-                log.info("Rule proposer returned %d proposals", len(proposals))
+                log.info(
+                    "frame=%d rule_proposer: → %d new proposals injected",
+                    self._frame_index,
+                    len(proposals),
+                )
                 self.policy.inject_llm_proposals(tuple(proposals))
+            else:
+                log.info(
+                    "frame=%d rule_proposer: → 0 new proposals",
+                    self._frame_index,
+                )
         except Exception:
             log.exception("Rule proposer call failed")
 
