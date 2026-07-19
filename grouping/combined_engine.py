@@ -179,6 +179,16 @@ class CombinedEngine:
         else:
             self._prev_compound_member_ids = None
 
+        merge_count = sum(1 for g in self._confirmed.values() if g.relation == "merge")
+        log.info(
+            "grouping: confirmed=%d (merge=%d, other=%d), rejected=%d, new_proposals=%d",
+            len(self._confirmed),
+            merge_count,
+            len(self._confirmed) - merge_count,
+            len(self._rejected),
+            len(new_proposals),
+        )
+
         return list(self._confirmed.values())
 
     # ------------------------------------------------------------------
@@ -211,11 +221,9 @@ class CombinedEngine:
 
             # Group dissolved if fewer than 2 members remain.
             if len(new_member_ids) < 2:
-                log.debug(
-                    "Dissolving confirmed group %s (heuristic=%s): "
-                    + "split member %d leaves < 2 members",
+                log.info(
+                    "stale_detection: dissolved key=%s (member %d left, < 2 remaining)",
                     key,
-                    group.heuristic,
                     split.member_id,
                 )
                 del self._confirmed[key]
@@ -270,6 +278,13 @@ class CombinedEngine:
             compound_review=compound_review,
         )
 
+        if compound_review is not None:
+            log.info(
+                "compound_review: %d compounds reviewed, %d verdicts parsed",
+                len(compound_review),
+                len(compound_verdicts),
+            )
+
         self._apply_verdicts(verdicts, proposals, features)
         self._apply_compound_split_verdicts(compound_verdicts)
 
@@ -303,6 +318,12 @@ class CombinedEngine:
             confirmed_groups=confirmed_list,
             features=features,
             compound_review=compound_review,
+        )
+
+        log.info(
+            "compound_review: %d compounds reviewed (no new proposals), %d verdicts parsed",
+            len(compound_review),
+            len(compound_verdicts),
         )
 
         self._apply_compound_split_verdicts(compound_verdicts)
@@ -397,6 +418,11 @@ class CombinedEngine:
 
         for cv in compound_verdicts:
             if cv.compound_index < 0 or cv.compound_index >= len(confirmed_list):
+                log.warning(
+                    "compound_review: dropped verdict — compound_index=%d out of range "
+                    "(n_confirmed=%d)",
+                    cv.compound_index, len(confirmed_list),
+                )
                 continue
             key = key_order[cv.compound_index]
             group = self._confirmed.get(key)
@@ -404,11 +430,17 @@ class CombinedEngine:
                 continue
 
             if cv.verdict == "confirm":
-                log.debug("Compound confirmed: %s", key)
+                log.info("compound_review: confirmed key=%s", key)
                 continue
 
-            if cv.verdict == "split" and cv.split_into is not None:
-                # Determine which members to eject
+            if cv.verdict == "split":
+                if cv.split_into is None:
+                    log.warning(
+                        "compound_review: split verdict has no split_into — "
+                        "no-op (key=%s)",
+                        key,
+                    )
+                    continue
                 ejected: set[int] = set()
                 remaining_groups = cv.split_into
                 if remaining_groups:
@@ -417,7 +449,6 @@ class CombinedEngine:
                         kept_ids.update(sub)
                     ejected = set(group.member_ids) - kept_ids
                 else:
-                    # No split_into specified; no members to keep means dissolve
                     ejected = set(group.member_ids)
 
                 if not ejected:
@@ -430,7 +461,7 @@ class CombinedEngine:
 
                 if len(new_member_ids) < 2:
                     log.info(
-                        "Dissolving compound after split verdict: key=%s ejected=%s",
+                        "compound_review: dissolved key=%s ejected=%s",
                         key,
                         sorted(ejected),
                     )
@@ -445,7 +476,7 @@ class CombinedEngine:
                     )
                     updates.append((key, ejected, updated))
                     log.info(
-                        "Split compound: key=%s ejected=%s remaining=%s",
+                        "compound_review: split key=%s ejected=%s remaining=%s",
                         key,
                         sorted(ejected),
                         sorted(new_member_ids),

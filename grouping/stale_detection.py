@@ -12,12 +12,15 @@ Returns ``list[SplitProposal]`` – one proposal per offending member.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from perception.registry import ObjectRegistry
 
 from .engine import ConfirmedGroup
 from .features import EntityFeature
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -51,6 +54,9 @@ def detect_stale_groups(
        *and* from the features dict.
     """
     proposals: list[SplitProposal] = []
+
+    if not confirmed_groups:
+        return proposals
 
     for idx, group in enumerate(confirmed_groups):
         member_ids = list(group.member_ids)
@@ -149,5 +155,12 @@ def detect_stale_groups(
                                     reason="action_displacement_mismatch",
                                 )
                             )
+
+    if proposals:
+        log.info(
+            "stale_detection: %d split proposals (groups=%d)",
+            len(proposals),
+            len(confirmed_groups),
+        )
 
     return proposals
