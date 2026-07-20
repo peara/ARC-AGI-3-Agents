@@ -9,6 +9,7 @@ from effects import (
     Pos,
     entity_size_at,
     inject_llm_proposals,
+    inject_validated_proposals,
     learn_effect_context_multi,
     merge_effect_context,
 )
@@ -284,6 +285,14 @@ class RuleFirstPolicy:
             return
         if self._engine_ctx is not None:
             self._engine_ctx = inject_llm_proposals(self._engine_ctx, proposals)
+            self._ctx = self._engine_ctx
+
+    def inject_validated_proposals(self, proposals: tuple[Rule, ...]) -> None:
+        """Inject history-validated rules directly into confirmed buckets."""
+        if not proposals:
+            return
+        if self._engine_ctx is not None:
+            self._engine_ctx = inject_validated_proposals(self._engine_ctx, proposals)
             self._ctx = self._engine_ctx
 
     @property

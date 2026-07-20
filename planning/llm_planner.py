@@ -14,7 +14,7 @@ from typing import Any, Callable
 from effects.context import EffectContext
 from effects.counter_evidence import format_counter_evidence
 from effects.dsl import dsl_to_rule
-from effects.engine import _ProjectionSpec, validate_rules_against_history
+from effects.engine import ProjectionSpec, validate_rules_against_history
 from effects.rules import Rule
 from effects.transition_history import TransitionHistory
 from vision.render import make_multimodal_user_message
@@ -473,7 +473,7 @@ def call_rule_proposer(
     failure_context: dict[str, object] | None = None,
     history: TransitionHistory | None = None,
     ctx: EffectContext | None = None,
-    spec: _ProjectionSpec | None = None,
+    spec: ProjectionSpec | None = None,
     frame_index: int | None = None,
 ) -> list[Rule]:
     """Orchestrate LLM-based rule proposal: build prompt → call LLM → parse → validate → dedup.
@@ -615,7 +615,7 @@ def call_rule_proposer(
         assert spec is not None
         _history: TransitionHistory = history
         _ctx: EffectContext = ctx
-        _spec: _ProjectionSpec = spec
+        _spec: ProjectionSpec = spec
 
         refuted_keys: set[tuple[object, ...]] = set()
         max_attempts = 3
