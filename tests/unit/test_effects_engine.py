@@ -15,6 +15,7 @@ from effects import (
     confirm_rules,
     diff_effect_context,
     engine_step,
+    inject_validated_proposals,
     learn_effect_context,
     load_recording_meta,
     predict,
@@ -1119,3 +1120,96 @@ class TestRefutationDetection:
         assert len(result.refuted_rules) == 1
         assert result.refuted_rules[0].key() == term_rule.key()
         assert result.refuted_rules[0].key() == term_rule.key()
+
+
+@pytest.mark.unit
+class TestInjectValidatedProposals:
+    """inject_validated_proposals puts rules into confirmed buckets."""
+
+    def test_movement_rule_goes_to_movement_bucket(self):
+        mv = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (-1, 0)),),
+            support=0,
+            kind="movement",
+        )
+        ctx = EffectContext(confirm_threshold=1)
+        out = inject_validated_proposals(ctx, (mv,))
+        assert len(out.movement_rules) == 1
+        assert out.movement_rules[0].support == ctx.confirm_threshold
+        assert len(out.proposed_rules) == 0
+        assert len(out.terminal_rules) == 0
+        assert len(out.relational_rules) == 0
+        assert len(out.collision_rules) == 0
+
+    def test_collision_rule_goes_to_collision_bucket(self):
+        col = Rule(
+            guard_spec={"all": [{"action": 1}, {"dim": "pos", "of": 0, "eq": [1, 1]}]},
+            effects=(Effect("pos", 0, "revert", None),),
+            support=0,
+            kind="collision",
+        )
+        ctx = EffectContext(confirm_threshold=1)
+        out = inject_validated_proposals(ctx, (col,))
+        assert len(out.collision_rules) == 1
+        assert out.collision_rules[0].support == ctx.confirm_threshold
+
+    def test_terminal_rule_goes_to_terminal_bucket(self):
+        term = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("terminal", 0, "set", "win"),),
+            support=0,
+            kind="terminal",
+        )
+        ctx = EffectContext(confirm_threshold=1)
+        out = inject_validated_proposals(ctx, (term,))
+        assert len(out.terminal_rules) == 1
+        assert out.terminal_rules[0].support == ctx.confirm_threshold
+
+    def test_delta_rule_goes_to_relational_bucket(self):
+        delta = Rule(
+            guard_spec={"action": 3},
+            effects=(Effect("size", 5, "delta", 1),),
+            support=0,
+            kind="delta",
+        )
+        ctx = EffectContext(confirm_threshold=1)
+        out = inject_validated_proposals(ctx, (delta,))
+        assert len(out.relational_rules) == 1
+        assert out.relational_rules[0].support == ctx.confirm_threshold
+
+    def test_duplicate_of_confirmed_is_dropped(self):
+        existing = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (-1, 0)),),
+            support=5,
+            kind="movement",
+        )
+        dup = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (-1, 0)),),
+            support=0,
+            kind="movement",
+        )
+        ctx = EffectContext(movement_rules=(existing,), confirm_threshold=1)
+        out = inject_validated_proposals(ctx, (dup,))
+        assert len(out.movement_rules) == 1
+        assert out.movement_rules[0].support == 5
+
+    def test_rule_promoted_from_proposed_is_removed_from_proposed(self):
+        mv = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (-1, 0)),),
+            support=0,
+            kind="movement",
+        )
+        ctx = EffectContext(proposed_rules=(mv,), confirm_threshold=1)
+        out = inject_validated_proposals(ctx, (mv,))
+        assert len(out.movement_rules) == 1
+        assert out.movement_rules[0].support == 1
+        assert len(out.proposed_rules) == 0
+
+    def test_empty_input_returns_unchanged(self):
+        ctx = EffectContext(confirm_threshold=1)
+        out = inject_validated_proposals(ctx, ())
+        assert out is ctx

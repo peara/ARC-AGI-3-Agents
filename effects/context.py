@@ -71,7 +71,7 @@ class EffectContext:
     collision_rules: tuple[Rule, ...] = ()
     refuted_rules: tuple[Rule, ...] = ()
     available_actions: tuple[int, ...] = ()
-    confirm_threshold: int = 2
+    confirm_threshold: int = 1
     latent_defaults: dict[tuple[int, str], object] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, object]:

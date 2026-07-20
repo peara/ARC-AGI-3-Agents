@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import replace
-from typing import cast
+from typing import Protocol, cast
 
 from .context import EffectContext, add_refuted_rule
 from .counter_evidence import CounterEvidence
@@ -243,6 +243,97 @@ def inject_llm_proposals(
         len(proposed),
     )
     return replace(ctx, proposed_rules=tuple(proposed))
+
+
+def inject_validated_proposals(
+    ctx: EffectContext, validated: tuple[Rule, ...]
+) -> EffectContext:
+    """Inject history-validated rules directly into confirmed buckets.
+
+    Rules that passed the ``call_rule_proposer`` validation loop have
+    been checked against every historical transition and do not
+    contradict any past observation. They are therefore promoted
+    immediately into the confirmed bucket for their kind, with
+    ``support=confirm_threshold`` (so ``_promote_rules`` would have
+    promoted them anyway on the next ``engine_step`` — this skips the
+    one-frame delay).
+
+    Deduplicates against existing confirmed rules AND against
+    ``proposed_rules`` (a rule already sitting in ``proposed_rules`` is
+    removed from there when promoted, to avoid the same rule sitting in
+    both buckets).
+
+    Public entry point — call this instead of ``inject_llm_proposals``
+    when the caller has run the validation loop (i.e. passed
+    ``history``/``ctx``/``spec`` to ``call_rule_proposer``).
+    """
+    if not validated:
+        return ctx
+
+    terminal = list(ctx.terminal_rules)
+    relational = list(ctx.relational_rules)
+    movement = list(ctx.movement_rules)
+    collision = list(ctx.collision_rules)
+    proposed = list(ctx.proposed_rules)
+
+    terminal_keys = {r.key() for r in terminal}
+    relational_keys = {r.key() for r in relational}
+    movement_keys = {r.key() for r in movement}
+    collision_keys = {r.key() for r in collision}
+    proposed_keys = {r.key() for r in proposed}
+    all_confirmed_keys = terminal_keys | relational_keys | movement_keys | collision_keys
+
+    added = 0
+    n_dup = 0
+    n_promoted_from_proposed = 0
+    for rule in validated:
+        key = rule.key()
+        if key in all_confirmed_keys:
+            n_dup += 1
+            continue
+        stamped = replace(rule, support=ctx.confirm_threshold)
+        if rule.kind == "terminal":
+            terminal.append(stamped)
+            terminal_keys.add(key)
+        elif rule.kind == "movement":
+            movement.append(stamped)
+            movement_keys.add(key)
+        elif rule.kind == "collision":
+            collision.append(stamped)
+            collision_keys.add(key)
+        else:
+            relational.append(stamped)
+            relational_keys.add(key)
+        all_confirmed_keys.add(key)
+        # If the same rule was sitting in proposed_rules, drop it from there
+        # so it doesn't linger in both buckets.
+        if key in proposed_keys:
+            proposed = [r for r in proposed if r.key() != key]
+            proposed_keys.discard(key)
+            n_promoted_from_proposed += 1
+        added += 1
+
+    log.info(
+        "inject_validated_proposals: +%d confirmed, %d duplicate, %d promoted-from-proposed "
+        "(of %d input) → term=%d rel=%d move=%d col=%d proposed=%d",
+        added,
+        n_dup,
+        n_promoted_from_proposed,
+        len(validated),
+        len(terminal),
+        len(relational),
+        len(movement),
+        len(collision),
+        len(proposed),
+    )
+    return replace(
+        ctx,
+        terminal_rules=tuple(terminal),
+        relational_rules=tuple(relational),
+        movement_rules=tuple(movement),
+        collision_rules=tuple(collision),
+        proposed_rules=tuple(proposed),
+    )
 
 
 def propose_rules(
@@ -633,11 +724,19 @@ class _ProjectionSpec:
         self.include_terminal = include_terminal
 
 
+class ProjectionSpec(Protocol):
+    """Structural type for projection specs (satisfied by _ProjectionSpec and PlanSpec)."""
+
+    entities: list[int]
+    dims: tuple[str, ...]
+    include_terminal: bool
+
+
 def validate_rules_against_history(
     proposed_rules: tuple[Rule, ...],
     ctx: EffectContext,
     history: TransitionHistory,
-    spec: _ProjectionSpec,
+    spec: ProjectionSpec,
 ) -> list[CounterEvidence]:
     """Validate proposed rules against historical transitions.
 
