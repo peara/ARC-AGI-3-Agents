@@ -18,6 +18,7 @@ from arcengine import FrameData, GameAction, GameState
 
 from agents.llm_client import LLMClient
 from effects.engine_step_result import EngineStepResult, run_engine_step
+from effects.transition_history import TransitionHistory
 from entity import EntityBuilder
 from grouping import CombinedEngine
 from perception.session import RESET_ACTION, PerceptionSession, SceneSnapshot
@@ -152,6 +153,8 @@ class LlmCuriosity(Agent):
         self._engine_step_pending: tuple | None = None
         self._last_engine_result: EngineStepResult | None = None
 
+        self._history: TransitionHistory = TransitionHistory()
+
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
         return latest_frame.state is GameState.WIN
 
@@ -193,6 +196,7 @@ class LlmCuriosity(Agent):
         self._tried_fallback_unknowns.clear()
         self._engine_step_pending = None
         self._last_engine_result = None
+        self._history = TransitionHistory()
         if self._mechanics_notepad is not None:
             self._mechanics_notepad.reset()
         self._prev_levels_completed = 0
@@ -243,9 +247,17 @@ class LlmCuriosity(Agent):
                     observed=observed,
                     spec=spec,
                     controllable_id=ctrl_id,
+                    history=self._history,
                 )
                 self._last_engine_result = result
                 self.policy.update_context(result.ctx)
+                if result.observed_transition is None:
+                    self._history.append(
+                        state_before=state_before,
+                        action=action,
+                        state_after=observed,
+                        frame_idx=self._scene.frame_idx,
+                    )
             self._engine_step_pending = None
 
         _residual = self._last_engine_result.residual if self._last_engine_result else ()
@@ -563,14 +575,17 @@ class LlmCuriosity(Agent):
             proposals = call_rule_proposer(
                 bundle, residual_dicts, self._proposer_call,
                 frame_index=self._frame_index,
+                history=self._history,
+                ctx=ctx,
+                spec=fc.spec,
             )
             if proposals:
                 log.info(
-                    "frame=%d rule_proposer: → %d new proposals injected",
+                    "frame=%d rule_proposer: → %d validated proposals promoted to confirmed",
                     self._frame_index,
                     len(proposals),
                 )
-                self.policy.inject_llm_proposals(tuple(proposals))
+                self.policy.inject_validated_proposals(tuple(proposals))
             else:
                 log.info(
                     "frame=%d rule_proposer: → 0 new proposals",
