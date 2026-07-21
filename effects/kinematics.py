@@ -108,20 +108,16 @@ def entity_cells_at(
 def entity_orientation_at(
     reg: ObjectRegistry, catalog: EntityCatalog, entity_id: int, frame_idx: int
 ) -> Orientation | None:
-    """Return the orientation of a compound entity at a frame.
+    """Return the orientation of an entity at a frame.
 
-    Uses the smallest member as 'head' and largest as 'body'.
-    Returns 0-3 (cyclic) or None for entities with insufficient data.
+    Reads orientation from the entity's meta dict, which is populated by
+    the entity builder for any entity with >= 2 cells. Returns 0-3 (cyclic)
+    or None for entities with insufficient data.
     """
-    from perception.orientation import extract_orientation
-
     ent = catalog.entities.get(entity_id)
     if ent is None:
         return None
-    member_tracks: list[Track] = []
-    for tid in ent.members:
-        track = reg.tracks.get(tid)
-        if track is None or not track.alive or not track.observations:
-            continue
-        member_tracks.append(track)
-    return extract_orientation(member_tracks)
+    orient = ent.meta.get("orientation")
+    if orient is None:
+        return None
+    return int(orient)
