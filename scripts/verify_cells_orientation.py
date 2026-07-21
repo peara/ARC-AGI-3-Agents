@@ -125,7 +125,7 @@ def main() -> None:
                 f"pos={pos} "
                 f"size={size_val} "
                 f"cells={'YES (' + str(len(cells)) + ' px)' if cells else 'NO'} "
-                f"orient={'orient=' + str(orient) if orient is not None else 'None'}"
+                f"orient={str(orient) if orient is not None else 'None'}"
             )
 
             # Verify cells = union of member track cells

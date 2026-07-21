@@ -9,7 +9,6 @@ from perception.entities import CONTROLLABLE_ENTITY_ID
 from .guard_parse import parse_guard_clauses
 from .rules import Effect, Rule
 
-
 # TypedDict-style aliases for clarity (plain dicts at runtime).
 DslRule = dict[str, Any]
 
