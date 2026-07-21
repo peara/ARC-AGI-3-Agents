@@ -134,8 +134,6 @@ class QueryInterface:
             ent = self._scene.catalog.entities.get(eid)
             if ent is None or ent.meta.get("orientation") is None:
                 continue
-            if "orientation" not in ent.meta:
-                continue
             actions_covered = covered_actions.get(eid, set())
             actions_unknown = sorted(all_actions - actions_covered) if all_actions else []
             gaps.append(
@@ -145,7 +143,7 @@ class QueryInterface:
                     "has_orientation_rules": False,
                     "actions_covered": sorted(actions_covered),
                     "actions_unknown": actions_unknown,
-                     "note": "entity with pos rules but no orientation rules",
+                    "note": "entity with pos rules but no orientation rules",
                 }
             )
         return gaps
