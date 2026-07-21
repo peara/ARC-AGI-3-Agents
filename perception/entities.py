@@ -39,7 +39,7 @@ class Entity:
     members: frozenset[int]
     composition: str  # "singleton" | "compound" | "container" (later)
     role: str | None = None
-    centroid: tuple[int, int] | None = None
+    centroid: tuple[float, float] | None = None
     size: int | None = None
     cells: frozenset[tuple[int, int]] | None = None
     bbox: tuple[int, int, int, int] | None = None
@@ -55,7 +55,7 @@ def compute_entity_aggregates(
     members: frozenset[int],
     frame_idx: int,
 ) -> tuple[
-    tuple[int, int] | None,
+    tuple[float, float] | None,
     int | None,
     frozenset[tuple[int, int]] | None,
     tuple[int, int, int, int] | None,
@@ -88,11 +88,11 @@ def compute_entity_aggregates(
     # 2. Size (Sum of member sizes)
     total_size = sum(obs.size for obs in member_obs)
 
-    # 3. Centroid (Mean of member centroids, rounded to int)
+    # 3. Centroid (Mean of member centroids)
     sum_r = sum(obs.centroid[0] for obs in member_obs)
     sum_c = sum(obs.centroid[1] for obs in member_obs)
     count = len(member_obs)
-    centroid = (round(sum_r / count), round(sum_c / count))
+    centroid = (sum_r / count, sum_c / count)
 
     # 4. BBox (min_r, min_c, max_r, max_c)
     if not all_cells:

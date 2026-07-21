@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
-from effects import Pos, entity_exists_at, entity_pos_at, entity_size_at
+from effects import entity_exists_at, entity_pos_at, entity_size_at
 
 from ..entities import Entity, EntityCatalog, LifecycleState
 from ..registry import ObjectRegistry, derive_roles
@@ -50,7 +50,7 @@ class SceneSnapshot:
         ent = self.controllable()
         return ent.id if ent else None
 
-    def controllable_pos(self) -> Pos | None:
+    def controllable_pos(self) -> tuple[float, float] | None:
         ctrl = self.controllable()
         if ctrl is not None and ctrl.centroid is not None:
             return ctrl.centroid
@@ -59,7 +59,7 @@ class SceneSnapshot:
             return None
         return entity_pos_at(self.registry, self.catalog, eid, self.frame_idx)
 
-    def entity_pos(self, entity_id: int) -> Pos | None:
+    def entity_pos(self, entity_id: int) -> tuple[float, float] | None:
         ent = self.catalog.entities.get(entity_id)
         if ent is not None and ent.centroid is not None:
             return ent.centroid
@@ -219,8 +219,8 @@ class SceneSnapshot:
                     },
                 }
             )
+
         ctrl = self.controllable()
-        motion = self.catalog.observed_motion_by_action()
         violations = [
             dict(v) for v in self.determinism_violations
             if int(v.get("frame_idx", -1)) <= self.frame_idx
@@ -232,13 +232,8 @@ class SceneSnapshot:
             "n_tracks": len(self.registry.tracks),
             "controllable_id": ctrl.id if ctrl else None,
             "controllable_pos": (
-                list(self.controllable_pos())
+                list(cast(tuple[float, float], self.controllable_pos()))
                 if self.controllable_pos() is not None
-                else None
-            ),
-            "motion_by_action": (
-                {str(k): list(v) for k, v in motion.items()}
-                if motion
                 else None
             ),
             "entities": entities,
@@ -253,6 +248,7 @@ class SceneSnapshot:
             out["last_action_id"] = self.last_step.action_id
             out["n_subframes"] = self.last_step.n_subframes
         return out
+
 
     def summary_json(self) -> str:
         """``summary()`` as a JSON string (round-trip safe)."""

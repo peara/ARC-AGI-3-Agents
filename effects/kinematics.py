@@ -5,7 +5,7 @@ from __future__ import annotations
 from perception.entities import EntityCatalog, LifecycleState
 from perception.registry import ObjectRegistry, Track
 
-from .state import Cells, Orientation, Pos
+from .state import Cells, Orientation
 
 
 def observation_at(track: Track, frame_idx: int):
@@ -17,7 +17,7 @@ def observation_at(track: Track, frame_idx: int):
 
 def entity_pos_at(
     reg: ObjectRegistry, catalog: EntityCatalog, entity_id: int, frame_idx: int
-) -> Pos | None:
+) -> tuple[float, float] | None:
     ent = catalog.entities.get(entity_id)
     if ent is None:
         return None
@@ -34,8 +34,8 @@ def entity_pos_at(
         cents.append(obs.centroid)
     if not cents:
         return None
-    r = int(round(sum(c[0] for c in cents) / len(cents)))
-    c = int(round(sum(c[1] for c in cents) / len(cents)))
+    r = sum(c[0] for c in cents) / len(cents)
+    c = sum(c[1] for c in cents) / len(cents)
     return (r, c)
 
 

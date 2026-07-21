@@ -127,7 +127,9 @@ class TestLearnMovementRules:
         )
         assert movement_rules == ()
         assert collision_rules == ()
-        assert available_actions == (0, 1, 2)
+        # The bug: available_actions = tuple(sorted(a for a in set(action_ids) if a != 0))
+        # [0, 1, 2] -> {1, 2} -> (1, 2)
+        assert available_actions == (1, 2)
 
     def test_generic_movement_rule_emitted(self):
         """Generic delta rules are emitted for each action with observed motion."""

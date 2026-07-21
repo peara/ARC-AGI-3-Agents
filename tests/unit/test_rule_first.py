@@ -8,7 +8,7 @@ import pytest
 
 from effects.context import EffectContext
 from effects.rules import Effect, Rule
-from perception.entities import Entity, EntityCatalog
+from perception.entities import Entity, EntityCatalog, LifecycleState
 from perception.registry import ObjectRegistry, Observation, Track
 from perception.session import RESET_ACTION, PerceptionSession, SceneSnapshot
 from planning.heuristics import ExplorationConfig
@@ -378,6 +378,61 @@ class TestRuleFirstPolicy:
         policy.on_observed(scene)
 
         assert policy.status().diverged is False
+
+    def test_dead_entity_excluded_from_spec(self):
+        policy = RuleFirstPolicy(
+            action_space=[1, 2, 3, 4],
+            config=ExplorationConfig(min_random_steps=0, seed=42),
+        )
+
+        reg, catalog = _make_registry_and_catalog(
+            positions={0: [(0, 0)], 10: [(1, 1)], 12: [(2, 2)]},
+        )
+        catalog.entities[0].lifecycle = LifecycleState.MERGED
+        catalog.entities[10].lifecycle = LifecycleState.MERGED
+        catalog.entities[12].lifecycle = LifecycleState.ACTIVE
+
+        scene = _scene(reg, catalog)
+
+        rule0 = _movement_rule(entity_id=0, action=1, dr=0, dc=1)
+        rule10 = _movement_rule(entity_id=10, action=1, dr=0, dc=1)
+        policy._ctx = EffectContext(
+            movement_rules=(rule0, rule10),
+            available_actions=(1,),
+        )
+
+        spec = policy._engine_plan_spec(scene)
+
+        assert 12 in spec.entities, f"Expected active entity 12 in spec, got {spec.entities}"
+        assert 0 not in spec.entities, f"Expected merged entity 0 to be filtered out, got {spec.entities}"
+        assert 10 not in spec.entities, f"Expected merged entity 10 to be filtered out, got {spec.entities}"
+
+    def test_residual_excludes_dead_entities(self):
+        policy = RuleFirstPolicy(
+            action_space=[1, 2, 3, 4],
+            config=ExplorationConfig(min_random_steps=0, seed=42),
+        )
+
+        reg, catalog = _make_registry_and_catalog(
+            positions={0: [(0, 0)], 10: [(1, 1)], 12: [(2, 2)]},
+        )
+        catalog.entities[0].lifecycle = LifecycleState.MERGED
+        catalog.entities[10].lifecycle = LifecycleState.MERGED
+        catalog.entities[12].lifecycle = LifecycleState.ACTIVE
+        scene = _scene(reg, catalog)
+
+        rule0 = _movement_rule(entity_id=0, action=1, dr=0, dc=1)
+        rule10 = _movement_rule(entity_id=10, action=1, dr=0, dc=1)
+        policy._ctx = EffectContext(
+            movement_rules=(rule0, rule10),
+            available_actions=(1,),
+        )
+
+        state = policy._snapshot_state(scene)
+        
+        assert any(eid == 12 for eid, _ in state.relevant), "Active entity 12 should be relevant"
+        assert not any(eid == 0 for eid, _ in state.relevant), "Merged entity 0 should not be relevant"
+        assert not any(eid == 10 for eid, _ in state.relevant), "Merged entity 10 should not be relevant"
 
 
 # ---------------------------------------------------------------------------

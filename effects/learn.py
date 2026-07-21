@@ -35,7 +35,7 @@ def learn_terminal_rules(
     controllable_id: int,
 ) -> tuple[Rule, ...]:
     """Learn terminal transitions keyed by ``(pos_before, action)``."""
-    counts: dict[tuple[tuple[int, int], int], dict[Terminal, int]] = defaultdict(
+    counts: dict[tuple[tuple[float, float], int], dict[Terminal, int]] = defaultdict(
         lambda: defaultdict(int)
     )
     n = min(len(action_ids), len(frame_meta))
@@ -81,7 +81,7 @@ def learn_counter_rules(
         eid for eid, ent in catalog.entities.items() if ent.role == "counter"
     )
     counts: dict[tuple[int, int, int], int] = defaultdict(int)
-    pos_counts: dict[tuple[int, int, int, tuple[int, int]], int] = defaultdict(int)
+    pos_counts: dict[tuple[int, int, int, tuple[float, float]], int] = defaultdict(int)
 
     for eid in counter_ids:
         for fidx in range(1, len(action_ids)):
@@ -153,7 +153,7 @@ def learn_movement_rules(
     if ent is None:
         return ((), (), available_actions)
 
-    known_transitions: dict[tuple[tuple[int, int], int], tuple[int, int]] = {}
+    known_transitions: dict[tuple[tuple[float, float], int], tuple[float, float]] = {}
     movement_rules: list[Rule] = []
     collision_rules: list[Rule] = []
 

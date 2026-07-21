@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Literal, Protocol, cast
 
 from .guard_parse import evaluate_guard, parse_guard_clauses
-from .state import Orientation, Pos, SceneState, Terminal
+from .state import Pos, SceneState, Terminal
 
 # ---------------------------------------------------------------------------
 # Canonical helpers for Rule.key()
@@ -77,7 +77,7 @@ class Effect:
     dim: str
     of: int
     op: Literal["delta", "set", "revert"]
-    value: int | tuple[int, int] | str
+    value: int | tuple[int | float, int | float] | str
 
     def __post_init__(self) -> None:
         if self.op == "delta" and self.value == 0:
@@ -168,7 +168,7 @@ class Rule:
                     cur = result.orientation(effect.of)
                     if cur is not None:
                         result = result.with_orientation(
-                            effect.of, (cur + int(effect.value)) % 4
+                            effect.of, (cur + cast(int, effect.value)) % 4
                         )
                 else:
                     if not isinstance(effect.value, int):
@@ -182,7 +182,7 @@ class Rule:
                 result = result.with_terminal(cast(Terminal, effect.value))
             else:
                 if effect.dim == "orientation":
-                    result = result.with_orientation(effect.of, int(effect.value))
+                    result = result.with_orientation(effect.of, int(cast(int | float, effect.value)))
                 else:
                     result = result.set_dim(effect.of, effect.dim, effect.value)
         return result

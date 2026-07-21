@@ -94,7 +94,10 @@ class RuleFirstPolicy:
         """
 
         rule_ids = self._rule_entity_ids()
-        entities: list[int] = list(rule_ids)
+        entities: list[int] = [
+            eid for eid in rule_ids
+            if eid in scene.catalog.entities and scene.catalog.entities[eid].lifecycle.value == "active"
+        ]
         dims: list[str] = ["pos"]
         for eid in sorted(scene.catalog.entities):
             ent = scene.catalog.entities[eid]

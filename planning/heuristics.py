@@ -22,7 +22,7 @@ class ExplorationConfig:
     log_engine: bool = False
 
 
-def within(pos: Pos | None, target: Pos | None, radius: int) -> bool:
+def within(pos: tuple[float, float] | None, target: tuple[float, float] | None, radius: int) -> bool:
     if pos is None or target is None:
         return False
     return abs(pos[0] - target[0]) + abs(pos[1] - target[1]) <= radius

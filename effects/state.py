@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-Pos = tuple[int, int]
+Pos = tuple[int | float, int | float]
 Cells = frozenset[tuple[int, int]]  # pixel positions of an entity
 Terminal = Literal["alive", "game_over", "win"]
 EntityDim = tuple[int, tuple[str, object]]

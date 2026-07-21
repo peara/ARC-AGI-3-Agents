@@ -87,7 +87,7 @@ def test_entity_field_defaults() -> None:
 
 
 def test_singleton_aggregate() -> None:
-    """One track with one observation -> centroid matches obs.centroid (rounded), 
+    """One track with one observation -> centroid matches obs.centroid, 
     size matches obs.size, cells match, bbox matches cells.
     """
     # Use specific cells to ensure bbox and centroid are predictable
@@ -99,14 +99,14 @@ def test_singleton_aggregate() -> None:
 
     centroid, size, cells_res, bbox = compute_entity_aggregates(reg, frozenset({1}), 0)
 
-    assert centroid == (10, 10), f"Expected rounded (10,10), got {centroid}"
+    assert centroid == (10.5, 10.5), f"Expected (10.5,10.5), got {centroid}"
     assert size == 4
     assert cells_res == cells
     assert bbox == (10, 10, 11, 11)
 
 
 def test_compound_aggregate() -> None:
-    """Two tracks with observations -> centroid is mean (rounded), size is sum, 
+    """Two tracks with observations -> centroid is mean, size is sum, 
     cells is union, bbox is min/max over union.
     """
     # Track 1: 2x2 square at (0,0)
@@ -123,8 +123,8 @@ def test_compound_aggregate() -> None:
 
     centroid, size, cells_res, bbox = compute_entity_aggregates(reg, frozenset({1, 2}), 0)
 
-    # Mean centroid: ( (0.5+2.5)/2, (0.5+2.5)/2 ) = (1.5, 1.5) -> round -> (2, 2)
-    assert centroid == (2, 2)
+    # Mean centroid: ( (0.5+2.5)/2, (0.5+2.5)/2 ) = (1.5, 1.5)
+    assert centroid == (1.5, 1.5)
     assert size == 8
     assert cells_res == cells1 | cells2
     assert bbox == (0, 0, 3, 3)
