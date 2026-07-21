@@ -42,8 +42,6 @@ from .predict import Prediction, is_terminal_dead_end, predict, replay_predicted
 from .residual import ResidualEntry, compute_residual
 from .rules import Effect, Rule
 from .state import (
-    COMPASS_TO_ORIENT,
-    ORIENT_TO_COMPASS,
     Orientation,
     Pos,
     SceneState,
@@ -53,12 +51,10 @@ from .state import (
 from .transition_history import Transition, TransitionHistory
 
 __all__ = [
-    "COMPASS_TO_ORIENT",
     "Effect",
     "EngineStepResult",
     "GuardClause",
     "Orientation",
-    "ORIENT_TO_COMPASS",
     "dsl_to_rule",
     "rule_to_dsl",
     "EffectContext",

@@ -14,11 +14,7 @@ TERMINAL_ALIVE: Terminal = "alive"
 TERMINAL_GAME_OVER: Terminal = "game_over"
 TERMINAL_WIN: Terminal = "win"
 
-# Orientation encoding: 0=N, 1=E, 2=S, 3=W (clockwise from north).
 Orientation = int
-
-ORIENT_TO_COMPASS: dict[int, str] = {0: "N", 1: "E", 2: "S", 3: "W"}
-COMPASS_TO_ORIENT: dict[str, int] = {"N": 0, "E": 1, "S": 2, "W": 3}
 
 
 def terminal_from_state_name(
@@ -42,7 +38,7 @@ class SceneState:
         pos         – (row, col) centroid
         size        – int, number of cells
         cells       – frozenset[(row, col)], absolute pixel positions
-        orientation – int (0=N, 1=E, 2=S, 3=W) for compound entities
+        orientation – int (0-3, cyclic mod 4) for entities with >= 2 cells
     """
 
     relevant: tuple[EntityDim, ...]
