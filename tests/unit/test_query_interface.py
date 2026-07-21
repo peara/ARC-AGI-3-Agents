@@ -236,10 +236,11 @@ class TestQueryInterface:
         residual = (
             ResidualEntry(entity_id=5, dim="size", predicted=3, observed=1),
             ResidualEntry(entity_id=None, dim="terminal", predicted="NOT_FINISHED", observed="GAME_OVER"),
+            ResidualEntry(entity_id=10, dim="pos", predicted=(10.333, 20.667), observed=(10.0, 20.0)),
         )
         qi = QueryInterface(scene, residual=residual)
         bundle = qi.bundle()
-        assert len(bundle["residual"]) == 2
+        assert len(bundle["residual"]) == 3
         assert bundle["residual"][0] == {
             "dim": "size",
             "entity_id": 5,
@@ -252,6 +253,40 @@ class TestQueryInterface:
             "predicted": "NOT_FINISHED",
             "observed": "GAME_OVER",
         }
+        assert bundle["residual"][2] == {
+            "dim": "pos",
+            "entity_id": 10,
+            "predicted": [10.33, 20.67],
+            "observed": [10.0, 20.0],
+        }
+
+    def test_pos_rendered_2_decimal(self):
+        state_mock = MagicMock()
+        state_mock.fingerprint.return_value = (
+            (10, ("pos", (10.3333, 20.6667))),
+            (10, ("size", 5)),
+        )
+        
+        ua = MagicMock()
+        ua.action = 1
+        ua.state = state_mock
+        
+        scene = _make_scene()
+        qi_unk = QueryInterface(scene, unknowns=(ua,))
+        bundle_unk = qi_unk.bundle()
+        fp_unk = bundle_unk["unknowns"][0]["state"]
+        assert fp_unk[0][1][1] == [10.33, 20.67]
+        assert fp_unk[1][1][1] == 5
+
+        state_before = MagicMock()
+        state_before.fingerprint.return_value = ((10, ("pos", (1.111, 2.222))),)
+        state_after = MagicMock()
+        state_after.fingerprint.return_value = ((10, ("pos", (3.333, 4.444))),)
+        
+        qi_trans = QueryInterface(scene, observed_transition=(state_before, 1, state_after))
+        bundle_trans = qi_trans.bundle()
+        assert bundle_trans["observed_transition"]["before"][0][1][1] == [1.11, 2.22]
+        assert bundle_trans["observed_transition"]["after"][0][1][1] == [3.33, 4.44]
 
     def test_bundle_with_pruned_rules(self):
         pruned = Rule(

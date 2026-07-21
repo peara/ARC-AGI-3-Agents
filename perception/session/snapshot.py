@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from effects import entity_exists_at, entity_pos_at, entity_size_at
 
@@ -180,13 +180,21 @@ class SceneSnapshot:
         Downstream EffectModel and LLM planners consume this dict; perception
         does not predict or assign game semantics beyond measured roles.
         """
+        def _render_pos(val: object) -> object:
+            if isinstance(val, (tuple, list)) and len(val) == 2:
+                try:
+                    return [round(float(val[0]), 2), round(float(val[1]), 2)]
+                except (TypeError, ValueError):
+                    return val
+            return val
+
         track_roles = derive_roles(self.registry)
         entities: list[dict[str, object]] = []
         for eid, ent in sorted(self.catalog.entities.items()):
             if ent.lifecycle in (LifecycleState.DORMANT, LifecycleState.DEAD):
                 continue
             pos_raw = ent.centroid or self.entity_pos(eid)
-            pos = list(pos_raw) if pos_raw is not None else None
+            pos = _render_pos(pos_raw) if pos_raw is not None else None
             bbox = (
                 list(ent.bbox)
                 if ent.bbox is not None
@@ -232,7 +240,7 @@ class SceneSnapshot:
             "n_tracks": len(self.registry.tracks),
             "controllable_id": ctrl.id if ctrl else None,
             "controllable_pos": (
-                list(cast(tuple[float, float], self.controllable_pos()))
+                _render_pos(self.controllable_pos())
                 if self.controllable_pos() is not None
                 else None
             ),

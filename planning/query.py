@@ -20,6 +20,16 @@ class UnknownAction:
     state: SceneState
 
 
+def _render_pos(val: object) -> object:
+    """Round position tuples to 2 decimal places for LLM consumption."""
+    if isinstance(val, (tuple, list)) and len(val) == 2:
+        try:
+            return [round(float(val[0]), 2), round(float(val[1]), 2)]
+        except (TypeError, ValueError):
+            return val
+    return val
+
+
 class QueryInterface:
     """Assemble an LLM-consumable bundle from a ``SceneSnapshot`` and optional ``EffectContext``."""
 
@@ -187,6 +197,8 @@ class QueryInterface:
                 "entity_id": r.entity_id,
             }
             for key, val in [("predicted", r.predicted), ("observed", r.observed)]:
+                if r.dim == "pos":
+                    val = _render_pos(val)
                 entry[key] = val
             out.append(entry)
         return out
@@ -205,8 +217,19 @@ class QueryInterface:
         if self._unknowns is None:
             return []
         capped = self._unknowns[:5]
+
+        def render_fingerprint(fp: tuple[object, ...]) -> list[object]:
+            out: list[object] = []
+            for item in fp:
+                if isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], int):
+                    eid, (dim, val) = item
+                    out.append((eid, (dim, _render_pos(val) if dim == "pos" else val)))
+                else:
+                    out.append(item)
+            return out
+
         return [
-            {"action": ua.action, "state": ua.state.fingerprint()}
+            {"action": ua.action, "state": render_fingerprint(ua.state.fingerprint())}
             for ua in capped
         ]
 
@@ -214,8 +237,19 @@ class QueryInterface:
         if self._observed_transition is None:
             return {}
         state_before, action, state_after = self._observed_transition
+
+        def render_fingerprint(fp: tuple[object, ...]) -> list[object]:
+            out: list[object] = []
+            for item in fp:
+                if isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], int):
+                    eid, (dim, val) = item
+                    out.append((eid, (dim, _render_pos(val) if dim == "pos" else val)))
+                else:
+                    out.append(item)
+            return out
+
         return {
             "action": action,
-            "before": state_before.fingerprint(),
-            "after": state_after.fingerprint(),
+            "before": render_fingerprint(state_before.fingerprint()),
+            "after": render_fingerprint(state_after.fingerprint()),
         }
