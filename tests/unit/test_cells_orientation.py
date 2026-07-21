@@ -1,5 +1,5 @@
 import pytest
-from effects.state import SceneState, ORIENT_TO_COMPASS, COMPASS_TO_ORIENT
+from effects.state import SceneState
 from effects.rules import Rule, Effect
 from effects.residual import compute_residual, ResidualEntry
 from perception.orientation import extract_orientation
@@ -91,11 +91,6 @@ def test_compute_residual_orientation():
     obs_match = SceneState(relevant=()).with_orientation(eid, orient_a)
     residuals_match = compute_residual(pred, obs_match, entity_ids=(eid,), dims=("orientation",))
     assert len(residuals_match) == 0
-
-
-def test_orient_compass_roundtrip():
-    for orient, compass in ORIENT_TO_COMPASS.items():
-        assert COMPASS_TO_ORIENT[compass] == orient
 
 
 def test_extract_orientation():

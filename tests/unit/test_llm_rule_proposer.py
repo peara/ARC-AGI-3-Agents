@@ -284,7 +284,7 @@ def test_prompt_presents_set_and_delta_neutrally() -> None:
 
 
 # ---------------------------------------------------------------------------
-# validate_proposal: orientation effects with integer and compass values
+# validate_proposal: orientation effects with integer values
 # ---------------------------------------------------------------------------
 
 
@@ -303,22 +303,6 @@ def test_validate_proposal_orientation_set_integer() -> None:
     assert rule.kind == "movement"
     assert rule.effects[0].dim == "orientation"
     assert rule.effects[0].value == 2
-
-
-def test_validate_proposal_orientation_set_compass_backward_compat() -> None:
-    """Orientation effect with compass letter 'N' should still parse (backward compat)."""
-    proposal: dict = {
-        "kind": "movement",
-        "guard": {"action": 1},
-        "effects": [{"dim": "orientation", "of": 1, "op": "set", "value": "N"}],
-        "support": 2,
-    }
-    scene_entities: dict[int, dict] = {1: {"dim": "orientation"}}
-    rule = validate_proposal(proposal, scene_entities)
-    assert rule is not None
-    assert isinstance(rule, Rule)
-    assert rule.effects[0].dim == "orientation"
-    assert rule.effects[0].value == 0  # "N" → 0
 
 
 def test_validate_proposal_orientation_delta_integer() -> None:

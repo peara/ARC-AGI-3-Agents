@@ -1,7 +1,7 @@
 import pytest
 from perception.registry import ObjectRegistry
 from perception.entities import EntityCatalog, Entity
-from effects.kinematics import entity_pos_at
+from effects.kinematics import entity_pos_at, entity_orientation_at
 
 def test_compound_centroid_float():
     """
@@ -63,3 +63,16 @@ def test_bankers_rounding_regression():
     
     pos2 = entity_pos_at(reg, catalog, 11, 0)
     assert pos2 == (1.5, 0.0)
+
+
+def test_singleton_entity_orientation_from_meta():
+    """entity_orientation_at reads from ent.meta for singleton entities, not just compounds."""
+    reg = ObjectRegistry()
+    reg.tracks[0] = type('Track', (), {'observations': [
+        type('Obs', (), {'frame_idx': 0, 'centroid': (5.0, 5.0), 'cells': frozenset({(5, 5)})})
+    ]})
+    catalog = EntityCatalog(entities={})
+    ent = Entity(id=10, members=frozenset({0}), composition="singleton", meta={"orientation": 2})
+    catalog.entities[10] = ent
+    result = entity_orientation_at(reg, catalog, 10, 0)
+    assert result == 2

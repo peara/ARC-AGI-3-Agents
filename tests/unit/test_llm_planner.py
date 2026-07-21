@@ -361,6 +361,46 @@ class TestLLMPlanner:
         assert result is None
 
     # -----------------------------------------------------------------------
+    # Orientation dimension
+    # -----------------------------------------------------------------------
+
+    def test_build_messages_system_has_orientation_schema(self) -> None:
+        """System prompt must document the orientation dimension with 0-3 range."""
+        messages = _build_messages(_bundle(), [0, 1, 2, 3])
+        content = messages[0]["content"]
+        assert "orientation" in content, "System prompt must mention 'orientation'"
+        assert "0-3" in content, "System prompt must describe orientation range 0-3"
+
+    def test_validate_orientation_eq_goal(self) -> None:
+        """Orientation eq goal validates as a ProbeGoal."""
+        goal_dict = {
+            "target": {"dim": "orientation", "of": 0, "eq": 1},
+            "reason": "turn to face east",
+        }
+        scene_entities = {0, 17}
+        result = _validate_goal(goal_dict, scene_entities)
+        assert result is not None
+        assert isinstance(result, ProbeGoal)
+        assert result.target["dim"] == "orientation"
+        assert result.target["eq"] == 1
+
+    def test_validate_near_plus_orientation_conjunction(self) -> None:
+        """Conjunction of near + orientation eq validates as a ProbeGoal."""
+        goal_dict = {
+            "target": {
+                "all": [
+                    {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 2}},
+                    {"dim": "orientation", "of": 0, "eq": 2},
+                ]
+            },
+            "reason": "navigate near entity 17 while facing south",
+        }
+        scene_entities = {0, 17}
+        result = _validate_goal(goal_dict, scene_entities)
+        assert result is not None
+        assert isinstance(result, ProbeGoal)
+
+    # -----------------------------------------------------------------------
     # call_planner (end-to-end with mock llm_call)
     # -----------------------------------------------------------------------
 

@@ -908,17 +908,16 @@ class TestOrientationSetRules:
         """Orientation values round-trip as integers in DSL serialization."""
         from effects.dsl import dsl_to_rule, rule_to_dsl
 
-        # Compass string input is accepted for backward compat, parsed to int.
         dsl = {
             "kind": "movement",
             "guard": {"action": 1},
-            "effects": [{"dim": "orientation", "of": 0, "op": "set", "value": "N"}],
+            "effects": [{"dim": "orientation", "of": 0, "op": "set", "value": 2}],
             "support": 2,
         }
         rule = dsl_to_rule(dsl)
-        assert rule.effects[0].value == 0, "N should map to 0"
+        assert rule.effects[0].value == 2, "orientation should parse as integer"
         roundtrip_dsl = rule_to_dsl(rule)
-        assert roundtrip_dsl["effects"][0]["value"] == 0, "orientation should serialize as integer, not compass letter"
+        assert roundtrip_dsl["effects"][0]["value"] == 2, "orientation should serialize as integer"
 
 
 @pytest.mark.unit

@@ -125,6 +125,22 @@ class TestProbeGoal:
         assert goal_fn(state) is False
 
     # -----------------------------------------------------------------------
+    # compile_goal — orientation equality
+    # -----------------------------------------------------------------------
+
+    def test_compile_orientation_eq_match(self) -> None:
+        """Orientation equality returns True when values match."""
+        goal_fn = compile_goal({"dim": "orientation", "of": 0, "eq": 1})
+        state = _state(0, "orientation", 1)
+        assert goal_fn(state) is True
+
+    def test_compile_orientation_eq_mismatch(self) -> None:
+        """Orientation equality returns False when values differ."""
+        goal_fn = compile_goal({"dim": "orientation", "of": 0, "eq": 1})
+        state = _state(0, "orientation", 2)
+        assert goal_fn(state) is False
+
+    # -----------------------------------------------------------------------
     # compile_goal — near comparator (within radius)
     # -----------------------------------------------------------------------
 
