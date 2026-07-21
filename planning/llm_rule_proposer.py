@@ -357,16 +357,6 @@ def validate_proposal_with_reason(
             for key in ("dim", "of", "op", "value"):
                 if key not in eff:
                     return None, f"effect_missing:{key}"
-            if eff.get("dim") == "orientation" and isinstance(eff.get("value"), str):
-                from effects.state import COMPASS_TO_ORIENT
-                compass = eff["value"].upper()
-                if compass in COMPASS_TO_ORIENT:
-                    eff["value"] = COMPASS_TO_ORIENT[compass]
-                else:
-                    log.debug(
-                        "validate_proposal: reject unknown compass value=%r", eff["value"]
-                    )
-                    return None, f"bad_compass:{eff['value']!r}"
         referenced_ids = _extract_entity_ids(guard)
         for eff in effects:
             of_val = eff.get("of")
