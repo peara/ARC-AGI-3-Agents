@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import replace
-from typing import Protocol, cast
+from typing import Protocol
 
 from .context import EffectContext, add_refuted_rule
 from .counter_evidence import CounterEvidence
@@ -12,8 +12,8 @@ from .engine_log import format_rule, log_effect_context_diff
 from .predict import predict
 from .residual import ResidualEntry, compute_residual
 from .rules import Effect, Rule
-from .state import SceneState
-from .transition_history import Transition, TransitionHistory
+from .state import Pos, SceneState
+from .transition_history import TransitionHistory
 
 log = logging.getLogger(__name__)
 
@@ -778,7 +778,7 @@ def validate_rules_against_history(
         if not residual:
             continue
 
-        state_before_summary: dict[int, tuple[int, int] | None] = {
+        state_before_summary: dict[int, Pos | None] = {
             eid: t.state_before.pos(eid) for eid in entity_ids
         }
 

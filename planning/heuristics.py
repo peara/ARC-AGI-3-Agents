@@ -40,7 +40,7 @@ def reach_radius(
             if eff.op == "delta" and eff.dim == "pos":
                 if isinstance(eff.value, tuple):
                     dr, dc = eff.value
-                    mags.append(max(abs(dr), abs(dc)))
+                    mags.append(int(max(abs(dr), abs(dc))))
     if mags:
         return max(mags)
     return 1

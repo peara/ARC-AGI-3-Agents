@@ -1,6 +1,5 @@
 """Forward prediction over symbolic state learned from perception."""
 
-from .counter_evidence import CounterEvidence, format_counter_evidence
 from .context import (
     MAX_REFUTED_RULES,
     EffectContext,
@@ -10,10 +9,11 @@ from .context import (
     load_recording_meta,
     merge_effect_context,
 )
+from .counter_evidence import CounterEvidence, format_counter_evidence
 from .dsl import dsl_to_rule, rule_to_dsl
 from .engine import (
-    _ProjectionSpec,
     ProjectionSpec,
+    _ProjectionSpec,
     confirm_rules,
     engine_step,
     inject_llm_proposals,

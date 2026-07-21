@@ -53,9 +53,9 @@ def pick_fallback_unknown(
             return 0
         for _eid, (dim, val) in ua.state.relevant:
             if dim == "pos" and isinstance(val, tuple):
-                dr: int = int(val[0]) - current[0]
-                dc: int = int(val[1]) - current[1]
-                return abs(dr) + abs(dc)
+                dr: float = float(val[0]) - current[0]
+                dc: float = float(val[1]) - current[1]
+                return int(abs(dr) + abs(dc))
         return 0
 
     return min(fresh, key=_dist)

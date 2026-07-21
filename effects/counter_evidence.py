@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from .state import Pos
+
 
 @dataclass(frozen=True)
 class CounterEvidence:
@@ -13,7 +15,7 @@ class CounterEvidence:
     """
     frame_idx: int
     action: int
-    state_before_summary: dict[int, tuple[int, int] | None]
+    state_before_summary: dict[int, Pos | None]
     predicted_values: dict[int, dict[str, Any]]
     observed_values: dict[int, dict[str, Any]]
     fired_rules: list[dict[str, Any]]

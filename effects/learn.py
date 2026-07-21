@@ -204,13 +204,14 @@ def learn_movement_rules(
                 int(k): (int(v[0]), int(v[1])) for k, v in raw.items()
             }
     if not motion_by_action:
-        by_action: dict[int, list[tuple[int, int]]] = {}
+        by_action: dict[int, list[tuple[int | float, int | float]]] = {}
         for (pos, action), nxt in known_transitions.items():
             by_action.setdefault(action, []).append(
                 (nxt[0] - pos[0], nxt[1] - pos[1])
             )
         for action, deltas in by_action.items():
-            motion_by_action[action] = max(set(deltas), key=deltas.count)
+            mode_delta = max(set(deltas), key=deltas.count)
+            motion_by_action[action] = (int(mode_delta[0]), int(mode_delta[1]))
 
     for action, delta in motion_by_action.items():
         movement_rules.append(
