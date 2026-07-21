@@ -46,7 +46,16 @@ Goals are expressed as target dicts with these forms:
    {"dim": "pos", "of": <player_eid>, "near": [row, col], "radius": N}
 
 2. **eq** — test equality of a dimension on an entity:
-   {"dim": "<dim_name>", "of": <eid>, "eq": <value>}
+    {"dim": "<dim_name>", "of": <eid>, "eq": <value>}
+
+Supported dimensions for `eq`:
+- `pos`: absolute coordinate, value is `[row, col]` (rarely useful — prefer `near`).
+- `orientation`: facing direction of an entity, value is an integer 0-3 (cyclic).
+  Use this when the player must face a specific direction before an action
+  can take effect (e.g. rotate-then-move mechanics). Check the scene
+  bundle's per-entity `orientation` field — if it is `null`, the entity
+  has no orientation and an `orientation` target will not match.
+- `size`: number of cells, value is an integer.
 
 3. **all** — conjunction of sub-predicates:
    {"all": [<sub_pred1>, <sub_pred2>, ...]}
@@ -56,6 +65,8 @@ Goals are expressed as target dicts with these forms:
 
 **Prefer `near` targets** — navigation goals are the primary exploration
 pattern. Use `eq` only when you have a specific property hypothesis to test.
+Combine `near` and `orientation` via `all` when the player must both reach a
+location and face a direction.
 
 ## Action field
 
@@ -102,6 +113,25 @@ Example 3 — Test if an object is solid (near with small radius):
 {
   "target": {"dim": "pos", "of": 0, "near": {"of": 8, "radius": 1}},
   "reason": "Navigate adjacent to entity 8 at (58,6) — next turn, move into it to test if it's solid or walkable"
+}
+```
+
+Example 4 — Rotate the player to a target orientation:
+```json
+{
+  "target": {"dim": "orientation", "of": 0, "eq": 1},
+  "reason": "Entity 0 needs to rotate to orientation 1 before the next move can proceed"
+}
+```
+
+Example 5 — Reach a location AND face a direction:
+```json
+{
+  "target": {"all": [
+    {"dim": "pos", "of": 0, "near": {"of": 17, "radius": 2}},
+    {"dim": "orientation", "of": 0, "eq": 2}
+  ]},
+  "reason": "Navigate close to entity 17 and rotate to orientation 2"
 }
 ```
 
