@@ -67,7 +67,7 @@ def snapshot_from_registry(
 ) -> SceneState | None:
     """Project registry/catalog into a ``SceneState`` for one frame.
 
-    Skips dimensions that return ``None`` (e.g., ``orientation`` for singletons)
+    Skips dimensions that return ``None`` (e.g., ``orientation`` for entities with < 2 cells)
     instead of discarding the entire state.
     """
     relevant: list[tuple[int, tuple[str, object]]] = []

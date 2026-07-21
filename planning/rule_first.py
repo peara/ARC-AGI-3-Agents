@@ -104,7 +104,7 @@ class RuleFirstPolicy:
             if ent.lifecycle.value not in ("active",):
                 continue
             if eid in entities:
-                if ent.composition == "compound":
+                if ent.meta.get("orientation") is not None:
                     dims.append("orientation")
                 continue
             if (
