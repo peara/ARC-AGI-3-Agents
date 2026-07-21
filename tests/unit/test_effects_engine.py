@@ -23,7 +23,12 @@ from effects import (
     prune_rules,
 )
 from effects.context import MAX_REFUTED_RULES
-from effects.engine import _bump_support, _iter_managed_rules, _promote_rules, _refute_contradicted_rules
+from effects.engine import (
+    _bump_support,
+    _iter_managed_rules,
+    _promote_rules,
+    _refute_contradicted_rules,
+)
 from effects.engine_log import _index_rules, format_rule
 from perception.session import PerceptionSession
 from planning.adapters import snapshot_from_scene
@@ -261,8 +266,6 @@ class TestProposeRulesLlmProposals:
         return EffectContext(confirm_threshold=2)
 
     def test_llm_proposals_added_with_support_zero(self):
-        from dataclasses import replace as dc_replace
-
         ctx = self._ctx()
         before = SceneState(relevant=((17, ("size", 10)),))
         residual = (ResidualEntry(17, "size", 10, 8),)
@@ -1012,7 +1015,6 @@ class TestRefutationDetection:
             confirm_threshold=2,
         )
         before = SceneState(relevant=((0, ("pos", (5, 5))),))
-        observed = SceneState(relevant=((0, ("pos", (5, 5))),))
         residual_empty: tuple[ResidualEntry, ...] = ()
         result = _refute_contradicted_rules(ctx, before, 1, residual_empty)
         assert len(result.movement_rules) == 1, "movement rule should stay when collision overrides"
@@ -1078,7 +1080,6 @@ class TestRefutationDetection:
         """When predict returns unknown (no rule fires), no refutation occurs."""
         ctx = EffectContext(available_actions=(1,), confirm_threshold=2)
         before = SceneState(relevant=((0, ("pos", (5, 5))),))
-        observed = SceneState(relevant=((0, ("pos", (7, 5))),))
         residual = (ResidualEntry(0, "pos", (5, 5), (7, 5)),)
         result = _refute_contradicted_rules(ctx, before, 1, residual)
         assert len(result.refuted_rules) == 0

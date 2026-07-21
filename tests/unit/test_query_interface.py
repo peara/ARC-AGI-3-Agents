@@ -378,10 +378,11 @@ class TestQueryInterface:
         assert qi._build_coverage_gaps() == []
 
     def test_build_coverage_gaps_non_compound(self):
+        """Singletons without orientation metadata should not appear in gaps."""
         scene = _make_scene()
         entity = MagicMock()
         entity.composition = "singleton"
-        entity.meta = {"orientation": True}
+        entity.meta = {}  # no orientation — singleton not tracked for rotation
         scene.catalog.entities = {10: entity}
 
         rule_pos = Rule(

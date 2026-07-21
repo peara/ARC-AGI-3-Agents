@@ -1,7 +1,8 @@
-import pytest
+from __future__ import annotations
+
+from effects.residual import compute_residual
+from effects.rules import Effect, Rule
 from effects.state import SceneState
-from effects.rules import Rule, Effect
-from effects.residual import compute_residual, ResidualEntry
 from perception.orientation import extract_orientation
 from perception.registry import Observation, Track
 

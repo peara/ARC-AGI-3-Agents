@@ -14,15 +14,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from typing import Any
 
-import sys
-import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from entity.builder import EntityBuilder, EntityBuilderConfig
-from effects.state import SceneState
 from perception.registry import ObjectRegistry
 
 
@@ -142,7 +140,7 @@ def main() -> None:
                         f"got {len(cells)} px"
                     )
 
-    print(f"\n=== Summary ===")
+    print("\n=== Summary ===")
     print(f"Total frames with active entities: {total_frames}")
     print(f"Compound entity observations: {compound_frames}")
     print(f"  With cells:    {cells_frames}/{compound_frames} ({100*cells_frames/max(compound_frames,1):.0f}%)")

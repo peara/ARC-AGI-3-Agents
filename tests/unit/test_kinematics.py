@@ -1,7 +1,9 @@
-import pytest
+from __future__ import annotations
+
+from effects.kinematics import entity_orientation_at, entity_pos_at
+from perception.entities import Entity, EntityCatalog
 from perception.registry import ObjectRegistry
-from perception.entities import EntityCatalog, Entity
-from effects.kinematics import entity_pos_at, entity_orientation_at
+
 
 def test_compound_centroid_float():
     """
