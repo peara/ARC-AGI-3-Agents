@@ -1,11 +1,10 @@
 """Orientation extraction for compound entities.
 
-Computes a 4-directional orientation (N/E/S/W) from the relative positions
+Computes a 4-directional orientation (0-3, cyclic) from the relative positions
 of a compound entity's member tracks. Convention:
   - "head" = smallest member (by size)
   - "body" = largest member (by size)
   - orientation = direction from body centroid to head centroid
-  - 0=N, 1=E, 2=S, 3=W (clockwise from north)
 
 If the compound has only one member, orientation is None (no inherent facing).
 """
@@ -74,7 +73,7 @@ def extract_orientation(
 ) -> int | None:
     """Compute orientation from a compound's member tracks.
 
-    Returns 0-3 (N/E/S/W) or None if the compound has fewer than 2 members
+    Returns 0-3 (cyclic) or None if the compound has fewer than 2 members
     or the head-body vector is degenerate (both at same position).
     """
     if len(member_tracks) < 2:

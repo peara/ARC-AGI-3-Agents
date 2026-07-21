@@ -111,7 +111,7 @@ def entity_orientation_at(
     """Return the orientation of a compound entity at a frame.
 
     Uses the smallest member as 'head' and largest as 'body'.
-    Returns 0-3 (N/E/S/W) or None for singletons / missing data.
+    Returns 0-3 (cyclic) or None for entities with insufficient data.
     """
     from perception.orientation import extract_orientation
 
