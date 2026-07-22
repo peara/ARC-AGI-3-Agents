@@ -206,6 +206,63 @@ class TestValidateRulesAgainstHistory:
             assert "guard_spec" in r_dict
             assert "effects" in r_dict
 
+    def test_fired_rules_excluded_when_no_effect_overlap(self):
+        movement_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 13, "delta", (1, 0)),),
+            support=0,
+            kind="movement",
+        )
+        size_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("size", 5, "delta", 2),),
+            support=0,
+        )
+        before = SceneState(
+            relevant=(
+                (5, ("size", 3)),
+                (13, ("pos", (1, 1))),
+            )
+        )
+        after = SceneState(
+            relevant=(
+                (5, ("size", 3)),
+                (13, ("pos", (2, 1))),
+            )
+        )
+        history = _history_with(_make_transition(0, 1, before, after))
+        ctx = EffectContext()
+        spec = _ProjectionSpec(entities=(5, 13), dims=("pos", "size"))
+        result = validate_rules_against_history(
+            (movement_rule, size_rule), ctx, history, spec
+        )
+        assert len(result) == 1
+        ce = result[0]
+        assert ce.predicted_values[5]["size"] == 5
+        assert ce.observed_values[5]["size"] == 3
+        pos_fired = [r for r in ce.fired_rules if "pos" in {e["dim"] for e in r["effects"]}]
+        size_fired = [r for r in ce.fired_rules if "size" in {e["dim"] for e in r["effects"]}]
+        assert len(pos_fired) == 0
+        assert len(size_fired) == 1
+
+    def test_fired_rules_included_when_effect_overlaps(self):
+        movement_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 13, "delta", (5, 0)),),
+            support=0,
+            kind="movement",
+        )
+        before = SceneState(relevant=((13, ("pos", (1, 1))),))
+        after = SceneState(relevant=((13, ("pos", (2, 1))),))
+        history = _history_with(_make_transition(0, 1, before, after))
+        ctx = EffectContext()
+        spec = _ProjectionSpec(entities=(13,), dims=("pos",))
+        result = validate_rules_against_history((movement_rule,), ctx, history, spec)
+        assert len(result) == 1
+        ce = result[0]
+        assert len(ce.fired_rules) == 1
+        assert ce.fired_rules[0]["guard_spec"] == {"action": 1}
+
     def test_multiple_entity_dims(self):
         rule = Rule(
             guard_spec={"action": 1},

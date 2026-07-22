@@ -801,7 +801,27 @@ def validate_rules_against_history(
             predicted_values.setdefault(0, {})["terminal"] = terminal_pred
             observed_values.setdefault(0, {})["terminal"] = terminal_obs
 
-        fired_rules_dicts: list[dict[str, object]] = [r.to_dict() for r in fired]
+        residual_dims = {(e.entity_id, e.dim) for e in residual}
+        terminal_in_residual = any(e.dim == "terminal" for e in residual)
+
+        filtered_fired: list[Rule] = []
+        for rule in fired:
+            overlaps = False
+            for effect in rule.effects:
+                if effect.dim == "terminal":
+                    if terminal_in_residual:
+                        overlaps = True
+                        break
+                else:
+                    if (effect.of, effect.dim) in residual_dims:
+                        overlaps = True
+                        break
+            if overlaps:
+                filtered_fired.append(rule)
+
+        fired_rules_dicts: list[dict[str, object]] = [
+            r.to_dict() for r in filtered_fired
+        ]
 
         results.append(
             CounterEvidence(
