@@ -122,12 +122,30 @@ def merge_effect_context(base: EffectContext, engine: EffectContext) -> EffectCo
         sorted(set(base.available_actions) | set(engine.available_actions))
     )
 
+    dormant_buckets = set(base.dormant_rules.keys()) | set(engine.dormant_rules.keys())
+    dormant_rules_merged: dict[str, tuple[Rule, ...]] = {}
+    for bucket in dormant_buckets:
+        seen: set[tuple[str, tuple[object, ...], tuple[object, ...]]] = set()
+        merged_rules: list[Rule] = []
+        for rule in base.dormant_rules.get(bucket, ()):
+            k = rule.key()
+            if k not in seen:
+                seen.add(k)
+                merged_rules.append(rule)
+        for rule in engine.dormant_rules.get(bucket, ()):
+            k = rule.key()
+            if k not in seen:
+                seen.add(k)
+                merged_rules.append(rule)
+        dormant_rules_merged[bucket] = tuple(merged_rules)
+
     return EffectContext(
         terminal_rules=engine.terminal_rules,
         relational_rules=engine.relational_rules,
         proposed_rules=engine.proposed_rules,
         movement_rules=tuple(merged_movement_rules),
         collision_rules=tuple(merged_collision_rules),
+        dormant_rules=dormant_rules_merged,
         refuted_rules=engine.refuted_rules,
         available_actions=merged_available_actions,
         confirm_threshold=engine.confirm_threshold,

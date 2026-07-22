@@ -10,6 +10,7 @@ from .context import (
     merge_effect_context,
 )
 from .counter_evidence import CounterEvidence, format_counter_evidence
+from .dormancy import apply_dormancy, reactivate_dormant
 from .dsl import dsl_to_rule, rule_to_dsl
 from .engine import (
     ProjectionSpec,
@@ -67,6 +68,8 @@ __all__ = [
     "SceneState",
     "Terminal",
     "Rule",
+    "apply_dormancy",
+    "reactivate_dormant",
     "compute_residual",
     "confirm_rules",
     "engine_step",
