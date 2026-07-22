@@ -752,12 +752,19 @@ def validate_rules_against_history(
         return []
 
     temp_ctx = inject_llm_proposals(ctx, proposed_rules)
-    entity_ids = tuple(spec.entities)
     dims = spec.dims
 
     results: list[CounterEvidence] = []
 
     for t in history:
+        existing_ids = tuple(
+            eid
+            for eid in spec.entities
+            if any(t.state_after.get(eid, dim) is not None for dim in dims)
+        )
+        if not existing_ids:
+            continue
+
         result = predict(t.state_before, t.action, temp_ctx, return_fired=True)
         if isinstance(result, tuple):
             pred, fired = result
@@ -770,7 +777,7 @@ def validate_rules_against_history(
         residual = compute_residual(
             pred.state,
             t.state_after,
-            entity_ids=entity_ids,
+            entity_ids=existing_ids,
             dims=dims,
             include_terminal=spec.include_terminal,
         )
@@ -779,12 +786,12 @@ def validate_rules_against_history(
             continue
 
         state_before_summary: dict[int, Pos | None] = {
-            eid: t.state_before.pos(eid) for eid in entity_ids
+            eid: t.state_before.pos(eid) for eid in existing_ids
         }
 
         predicted_values: dict[int, dict[str, object]] = {}
         observed_values: dict[int, dict[str, object]] = {}
-        for eid in entity_ids:
+        for eid in existing_ids:
             pred_eid: dict[str, object] = {}
             obs_eid: dict[str, object] = {}
             for dim in dims:

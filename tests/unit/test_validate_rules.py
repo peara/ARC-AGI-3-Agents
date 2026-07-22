@@ -335,3 +335,55 @@ class TestValidateRulesAgainstHistory:
         assert len(result) == 1
         assert result[0].predicted_values[5]["size"] == 99
         assert result[0].observed_values[5]["size"] == 3
+
+    def test_entity_not_in_historical_frame_skipped(self):
+        rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 1, "delta", (1, 0)),),
+            support=0,
+            kind="movement",
+        )
+        before0 = SceneState(relevant=((0, ("pos", (1, 1))),))
+        after0 = SceneState(relevant=((0, ("pos", (1, 1))),))
+        before1 = SceneState(
+            relevant=(
+                (0, ("pos", (1, 1))),
+                (1, ("pos", (5, 5))),
+            )
+        )
+        after1 = SceneState(
+            relevant=(
+                (0, ("pos", (1, 1))),
+                (1, ("pos", (6, 5))),
+            )
+        )
+        history = _history_with(
+            _make_transition(0, 1, before0, after0),
+            _make_transition(1, 1, before1, after1),
+        )
+        ctx = EffectContext()
+        spec = _ProjectionSpec(entities=(0, 1), dims=("pos",))
+        result = validate_rules_against_history((rule,), ctx, history, spec)
+        assert result == []
+
+    def test_entity_existing_at_all_frames_still_validated(self):
+        rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (5, 0)),),
+            support=0,
+            kind="movement",
+        )
+        before0 = SceneState(relevant=((0, ("pos", (1, 1))),))
+        after0 = SceneState(relevant=((0, ("pos", (2, 1))),))
+        before1 = SceneState(relevant=((0, ("pos", (2, 1))),))
+        after1 = SceneState(relevant=((0, ("pos", (3, 1))),))
+        history = _history_with(
+            _make_transition(0, 1, before0, after0),
+            _make_transition(1, 1, before1, after1),
+        )
+        ctx = EffectContext()
+        spec = _ProjectionSpec(entities=(0,), dims=("pos",))
+        result = validate_rules_against_history((rule,), ctx, history, spec)
+        assert len(result) == 2
+        assert result[0].frame_idx == 0
+        assert result[1].frame_idx == 1
