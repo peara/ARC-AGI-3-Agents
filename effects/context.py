@@ -69,6 +69,7 @@ class EffectContext:
     proposed_rules: tuple[Rule, ...] = ()
     movement_rules: tuple[Rule, ...] = ()
     collision_rules: tuple[Rule, ...] = ()
+    dormant_rules: dict[str, tuple[Rule, ...]] = field(default_factory=dict)
     refuted_rules: tuple[Rule, ...] = ()
     available_actions: tuple[int, ...] = ()
     confirm_threshold: int = 1
@@ -81,6 +82,7 @@ class EffectContext:
             "proposed_rules": [r.to_dict() for r in self.proposed_rules],
             "movement_rules": [rule_to_dsl(r) for r in self.movement_rules],
             "collision_rules": [rule_to_dsl(r) for r in self.collision_rules],
+            "dormant_rules": {k: [rule_to_dsl(r) for r in v] for k, v in self.dormant_rules.items()},
             "refuted_rules": [rule_to_dsl(r) for r in self.refuted_rules],
             "available_actions": list(self.available_actions),
             "confirm_threshold": self.confirm_threshold,
