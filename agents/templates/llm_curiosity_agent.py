@@ -17,10 +17,12 @@ from typing import Any
 from arcengine import FrameData, GameAction, GameState
 
 from agents.llm_client import LLMClient
+from effects.dormancy import apply_dormancy, reactivate_dormant
 from effects.engine_step_result import EngineStepResult, run_engine_step
 from effects.transition_history import TransitionHistory
 from entity import EntityBuilder
 from grouping import CombinedEngine
+from perception.entities import LifecycleState
 from perception.session import RESET_ACTION, PerceptionSession, SceneSnapshot
 from planning.adapters import snapshot_from_scene
 from planning.fallback import build_fallback_goal, pick_fallback_unknown, tried_key
@@ -154,6 +156,7 @@ class LlmCuriosity(Agent):
         self._last_engine_result: EngineStepResult | None = None
 
         self._history: TransitionHistory = TransitionHistory()
+        self._prev_lifecycle_map: dict[int, LifecycleState] | None = None
 
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
         return latest_frame.state is GameState.WIN
@@ -201,6 +204,7 @@ class LlmCuriosity(Agent):
             self._mechanics_notepad.reset()
         self._prev_levels_completed = 0
         self._mechanics_notepad_last_rules_count = 0
+        self._prev_lifecycle_map = None
         return GameAction.RESET
 
     def _perceive(self, latest_frame: FrameData) -> FrameContext | None:
@@ -259,6 +263,27 @@ class LlmCuriosity(Agent):
                         frame_idx=self._scene.frame_idx,
                     )
             self._engine_step_pending = None
+
+        # ── Dormancy: move rules for merged entities to dormant, reactivate on dissolution ──
+        if self._scene is not None and self.policy.context is not None:
+            lifecycle_map: dict[int, LifecycleState] = {
+                eid: ent.lifecycle for eid, ent in self._scene.catalog.entities.items()
+            }
+            # Reactivate dormant rules for entities that were merged but are now active
+            if self._prev_lifecycle_map is not None:
+                reactivated_ids: set[int] = {
+                    eid for eid, prev_state in self._prev_lifecycle_map.items()
+                    if prev_state == LifecycleState.MERGED
+                    and lifecycle_map.get(eid) == LifecycleState.ACTIVE
+                }
+                if reactivated_ids:
+                    ctx = reactivate_dormant(self.policy.context, reactivated_ids)
+                    self.policy.update_context(ctx)
+            # Move rules for non-active entities to dormant
+            ctx = apply_dormancy(self.policy.context, lifecycle_map)
+            if ctx.dormant_rules != self.policy.context.dormant_rules or ctx.movement_rules != self.policy.context.movement_rules:
+                self.policy.update_context(ctx)
+            self._prev_lifecycle_map = lifecycle_map
 
         _residual = self._last_engine_result.residual if self._last_engine_result else ()
         _observed_transition = self._last_engine_result.observed_transition if self._last_engine_result else None
