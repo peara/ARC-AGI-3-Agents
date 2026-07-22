@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -18,10 +19,14 @@ def _make_scene(
 ) -> MagicMock:
     """Build a mock SceneSnapshot with configurable summary and step_observations."""
     scene = MagicMock()
-    scene.summary.return_value = summary_dict if summary_dict is not None else {
-        "frame_idx": 0,
-        "n_observed": 1,
-    }
+    scene.summary.return_value = (
+        summary_dict
+        if summary_dict is not None
+        else {
+            "frame_idx": 0,
+            "n_observed": 1,
+        }
+    )
     scene.step_observations = step_observations
     return scene
 
@@ -47,6 +52,8 @@ def _make_ctx(
     terminal_rules: tuple[Rule, ...] = (),
     relational_rules: tuple[Rule, ...] = (),
     proposed_rules: tuple[Rule, ...] = (),
+    movement_rules: tuple[Rule, ...] = (),
+    collision_rules: tuple[Rule, ...] = (),
     confirm_threshold: int = 2,
 ) -> EffectContext:
     """Build a minimal EffectContext."""
@@ -54,6 +61,8 @@ def _make_ctx(
         terminal_rules=terminal_rules,
         relational_rules=relational_rules,
         proposed_rules=proposed_rules,
+        movement_rules=movement_rules,
+        collision_rules=collision_rules,
         confirm_threshold=confirm_threshold,
     )
 
@@ -79,7 +88,19 @@ class TestQueryInterface:
         scene = _make_scene()
         qi = QueryInterface(scene)
         bundle = qi.bundle()
-        expected_keys = {"scene", "action_legend", "engine_rules", "recent_actions", "unknowns", "context_note", "residual", "pruned_rules", "refuted_rules", "observed_transition", "coverage_gaps"}
+        expected_keys = {
+            "scene",
+            "action_legend",
+            "engine_rules",
+            "recent_actions",
+            "unknowns",
+            "context_note",
+            "residual",
+            "pruned_rules",
+            "refuted_rules",
+            "observed_transition",
+            "coverage_gaps",
+        }
         assert set(bundle.keys()) == expected_keys
 
     def test_bundle_with_effect_context(self):
@@ -98,10 +119,24 @@ class TestQueryInterface:
             effects=(Effect("size", 17, "delta", -2),),
             support=3,
         )
+        mr = Rule(
+            guard_spec={"action": 2},
+            effects=(Effect("pos", 7, "set", (0, 1)),),
+            support=5,
+            kind="movement",
+        )
+        colr = Rule(
+            guard_spec={"action": 3},
+            effects=(Effect("pos", 7, "revert", "before"),),
+            support=4,
+            kind="collision",
+        )
         ctx = _make_ctx(
             terminal_rules=(tr,),
             relational_rules=(cr,),
             proposed_rules=(cr,),
+            movement_rules=(mr,),
+            collision_rules=(colr,),
             confirm_threshold=5,
         )
         scene = _make_scene()
@@ -112,10 +147,46 @@ class TestQueryInterface:
         assert rules["confirm_threshold"] == 5
         assert isinstance(rules["confirmed"], list)
         assert isinstance(rules["proposed"], list)
-        # terminal_rules + relational_rules → confirmed
-        assert len(rules["confirmed"]) == 2
-        # proposed_rules → proposed
+        # terminal_rules + relational_rules + movement_rules + collision_rules -> confirmed
+        assert len(rules["confirmed"]) == 4
+        assert any(dsl.get("kind") == "movement" for dsl in rules["confirmed"])
+        assert any(dsl.get("kind") == "collision" for dsl in rules["confirmed"])
+        # proposed_rules -> proposed
         assert len(rules["proposed"]) == 1
+
+    def test_movement_rules_in_confirmed(self):
+        mr = Rule(
+            guard_spec={"action": 2},
+            effects=(Effect("pos", 7, "set", (0, 1)),),
+            support=5,
+            kind="movement",
+        )
+        ctx = _make_ctx(movement_rules=(mr,))
+        scene = _make_scene()
+        qi = QueryInterface(scene, ctx=ctx)
+        bundle = qi.bundle()
+        engine_rules = cast(dict[str, Any], bundle["engine_rules"])
+        confirmed = engine_rules["confirmed"]
+        assert any(dsl.get("kind") == "movement" for dsl in confirmed)
+
+    def test_movement_rules_capped_at_20(self):
+        movement_rules = tuple(
+            Rule(
+                guard_spec={"action": i},
+                effects=(Effect("pos", i, "set", (0, 1)),),
+                support=1,
+                kind="movement",
+            )
+            for i in range(25)
+        )
+        ctx = _make_ctx(movement_rules=movement_rules)
+        scene = _make_scene()
+        qi = QueryInterface(scene, ctx=ctx)
+        bundle = qi.bundle()
+        engine_rules = cast(dict[str, Any], bundle["engine_rules"])
+        confirmed = engine_rules["confirmed"]
+        movement_confirmed = [dsl for dsl in confirmed if dsl.get("kind") == "movement"]
+        assert len(movement_confirmed) == 20
 
     def test_bundle_without_effect_context(self):
         scene = _make_scene()
@@ -137,9 +208,7 @@ class TestQueryInterface:
         assert "recent_actions" not in bundle
 
     def test_max_recent_limits_recent_actions(self):
-        steps = tuple(
-            _step(frame_idx=i, action_id=i + 1) for i in range(10)
-        )
+        steps = tuple(_step(frame_idx=i, action_id=i + 1) for i in range(10))
         scene = _make_scene(step_observations=steps)
         qi = QueryInterface(scene)
         bundle = qi.bundle(max_recent=3)
@@ -225,18 +294,29 @@ class TestQueryInterface:
         qi = QueryInterface(scene)
         bundle = qi.bundle()
         keys = list(bundle.keys())
-        
+
         pruned_idx = keys.index("pruned_rules")
         refuted_idx = keys.index("refuted_rules")
         observed_idx = keys.index("observed_transition")
-        
+
         assert pruned_idx < refuted_idx < observed_idx
+
     def test_bundle_with_residual(self):
         scene = _make_scene()
         residual = (
             ResidualEntry(entity_id=5, dim="size", predicted=3, observed=1),
-            ResidualEntry(entity_id=None, dim="terminal", predicted="NOT_FINISHED", observed="GAME_OVER"),
-            ResidualEntry(entity_id=10, dim="pos", predicted=(10.333, 20.667), observed=(10.0, 20.0)),
+            ResidualEntry(
+                entity_id=None,
+                dim="terminal",
+                predicted="NOT_FINISHED",
+                observed="GAME_OVER",
+            ),
+            ResidualEntry(
+                entity_id=10,
+                dim="pos",
+                predicted=(10.333, 20.667),
+                observed=(10.0, 20.0),
+            ),
         )
         qi = QueryInterface(scene, residual=residual)
         bundle = qi.bundle()
@@ -266,11 +346,11 @@ class TestQueryInterface:
             (10, ("pos", (10.3333, 20.6667))),
             (10, ("size", 5)),
         )
-        
+
         ua = MagicMock()
         ua.action = 1
         ua.state = state_mock
-        
+
         scene = _make_scene()
         qi_unk = QueryInterface(scene, unknowns=(ua,))
         bundle_unk = qi_unk.bundle()
@@ -282,8 +362,10 @@ class TestQueryInterface:
         state_before.fingerprint.return_value = ((10, ("pos", (1.111, 2.222))),)
         state_after = MagicMock()
         state_after.fingerprint.return_value = ((10, ("pos", (3.333, 4.444))),)
-        
-        qi_trans = QueryInterface(scene, observed_transition=(state_before, 1, state_after))
+
+        qi_trans = QueryInterface(
+            scene, observed_transition=(state_before, 1, state_after)
+        )
         bundle_trans = qi_trans.bundle()
         assert bundle_trans["observed_transition"]["before"][0][1][1] == [1.11, 2.22]
         assert bundle_trans["observed_transition"]["after"][0][1][1] == [3.33, 4.44]
@@ -343,7 +425,7 @@ class TestQueryInterface:
         )
         qi = QueryInterface(scene, ctx=ctx)
         gaps = qi._build_coverage_gaps()
-        
+
         assert len(gaps) == 1
         gap = gaps[0]
         assert gap["entity_id"] == 10

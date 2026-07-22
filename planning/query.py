@@ -82,7 +82,9 @@ class QueryInterface:
             elif field == "unknowns":
                 result["unknowns"] = self._build_unknowns()
         # Always include context_note regardless of fields filter
-        result["context_note"] = "observation-only; effects rules are learned, not ground truth"
+        result["context_note"] = (
+            "observation-only; effects rules are learned, not ground truth"
+        )
         if self._available_actions is not None:
             result["available_actions"] = list(self._available_actions)
         # Small fields first — ensures they survive JSON truncation in LLM logs
@@ -135,7 +137,9 @@ class QueryInterface:
             if ent is None or ent.meta.get("orientation") is None:
                 continue
             actions_covered = covered_actions.get(eid, set())
-            actions_unknown = sorted(all_actions - actions_covered) if all_actions else []
+            actions_unknown = (
+                sorted(all_actions - actions_covered) if all_actions else []
+            )
             gaps.append(
                 {
                     "entity_id": eid,
@@ -160,9 +164,12 @@ class QueryInterface:
                 "confirmed": [],
                 "proposed": [],
             }
-        confirmed = [rule_to_dsl(r) for r in self._ctx.terminal_rules] + [
-            rule_to_dsl(r) for r in self._ctx.relational_rules
-        ]
+        confirmed = (
+            [rule_to_dsl(r) for r in self._ctx.terminal_rules]
+            + [rule_to_dsl(r) for r in self._ctx.relational_rules]
+            + [rule_to_dsl(r) for r in self._ctx.movement_rules[:20]]
+            + [rule_to_dsl(r) for r in self._ctx.collision_rules[:20]]
+        )
         proposed = [rule_to_dsl(r) for r in self._ctx.proposed_rules[:20]]
         return {
             "confirm_threshold": self._ctx.confirm_threshold,
@@ -219,7 +226,11 @@ class QueryInterface:
         def render_fingerprint(fp: tuple[object, ...]) -> list[object]:
             out: list[object] = []
             for item in fp:
-                if isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], int):
+                if (
+                    isinstance(item, tuple)
+                    and len(item) == 2
+                    and isinstance(item[0], int)
+                ):
                     eid, (dim, val) = item
                     out.append((eid, (dim, _render_pos(val) if dim == "pos" else val)))
                 else:
@@ -239,7 +250,11 @@ class QueryInterface:
         def render_fingerprint(fp: tuple[object, ...]) -> list[object]:
             out: list[object] = []
             for item in fp:
-                if isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], int):
+                if (
+                    isinstance(item, tuple)
+                    and len(item) == 2
+                    and isinstance(item[0], int)
+                ):
                     eid, (dim, val) = item
                     out.append((eid, (dim, _render_pos(val) if dim == "pos" else val)))
                 else:
