@@ -387,3 +387,33 @@ class TestValidateRulesAgainstHistory:
         assert len(result) == 2
         assert result[0].frame_idx == 0
         assert result[1].frame_idx == 1
+
+    def test_no_counter_evidence_when_no_fired_rules_overlap_residual(self):
+        """Residual caused by entities changing without any fired rule
+        should not produce counter-evidence — the proposed rules didn't
+        cause the mismatch."""
+        movement_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 13, "delta", (4, 0)),),
+            support=0,
+            kind="movement",
+        )
+        # Entity 5 changes size but no rule targets it — residual exists
+        # but no fired rule overlaps, so no counter-evidence.
+        before = SceneState(
+            relevant=(
+                (5, ("size", 3)),
+                (13, ("pos", (1, 1))),
+            )
+        )
+        after = SceneState(
+            relevant=(
+                (5, ("size", 2)),
+                (13, ("pos", (5, 1))),
+            )
+        )
+        history = _history_with(_make_transition(0, 1, before, after))
+        ctx = EffectContext()
+        spec = _ProjectionSpec(entities=(5, 13), dims=("pos", "size"))
+        result = validate_rules_against_history((movement_rule,), ctx, history, spec)
+        assert result == []

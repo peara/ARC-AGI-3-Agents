@@ -826,6 +826,9 @@ def validate_rules_against_history(
             if overlaps:
                 filtered_fired.append(rule)
 
+        if not filtered_fired:
+            continue
+
         fired_rules_dicts: list[dict[str, object]] = [
             r.to_dict() for r in filtered_fired
         ]
