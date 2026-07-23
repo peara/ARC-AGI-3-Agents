@@ -417,3 +417,47 @@ class TestValidateRulesAgainstHistory:
         spec = _ProjectionSpec(entities=(5, 13), dims=("pos", "size"))
         result = validate_rules_against_history((movement_rule,), ctx, history, spec)
         assert result == []
+
+    def test_confirmed_rule_not_in_counter_evidence(self):
+        """Confirmed rules that fire and produce residuals should NOT appear
+        in counter-evidence — only proposed rules being validated should.
+
+        Scenario: confirmed delta rule predicts e5.size=63 but observed is 61
+        (wrong), while proposed movement rule for e15.pos is correct.
+        The confirmed rule's residual on e5.size should NOT generate
+        counter-evidence because the proposed rule doesn't overlap e5.size.
+        """
+        confirmed_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("size", 5, "delta", -1),),
+            support=5,
+        )
+        proposed_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 15, "delta", (0, 1)),),
+            support=0,
+            kind="movement",
+        )
+        # confirmed_rule predicts e5.size = 64 - 1 = 63, but observed = 61
+        # proposed_rule predicts e15.pos = (3,3) + (0,1) = (3,4), observed (3,4) ✓
+        # Residual on e5.size (63 vs 61), but proposed rule affects e15.pos
+        # → no proposed rule overlaps residual → no counter-evidence
+        before = SceneState(
+            relevant=(
+                (5, ("size", 64)),
+                (15, ("pos", (3, 3))),
+            )
+        )
+        after = SceneState(
+            relevant=(
+                (5, ("size", 61)),
+                (15, ("pos", (3, 4))),
+            )
+        )
+        history = _history_with(_make_transition(0, 1, before, after))
+        ctx = EffectContext(relational_rules=(confirmed_rule,))
+        spec = _ProjectionSpec(entities=(5, 15), dims=("pos", "size"))
+        result = validate_rules_against_history(
+            (proposed_rule,), ctx, history, spec
+        )
+        assert result == []

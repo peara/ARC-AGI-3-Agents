@@ -751,6 +751,8 @@ def validate_rules_against_history(
     if not proposed_rules or len(history) == 0:
         return []
 
+    proposed_keys = {r.key() for r in proposed_rules}
+
     temp_ctx = inject_llm_proposals(ctx, proposed_rules)
     dims = spec.dims
 
@@ -813,6 +815,8 @@ def validate_rules_against_history(
 
         filtered_fired: list[Rule] = []
         for rule in fired:
+            if rule.key() not in proposed_keys:
+                continue
             overlaps = False
             for effect in rule.effects:
                 if effect.dim == "terminal":
