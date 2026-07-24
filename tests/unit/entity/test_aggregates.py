@@ -134,7 +134,7 @@ def test_compound_aggregate_unequal_sizes() -> None:
 
     Regression test: the old unweighted-mean code produced (-5, 0) displacement
     when two members swapped relative order during a (-4, 0) move. The
-    cell-weighted centroid is stable regardless of member ordering.
+    bbox-center centroid is stable regardless of member ordering.
     """
     # Track 1: 1x4 strip (4 cells) at row 0
     cells1 = frozenset({(0, 28), (0, 29), (0, 30), (0, 31)})
@@ -151,7 +151,7 @@ def test_compound_aggregate_unequal_sizes() -> None:
     centroid, size, cells_res, bbox = compute_entity_aggregates(reg, frozenset({1, 2}), 0)
 
     all_cells = cells1 | cells2
-    # Cell-weighted centroid: (4*0 + 12*2) / 16 = 1.5, cols all 29.5
+    # BBox center: rows 0-3 -> (0+3)/2 = 1.5, cols 28-31 -> (28+31)/2 = 29.5
     assert centroid == (1.5, 29.5)
     # Unweighted mean would give (0+2)/2 = 1.0 — the bug
     assert centroid[0] != 1.0

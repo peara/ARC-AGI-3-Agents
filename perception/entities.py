@@ -94,9 +94,8 @@ def compute_entity_aggregates(
 
     rs = [c[0] for c in all_cells]
     cs = [c[1] for c in all_cells]
-    n = len(all_cells)
-    centroid = (sum(rs) / n, sum(cs) / n)
     bbox = (min(rs), min(cs), max(rs), max(cs))
+    centroid = ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
 
     return centroid, total_size, cells_frozen, bbox
 
