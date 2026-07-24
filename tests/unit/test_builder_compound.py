@@ -60,6 +60,7 @@ def _make_feature(
         bboxes=[(0, 0, 3, 3)] * 5,
         displacements=displacements or [(1, 0)] * 5,
         action_displacements=action_displacements or {},
+        frame_displacements={},
         ever_moves=ever_moves,
         shape_keys=[frozenset({(0, 0), (0, 1), (1, 0), (1, 1)})],
         shape_key_stable=True,

@@ -18,6 +18,7 @@ class EntityFeature:
     bboxes: list[tuple[int, int, int, int]]
     displacements: list[tuple[int, int] | None]
     action_displacements: dict[int, list[tuple[int, int]]]
+    frame_displacements: dict[int, tuple[int, int]]
     ever_moves: bool
     shape_keys: list[frozenset[tuple[int, int]]]
     shape_key_stable: bool
@@ -51,6 +52,7 @@ def extract_features(
         all_sizes: list[int] = []
         all_cell_counts: list[int] = []
         action_disp_map: dict[int, list[tuple[int, int]]] = defaultdict(list)
+        frame_disp_map: dict[int, tuple[int, int]] = {}
 
         has_observation = False
         for tid in member_tids:
@@ -78,6 +80,7 @@ def extract_features(
                     aid = action_ids[fidx]
                     if aid != 0:
                         action_disp_map[aid].append(disp)
+                    frame_disp_map[fidx] = disp
 
             for prev, cur in zip(track.observations, track.observations[1:]):
                 if cur.displacement is not None and cur.frame_idx == prev.frame_idx + 1:
@@ -117,6 +120,7 @@ def extract_features(
             bboxes=all_bboxes,
             displacements=all_displacements,
             action_displacements=dict(action_disp_map),
+            frame_displacements=frame_disp_map,
             ever_moves=ever_moves,
             shape_keys=all_shape_keys,
             shape_key_stable=shape_key_stable,

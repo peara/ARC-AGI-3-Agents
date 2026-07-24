@@ -5,6 +5,8 @@ Three signals:
    starts displacing, or a member whose role implies movement has stopped.
    1c. Action displacement mismatch – for the last action, a member had zero
        displacement while the majority of the group had non-zero displacement.
+   1d. Last-frame divergence – for co_movement groups, members had different
+       displacements on the most recent shared frame.
 2. Member death – the entity is no longer present in the registry.
 
 Returns ``list[SplitProposal]`` – one proposal per offending member.
@@ -155,6 +157,32 @@ def detect_stale_groups(
                                     reason="action_displacement_mismatch",
                                 )
                             )
+
+            # --- Signal 1d: last-frame divergence (co_movement groups) ---
+            # For co_movement groups, if some members moved on the last frame
+            # while others stayed still (0,0), the static members have diverged.
+            if group.heuristic == "co_movement" and len(member_ids) >= 2:
+                last_disps: list[tuple[int, int] | None] = []
+                for mid in member_ids:
+                    mfeat = features.get(mid)
+                    if mfeat is None or not mfeat.frame_displacements:
+                        last_disps.append(None)
+                    else:
+                        max_f = max(mfeat.frame_displacements)
+                        last_disps.append(mfeat.frame_displacements[max_f])
+                valid = [d for d in last_disps if d is not None]
+                movers = [d for d in valid if d != (0, 0)]
+                statics = [d for d in valid if d == (0, 0)]
+                if len(movers) >= 1 and len(statics) >= 1:
+                    this_last = last_disps[member_ids.index(eid)]
+                    if this_last == (0, 0):
+                        proposals.append(
+                            SplitProposal(
+                                group_id=idx,
+                                member_id=eid,
+                                reason="last_frame_divergence",
+                            )
+                        )
 
     if proposals:
         log.info(

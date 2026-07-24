@@ -157,6 +157,10 @@ def _parse_response(raw: str) -> list[dict[str, Any]] | None:
 
 def _entity_compact(f: EntityFeature) -> dict[str, Any]:
     r0, c0, r1, c1 = f.bboxes[-1] if f.bboxes else (0, 0, 0, 0)
+    last_disp: list[int] | None = None
+    if f.frame_displacements:
+        max_frame = max(f.frame_displacements)
+        last_disp = list(f.frame_displacements[max_frame])
     return {
         "id": f.entity_id,
         "role": f.role,
@@ -168,7 +172,51 @@ def _entity_compact(f: EntityFeature) -> dict[str, Any]:
         "ever_moves": f.ever_moves,
         "shape_stable": f.shape_key_stable,
         "n_observations": f.n_observations,
+        "last_displacement": last_disp,
     }
+
+
+def _build_heuristic_reason(
+    p: GroupProposal, features: dict[int, EntityFeature]
+) -> str:
+    """Build a short human-readable reason explaining why the heuristic proposed this group."""
+    members = sorted(p.member_ids)
+    if p.heuristic == "co_movement":
+        ev = p.evidence
+        matched_frames = ev.get("matched_frames", [])
+        disps = ev.get("displacements", {})
+        n_matched = len(matched_frames)
+        nonzero_frames = [
+            f for f, d in disps.items() if d != (0, 0)
+        ] if disps else []
+        parts = [
+            f"co_movement: {len(members)} entities had matching displacements"
+            f" on {n_matched} frame(s)"
+        ]
+        if nonzero_frames:
+            parts.append(f"({len(nonzero_frames)} with non-zero movement)")
+        member_disps = []
+        for eid in members:
+            f = features.get(eid)
+            if f and f.frame_displacements:
+                max_frame = max(f.frame_displacements)
+                d = f.frame_displacements[max_frame]
+                member_disps.append(f"entity {eid} last moved by {d}")
+            elif f:
+                member_disps.append(f"entity {eid} did not move recently")
+        if member_disps:
+            parts.append("; ".join(member_disps))
+        return ". ".join(parts)
+    elif p.heuristic == "adjacency":
+        return f"adjacency: {len(members)} entities stayed close across many frames"
+    elif p.heuristic == "containment":
+        return f"containment: one entity's bbox lies inside another's"
+    elif p.heuristic == "same_shape":
+        return f"same_shape: {len(members)} entities share a canonical shape"
+    elif p.heuristic == "static_bounded":
+        return f"static_bounded: {len(members)} entities are static and bounded"
+    else:
+        return f"{p.heuristic}: proposed group of {len(members)} entities"
 
 
 def _build_proposal_payload(
@@ -213,9 +261,12 @@ def _build_proposal_payload(
             ev_plain[k] = v
     ev_plain["support_counter"] = p.support
 
+    reason = _build_heuristic_reason(p, features)
+
     return {
         "proposal_id": proposal_id,
         "heuristic": p.heuristic,
+        "heuristic_reason": reason,
         "member_ids": members,
         "members": member_feats,
         "evidence": ev_plain,
@@ -259,6 +310,8 @@ def _build_user_message(
     for i, p in enumerate(payloads, 1):
         parts.append(f"### Proposal {i} (id={p['proposal_id']})")
         parts.append(f"Heuristic: {p['heuristic']}")
+        if p.get("heuristic_reason"):
+            parts.append(f"Reason: {p['heuristic_reason']}")
         body = {
             "member_ids": p["member_ids"],
             "members": p["members"],

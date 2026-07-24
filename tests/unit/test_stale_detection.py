@@ -32,6 +32,7 @@ def _make_feature(
         bboxes=[(5, 5, 15, 15)],
         displacements=displacements or ([]),
         action_displacements=action_displacements or {},
+        frame_displacements={},
         ever_moves=ever_moves,
         shape_keys=[frozenset()],
         shape_key_stable=True,

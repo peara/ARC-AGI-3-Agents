@@ -127,7 +127,7 @@ def test_superset_confirmed_after_subset():
         entity_id=0, role=None, composition="singleton", n_members=1,
         n_observations=5, positions=[(10.0, 10.0)], bboxes=[(5, 5, 15, 15)],
         displacements=[], action_displacements={0: [(1, 0)], 1: [(1, 0)]},
-        ever_moves=True, shape_keys=[frozenset()], shape_key_stable=True,
+        frame_displacements={}, ever_moves=True, shape_keys=[frozenset()], shape_key_stable=True,
         unique_shape_keys=[frozenset()], sizes=[100], size_range=(100, 100),
         cell_counts=[100],
     )
@@ -135,7 +135,7 @@ def test_superset_confirmed_after_subset():
         entity_id=9, role=None, composition="singleton", n_members=1,
         n_observations=5, positions=[(12.0, 10.0)], bboxes=[(7, 5, 17, 15)],
         displacements=[], action_displacements={0: [(1, 0)], 1: [(1, 0)]},
-        ever_moves=True, shape_keys=[frozenset()], shape_key_stable=True,
+        frame_displacements={}, ever_moves=True, shape_keys=[frozenset()], shape_key_stable=True,
         unique_shape_keys=[frozenset()], sizes=[100], size_range=(100, 100),
         cell_counts=[100],
     )
@@ -143,7 +143,7 @@ def test_superset_confirmed_after_subset():
         entity_id=10, role=None, composition="singleton", n_members=1,
         n_observations=5, positions=[(14.0, 10.0)], bboxes=[(9, 5, 19, 15)],
         displacements=[], action_displacements={0: [(1, 0)], 1: [(1, 0)]},
-        ever_moves=True, shape_keys=[frozenset()], shape_key_stable=True,
+        frame_displacements={}, ever_moves=True, shape_keys=[frozenset()], shape_key_stable=True,
         unique_shape_keys=[frozenset()], sizes=[100], size_range=(100, 100),
         cell_counts=[100],
     )

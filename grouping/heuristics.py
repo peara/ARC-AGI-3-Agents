@@ -69,34 +69,33 @@ def co_movement(features: dict[int, EntityFeature]) -> list[GroupProposal]:
     for (i, fi), (j, fj) in combinations(moving.items(), 2):
         if len(fi.displacements) < 2 or len(fj.displacements) < 2:
             continue
-        matched_actions: list[int] = []
-        shared_disps: dict[int, tuple[int, int]] = {}
-        for aid in fi.action_displacements:
-            if aid not in fj.action_displacements:
-                continue
-            disps_i = fi.action_displacements[aid]
-            disps_j = fj.action_displacements[aid]
-            if not disps_i or not disps_j:
-                continue
-            close_count = 0
-            best_di = disps_i[0]
-            for di in disps_i:
-                for dj in disps_j:
-                    if _displacement_close(di, dj):
-                        close_count += 1
-                        best_di = di
-                        break
-            if close_count > 0:
-                matched_actions.append(aid)
-                shared_disps[aid] = best_di
 
-        if len(matched_actions) >= CO_MOVEMENT_MIN_ACTIONS:
+        fi_fd = fi.frame_displacements
+        fj_fd = fj.frame_displacements
+        shared_frames = sorted(set(fi_fd) & set(fj_fd))
+        if len(shared_frames) < CO_MOVEMENT_MIN_ACTIONS:
+            continue
+
+        matched_frames: list[int] = []
+        shared_disps: dict[int, tuple[int, int]] = {}
+        for fidx in shared_frames:
+            di = fi_fd[fidx]
+            dj = fj_fd[fidx]
+            if _displacement_close(di, dj):
+                matched_frames.append(fidx)
+                shared_disps[fidx] = di
+
+        if len(matched_frames) >= CO_MOVEMENT_MIN_ACTIONS:
+            last_shared = shared_frames[-1]
+            last_matched = matched_frames[-1] if matched_frames else -1
+            if last_shared != last_matched:
+                continue
             nonzero = any(d != (0, 0) for d in shared_disps.values())
             if nonzero:
                 pairs.append((i, j))
                 pair_evidence[(i, j)] = {
-                    "actions_matched": matched_actions,
-                    "displacements": {str(aid): disp for aid, disp in shared_disps.items()},
+                    "matched_frames": matched_frames,
+                    "displacements": {str(f): d for f, d in shared_disps.items()},
                 }
 
     if not pairs:

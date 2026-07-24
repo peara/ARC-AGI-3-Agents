@@ -283,8 +283,7 @@ class TestBuilderIntegration:
                         f"got {cat2.entities[eid].lifecycle}"
                     )
 
-        # Frame 3: tracks stop co-moving (different displacements)
-        # Use same displacement for track 0, different for track 1
+        # Frame 3: tracks stop co-moving — track 0 keeps moving, track 1 stays still
         reg3 = _make_registry_with_tracks(
             _make_track(0, 1, [
                 _make_obs(0, color=1, centroid=(5.0, 5.0)),
@@ -296,7 +295,7 @@ class TestBuilderIntegration:
                 _make_obs(0, color=2, centroid=(20.0, 5.0)),
                 _make_obs(1, color=2, centroid=(22.0, 5.0), displacement=(2, 0)),
                 _make_obs(2, color=2, centroid=(24.0, 5.0), displacement=(2, 0)),
-                _make_obs(3, color=2, centroid=(24.0, 8.0), displacement=(0, 3)),
+                _make_obs(3, color=2, centroid=(24.0, 5.0), displacement=(0, 0)),
             ]),
         )
         _, cat3 = builder.update(reg3, action_ids=[0, 1, 1, 2])

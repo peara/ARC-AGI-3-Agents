@@ -38,6 +38,7 @@ def _make_feature(
     bboxes: list[tuple[int, int, int, int]] | None = None,
     displacements: list[tuple[int, int] | None] | None = None,
     action_displacements: dict[int, list[tuple[int, int]]] | None = None,
+    frame_displacements: dict[int, tuple[int, int]] | None = None,
     ever_moves: bool = False,
     shape_keys: list[frozenset[tuple[int, int]]] | None = None,
     shape_key_stable: bool = True,
@@ -56,6 +57,7 @@ def _make_feature(
         bboxes=bboxes or [(0, 0, 3, 3)],
         displacements=displacements or [None],
         action_displacements=action_displacements or {},
+        frame_displacements=frame_displacements or {},
         ever_moves=ever_moves,
         shape_keys=shape_keys or [frozenset({(0, 0), (0, 1), (1, 0), (1, 1)})],
         shape_key_stable=shape_key_stable,
@@ -82,6 +84,7 @@ class TestCoMovement:
                     1: [(1, 0)],
                     2: [(0, 1)],
                 },
+                frame_displacements={0: (1, 0), 1: (0, 1)},
             ),
             1: _make_feature(
                 entity_id=1,
@@ -91,6 +94,7 @@ class TestCoMovement:
                     1: [(1, 0)],
                     2: [(0, 1)],
                 },
+                frame_displacements={0: (1, 0), 1: (0, 1)},
             ),
         }
         proposals = co_movement(features)
@@ -105,12 +109,14 @@ class TestCoMovement:
                 ever_moves=True,
                 displacements=[(1, 0), (0, 1)],
                 action_displacements={1: [(1, 0)], 2: [(0, 1)]},
+                frame_displacements={0: (1, 0), 1: (0, 1)},
             ),
             1: _make_feature(
                 entity_id=1,
                 ever_moves=True,
                 displacements=[(5, 5), (5, 5)],
                 action_displacements={1: [(5, 5)], 2: [(5, 5)]},
+                frame_displacements={0: (5, 5), 1: (5, 5)},
             ),
         }
         proposals = co_movement(features)
