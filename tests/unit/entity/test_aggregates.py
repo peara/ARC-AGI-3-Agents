@@ -105,16 +105,14 @@ def test_singleton_aggregate() -> None:
     assert bbox == (10, 10, 11, 11)
 
 
-def test_compound_aggregate() -> None:
-    """Two tracks with observations -> centroid is mean, size is sum, 
+def test_compound_aggregate_equal_sizes() -> None:
+    """Two equal-sized tracks -> centroid from unified cells, size is sum,
     cells is union, bbox is min/max over union.
     """
-    # Track 1: 2x2 square at (0,0)
     cells1 = frozenset({(0, 0), (0, 1), (1, 0), (1, 1)})
     obs1 = _make_obs(0, size=4, centroid=(0.5, 0.5), cells=cells1)
     track1 = _make_track(1, 1, [obs1])
 
-    # Track 2: 2x2 square at (2,2)
     cells2 = frozenset({(2, 2), (2, 3), (3, 2), (3, 3)})
     obs2 = _make_obs(0, size=4, centroid=(2.5, 2.5), cells=cells2)
     track2 = _make_track(2, 2, [obs2])
@@ -123,11 +121,43 @@ def test_compound_aggregate() -> None:
 
     centroid, size, cells_res, bbox = compute_entity_aggregates(reg, frozenset({1, 2}), 0)
 
-    # Mean centroid: ( (0.5+2.5)/2, (0.5+2.5)/2 ) = (1.5, 1.5)
+    all_cells = cells1 | cells2
     assert centroid == (1.5, 1.5)
     assert size == 8
-    assert cells_res == cells1 | cells2
+    assert cells_res == all_cells
     assert bbox == (0, 0, 3, 3)
+
+
+def test_compound_aggregate_unequal_sizes() -> None:
+    """Unequal-sized tracks -> centroid must be the cell-weighted centroid
+    of the union, NOT the unweighted mean of member centroids.
+
+    Regression test: the old unweighted-mean code produced (-5, 0) displacement
+    when two members swapped relative order during a (-4, 0) move. The
+    cell-weighted centroid is stable regardless of member ordering.
+    """
+    # Track 1: 1x4 strip (4 cells) at row 0
+    cells1 = frozenset({(0, 28), (0, 29), (0, 30), (0, 31)})
+    obs1 = _make_obs(0, size=4, centroid=(0.0, 29.5), cells=cells1)
+    track1 = _make_track(1, 1, [obs1])
+
+    # Track 2: 3x4 block (12 cells) at rows 1-3
+    cells2 = frozenset({(r, c) for r in range(1, 4) for c in range(28, 32)})
+    obs2 = _make_obs(0, size=12, centroid=(2.0, 29.5), cells=cells2)
+    track2 = _make_track(2, 2, [obs2])
+
+    reg = _make_registry_with_tracks(track1, track2)
+
+    centroid, size, cells_res, bbox = compute_entity_aggregates(reg, frozenset({1, 2}), 0)
+
+    all_cells = cells1 | cells2
+    # Cell-weighted centroid: (4*0 + 12*2) / 16 = 1.5, cols all 29.5
+    assert centroid == (1.5, 29.5)
+    # Unweighted mean would give (0+2)/2 = 1.0 — the bug
+    assert centroid[0] != 1.0
+    assert size == 16
+    assert cells_res == all_cells
+    assert bbox == (0, 28, 3, 31)
 
 
 def test_empty_members() -> None:

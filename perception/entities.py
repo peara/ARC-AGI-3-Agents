@@ -88,18 +88,14 @@ def compute_entity_aggregates(
     # 2. Size (Sum of member sizes)
     total_size = sum(obs.size for obs in member_obs)
 
-    # 3. Centroid (Mean of member centroids)
-    sum_r = sum(obs.centroid[0] for obs in member_obs)
-    sum_c = sum(obs.centroid[1] for obs in member_obs)
-    count = len(member_obs)
-    centroid = (sum_r / count, sum_c / count)
-
-    # 4. BBox (min_r, min_c, max_r, max_c)
+    # 3. Centroid + BBox from the unified cell set (treats the compound as one entity)
     if not all_cells:
         return None, None, None, None
-    
+
     rs = [c[0] for c in all_cells]
     cs = [c[1] for c in all_cells]
+    n = len(all_cells)
+    centroid = (sum(rs) / n, sum(cs) / n)
     bbox = (min(rs), min(cs), max(rs), max(cs))
 
     return centroid, total_size, cells_frozen, bbox
