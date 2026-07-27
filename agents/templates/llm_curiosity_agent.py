@@ -130,6 +130,10 @@ class LlmCuriosity(Agent):
 
         self._prev_levels_completed: int = 0
         self._mechanics_notepad_last_rules_count: int = 0
+        # Grid history for mechanics-notepad multi-frame prompts (most recent last).
+        # Capped at 4 frames — enough to show transitions (e.g. carry pickup) without
+        # overloading the LLM context. Reset by _reset().
+        self._grid_history: list[list[list[int]]] = []
 
         # Phase management
         self._phase: str = "random"  # "random" | "llm_directed"
@@ -204,6 +208,7 @@ class LlmCuriosity(Agent):
             self._mechanics_notepad.reset()
         self._prev_levels_completed = 0
         self._mechanics_notepad_last_rules_count = 0
+        self._grid_history = []
         self._prev_lifecycle_map = None
         return GameAction.RESET
 
@@ -213,6 +218,10 @@ class LlmCuriosity(Agent):
 
         self.session.ingest(latest_frame.frame, self._last_action_id)
         curr_grid = self.session._last_grid
+        if curr_grid is not None:
+            self._grid_history.append(curr_grid)
+            if len(self._grid_history) > 4:
+                self._grid_history = self._grid_history[-4:]
         logical_registry, catalog = self._entity_builder.update(
             self.session.registry, self.session.action_ids,
             effect_context=self.policy.context,
@@ -319,11 +328,11 @@ class LlmCuriosity(Agent):
                 n_entities=n_entities,
             )
             if should_update:
-                recent_frames: list[list[list[int]]] = []
-                if self._scene.grid is not None:
-                    recent_frames.append(self._scene.grid)
+                recent_frames = list(self._grid_history)
+                n_frames = len(recent_frames)
+                recent_steps = list(self._scene.step_observations[-n_frames:])
                 recent_summaries: list[dict[str, object]] = []
-                for step in self._scene.step_observations[-8:]:
+                for step in recent_steps:
                     summary: dict[str, object] = {
                         "levels_completed": step.levels_completed,
                         "controllable_id": self._scene.controllable_id(),
@@ -335,9 +344,14 @@ class LlmCuriosity(Agent):
                     }
                     recent_summaries.append(summary)
 
+                # Use the real action list from the game loop; EffectContext.available_actions
+                # is a learned tuple that defaults to () and serializes as [0] in recordings.
+                available_actions: tuple[int, ...] = tuple(latest_frame.available_actions or ())
                 action_legend: dict[int, str] = {}
                 if ctx is not None:
-                    action_legend = build_action_legend(ctx.available_actions, ctx.movement_rules)
+                    action_legend = build_action_legend(
+                        available_actions or ctx.available_actions, ctx.movement_rules
+                    )
 
                 levels_delta = levels_completed - self._prev_levels_completed
 

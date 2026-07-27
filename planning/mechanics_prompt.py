@@ -173,7 +173,9 @@ def build_messages(
                 "## Previous hypothesis\n```json\n"
                 + json.dumps(prev_hypothesis, indent=2)
                 + "\n```\n\n"
-                "Evaluate it against the new frames below. Output "
+                "Action legend:\n"
+                + "\n".join(f"  {k}: {v}" for k, v in action_legend.items())
+                + "\n\nEvaluate it against the new frames below. Output "
                 "`status: confirmed/refined/refuted` and explain what "
                 "changed in the `changes` field."
             ),
