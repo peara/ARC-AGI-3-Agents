@@ -9,16 +9,17 @@ from vision.palette import ARCADE_PALETTE
 
 logger = logging.getLogger(__name__)
 
-def grid_to_image(grid: Sequence[Sequence[int]]) -> Image.Image:
+def grid_to_image(grid: Sequence[Sequence[int]], scale: int = 4) -> Image.Image:
     """
-    Convert a 64×64 int grid to a 256×256 RGBA Pillow Image.
-    
+    Convert a 64×64 int grid to a scaled RGBA Pillow Image.
+
     Args:
         grid: A 64x64 grid of integers 0-15.
-        
+        scale: Upscale factor (default 4 → 256×256). Use 8 for 512×512.
+
     Returns:
-        A 256x256 PIL Image.
-        
+        A scaled PIL Image.
+
     Raises:
         ValueError: If grid dimensions are not 64x64 or values are outside [0, 15].
     """
@@ -33,8 +34,7 @@ def grid_to_image(grid: Sequence[Sequence[int]]) -> Image.Image:
             raw.extend(ARCADE_PALETTE[idx])
 
     img = Image.frombytes("RGBA", (64, 64), bytes(raw))
-    # Scale 4: 64px -> 256px. Nearest-neighbor upscale keeps pixel art crisp.
-    img = img.resize((256, 256), Image.NEAREST)
+    img = img.resize((64 * scale, 64 * scale), Image.NEAREST)
     return img
 
 def image_to_base64(img: Image.Image) -> str:
