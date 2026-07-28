@@ -30,6 +30,7 @@ from itertools import combinations
 import numpy as np
 
 from .objects import GameObject, Grid, infer_background, segment, to_grid
+from .shape import canonical_shape_key
 
 Cells = frozenset  # frozenset[tuple[int, int]]
 
@@ -251,7 +252,10 @@ class ObjectRegistry:
             for j, a in enumerate(atoms):
                 if j in used_atom:
                     continue
-                if a.color != last.color or a.shape_key != last.shape_key:
+                if (
+                    a.color != last.color
+                    or canonical_shape_key(a.shape_key) != canonical_shape_key(last.shape_key)
+                ):
                     continue
                 ar, ac = a.centroid
                 lr, lc = last.centroid

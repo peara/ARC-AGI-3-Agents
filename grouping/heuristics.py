@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections import defaultdict
 from itertools import combinations
 
+from perception.shape import canonical_shape_key, normalize_shape_key
+
 from .features import EntityFeature
 from .proposal import GroupProposal
 
@@ -122,27 +124,9 @@ def co_movement(features: dict[int, EntityFeature]) -> list[GroupProposal]:
     return proposals
 
 
-def _normalize_shape_key(sk: frozenset[tuple[int, int]]) -> frozenset[tuple[int, int]]:
-    if not sk:
-        return frozenset()
-    min_r = min(r for r, _ in sk)
-    min_c = min(c for _, c in sk)
-    return frozenset((r - min_r, c - min_c) for r, c in sk)
-
-
-def _canonical_shape_key(sk: frozenset[tuple[int, int]]) -> frozenset[tuple[int, int]]:
-    if not sk:
-        return frozenset()
-    variants: list[frozenset[tuple[int, int]]] = []
-    for flip_r in (1, -1):
-        for flip_c in (1, -1):
-            # Identity transform
-            v1 = frozenset((flip_r * r, flip_c * c) for r, c in sk)
-            variants.append(_normalize_shape_key(v1))
-            # Transpose (90-degree rotation)
-            v2 = frozenset((flip_r * c, flip_c * r) for r, c in sk)
-            variants.append(_normalize_shape_key(v2))
-    return min(variants, key=lambda v: sorted(v))
+# Backward-compatible aliases for code that still uses the underscore names.
+_normalize_shape_key = normalize_shape_key
+_canonical_shape_key = canonical_shape_key
 
 
 def same_shape(features: dict[int, EntityFeature]) -> list[GroupProposal]:
@@ -153,7 +137,7 @@ def same_shape(features: dict[int, EntityFeature]) -> list[GroupProposal]:
     canonical: dict[int, frozenset[tuple[int, int]]] = {}
     for eid, f in stable.items():
         if f.unique_shape_keys:
-            canonical[eid] = _canonical_shape_key(f.unique_shape_keys[0])
+            canonical[eid] = canonical_shape_key(f.unique_shape_keys[0])
 
     shape_groups: dict[frozenset[tuple[int, int]], set[int]] = defaultdict(set)
     for eid, ck in canonical.items():
