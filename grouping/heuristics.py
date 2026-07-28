@@ -4,6 +4,9 @@ from collections import defaultdict
 from itertools import combinations
 
 from perception.shape import canonical_shape_key, normalize_shape_key
+from perception.registry import ObjectRegistry
+from perception.entities import EntityCatalog
+from effects.kinematics import entity_cells_at
 
 from .features import EntityFeature
 from .proposal import GroupProposal
@@ -12,6 +15,8 @@ DISTANCE_THRESHOLD = 5.0
 ADJACENCY_FRACTION = 0.5
 CO_MOVEMENT_MIN_ACTIONS = 2
 DISPLACEMENT_TOLERANCE = 1
+ADJACENCY_MIN_FRAMES = 2
+ADJACENCY_CELL_RADIUS = 1
 
 _GROUP_ID_COUNTER = 0
 
@@ -60,7 +65,26 @@ def _displacement_close(
     return abs(d1[0] - d2[0]) <= tolerance and abs(d1[1] - d2[1]) <= tolerance
 
 
-def co_movement(features: dict[int, EntityFeature]) -> list[GroupProposal]:
+def _direction(d: tuple[int, int]) -> tuple[int, int]:
+    """Return the sign of each displacement component."""
+    return (1 if d[0] > 0 else (-1 if d[0] < 0 else 0),
+            1 if d[1] > 0 else (-1 if d[1] < 0 else 0))
+
+
+def _cell_sets_adjacent(
+    cells_a: frozenset[tuple[int, int]],
+    cells_b: frozenset[tuple[int, int]],
+    radius: int = ADJACENCY_CELL_RADIUS,
+) -> bool:
+    """Check if two cell sets are within Chebyshev distance ``radius`` of each other."""
+    for (r1, c1) in cells_a:
+        for (r2, c2) in cells_b:
+            if abs(r1 - r2) <= radius and abs(c1 - c2) <= radius:
+                return True
+    return False
+
+
+def co_movement(features: dict[int, EntityFeature], registry: ObjectRegistry, catalog: EntityCatalog) -> list[GroupProposal]:
     moving = {eid: f for eid, f in features.items() if f.ever_moves}
     if len(moving) < 2:
         return []
@@ -80,17 +104,27 @@ def co_movement(features: dict[int, EntityFeature]) -> list[GroupProposal]:
 
         matched_frames: list[int] = []
         shared_disps: dict[int, tuple[int, int]] = {}
+        adjacent_frames = 0
         for fidx in shared_frames:
             di = fi_fd[fidx]
             dj = fj_fd[fidx]
-            if _displacement_close(di, dj):
+            if _direction(di) == _direction(dj):
                 matched_frames.append(fidx)
                 shared_disps[fidx] = di
+                # Cell adjacency check
+                cells_i = entity_cells_at(registry, catalog, i, fidx)
+                cells_j = entity_cells_at(registry, catalog, j, fidx)
+                if cells_i is not None and cells_j is not None:
+                    if _cell_sets_adjacent(cells_i, cells_j):
+                        adjacent_frames += 1
 
         if len(matched_frames) >= CO_MOVEMENT_MIN_ACTIONS:
             last_shared = shared_frames[-1]
             last_matched = matched_frames[-1] if matched_frames else -1
             if last_shared != last_matched:
+                continue
+            # Adjacency pre-filter: require adjacent on at least ADJACENCY_MIN_FRAMES shared frames
+            if ADJACENCY_MIN_FRAMES > 0 and adjacent_frames < ADJACENCY_MIN_FRAMES:
                 continue
             nonzero = any(d != (0, 0) for d in shared_disps.values())
             if nonzero:
@@ -98,6 +132,7 @@ def co_movement(features: dict[int, EntityFeature]) -> list[GroupProposal]:
                 pair_evidence[(i, j)] = {
                     "matched_frames": matched_frames,
                     "displacements": {str(f): d for f, d in shared_disps.items()},
+                    "adjacent_frames": adjacent_frames,
                 }
 
     if not pairs:

@@ -9,8 +9,6 @@ from effects import (
     Pos,
     SceneState,
     entity_pos_at,
-    frame_meta_from_steps,
-    learn_effect_context,
     predict,
     replay_predicted,
 )
@@ -73,23 +71,20 @@ def build_effect_context(
     action_ids: list[int],
     entity_id: int,
     *,
-    frame_meta=None,
-    step_observations=(),
-    grid_rows: int = 64,
-    grid_cols: int = 64,
+    step_observations: tuple[object, ...] = (),
 ) -> EffectContext | None:
-    meta = frame_meta
-    if meta is None:
-        meta = frame_meta_from_steps(step_observations)
-    return learn_effect_context(
-        reg,
-        catalog,
-        action_ids,
-        meta,
-        entity_id,
-        grid_rows=grid_rows,
-        grid_cols=grid_cols,
-    )
+    """Build a minimal effect context from recording data.
+
+    The classical learner has been removed; this default-constructs an
+    ``EffectContext`` with ``available_actions`` derived from the observed
+    action ids in the recording.  Callers that have a persisted
+    ``effect_context`` dict can use ``EffectContext.from_dict()`` directly.
+    """
+    _ = reg, catalog, entity_id, step_observations
+    available_actions = tuple(sorted(a for a in set(action_ids) if a != 0))
+    if not available_actions:
+        return None
+    return EffectContext(available_actions=available_actions)
 
 
 def verify_plan_on_recording(
@@ -163,10 +158,22 @@ def plan_and_evaluate(
     start_frame: int,
     goal_frame: int,
     *,
+    ctx: EffectContext | None = None,
     max_nodes: int = 10_000,
-    step_observations=(),
+    step_observations: tuple[object, ...] = (),
 ) -> PlanEvalResult | None:
     """Plan between two frames and evaluate against the recording."""
+    if ctx is None:
+        ctx = build_effect_context(
+            reg,
+            catalog,
+            action_ids,
+            entity_id,
+            step_observations=step_observations,
+        )
+    if ctx is None or not ctx.available_actions:
+        return None
+
     start = snapshot(
         reg,
         catalog,
@@ -184,16 +191,6 @@ def plan_and_evaluate(
 
     target = goal_snap.pos(entity_id)
     if target is None:
-        return None
-
-    ctx = build_effect_context(
-        reg,
-        catalog,
-        action_ids,
-        entity_id,
-        step_observations=step_observations,
-    )
-    if ctx is None or not ctx.available_actions:
         return None
 
     plan, _unknowns = plan_bfs(
@@ -224,6 +221,7 @@ def plan_and_evaluate_session(
     start_frame: int,
     goal_frame: int,
     *,
+    ctx: EffectContext | None = None,
     max_nodes: int = 10_000,
 ) -> PlanEvalResult | None:
     scene = session.snapshot()
@@ -234,6 +232,7 @@ def plan_and_evaluate_session(
         entity_id,
         start_frame,
         goal_frame,
+        ctx=ctx,
         max_nodes=max_nodes,
         step_observations=scene.step_observations,
     )

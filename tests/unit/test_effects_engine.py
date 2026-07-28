@@ -14,10 +14,7 @@ from effects import (
     compute_residual,
     confirm_rules,
     diff_effect_context,
-    engine_step,
     inject_validated_proposals,
-    learn_effect_context,
-    load_recording_meta,
     predict,
     propose_rules,
     prune_rules,
@@ -30,13 +27,6 @@ from effects.engine import (
     _refute_contradicted_rules,
 )
 from effects.engine_log import _index_rules, format_rule
-from perception.session import PerceptionSession
-from planning.adapters import snapshot_from_scene
-from planning.search import PlanSpec
-from tests.perception_fixtures import (
-    load_effects_expectations,
-    load_manifest,
-)
 
 
 @pytest.mark.unit
@@ -212,54 +202,6 @@ class TestPhantomEntityRules:
 
 
 @pytest.mark.unit
-class TestLs20CounterPropose:
-    def test_entity_17_decrease_proposed_with_size_in_spec(self):
-        cases = [c for c in load_manifest() if c.recording.name == "ls20-random-legal"]
-        if not cases:
-            pytest.skip("ls20 recording missing")
-        path = cases[0].recording.path
-        session, _ = PerceptionSession.from_recording(path)
-        scene = session.snapshot()
-        ctrl = scene.controllable_id()
-        assert ctrl is not None
-        ctx = learn_effect_context(
-            session.registry,
-            scene.catalog,
-            list(session.action_ids),
-            load_recording_meta(path),
-            ctrl,
-        )
-        assert ctx is not None
-
-        spec = PlanSpec(entities=[ctrl, 17], dims=("pos", "size"), goal=lambda s: False)
-        found = False
-        for fidx in range(1, len(session.action_ids)):
-            before = snapshot_from_scene(scene, spec, frame_idx=fidx - 1)
-            after = snapshot_from_scene(scene, spec, frame_idx=fidx)
-            if before is None or after is None:
-                continue
-            action = int(session.action_ids[fidx])
-            predicted = predict(before, action, ctx)
-            if predicted.unknown:
-                continue
-            updated = engine_step(
-                ctx,
-                before,
-                action,
-                after,
-                entity_ids=(17,),
-                dims=("size",),
-            )
-            for rule in (*updated.proposed_rules, *updated.relational_rules):
-                if rule.kind == "delta" and rule.effects[0].of == 17:
-                    if rule.effects[0].value == -2:
-                        found = True
-                        break
-            if found:
-                break
-        assert found, "expected -2 counter rule for ls20 entity #17"
-
-
 @pytest.mark.unit
 class TestProposeRulesLlmProposals:
     def _ctx(self) -> EffectContext:
@@ -357,29 +299,6 @@ class TestEngineLog:
         )
         lines = diff_effect_context(confirmed, promoted)
         assert any("proposed→relational" in line for line in lines)
-
-
-@pytest.mark.unit
-class TestEffectsEngineManifest:
-    @pytest.fixture(params=load_effects_expectations(), ids=lambda e: e.recording.name)
-    def expect(self, request):
-        if not request.param.recording.path.is_file():
-            pytest.skip("recording missing")
-        return request.param
-
-    def test_abstain_expectations(self, expect):
-        session, _ = PerceptionSession.from_recording(expect.recording.path)
-        scene = session.snapshot()
-        ctrl = scene.controllable_id()
-        assert ctrl is not None
-        ctx = learn_effect_context(
-            session.registry,
-            scene.catalog,
-            list(session.action_ids),
-            load_recording_meta(expect.recording.path),
-            ctrl,
-        )
-        assert ctx is not None
 
 
 @pytest.mark.unit

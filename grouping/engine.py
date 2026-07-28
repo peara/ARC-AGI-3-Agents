@@ -414,7 +414,7 @@ class GroupingEngine:
         features = extract_features(self._registry, self._catalog, self._action_ids)
 
         raw_proposals = (
-            co_movement(features)
+            co_movement(features, self._registry, self._catalog)
             + same_shape(features)
             + containment(features)
             + adjacency(features)

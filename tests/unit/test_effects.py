@@ -10,95 +10,13 @@ from effects import (
     Prediction,
     Rule,
     SceneState,
-    learn_effect_context,
-    load_recording_meta,
     merge_effect_context,
     predict,
 )
 from effects.dsl import dsl_to_rule, rule_to_dsl
 from effects.guard_parse import evaluate_guard, parse_guard_clauses
 from effects.state import TERMINAL_GAME_OVER
-from perception.session import PerceptionSession
 from planning.search import plan_bfs
-from tests.perception_fixtures import (
-    REPO_ROOT,
-    load_effects_expectations,
-    load_manifest,
-)
-
-G50T_PATH = REPO_ROOT / (
-    "recordings/g50t-5849a774.curiosity.200."
-    "31c022a3-dd4e-4ebe-8ad9-c237c6053bb1.recording.jsonl"
-)
-
-
-@pytest.mark.unit
-class TestLearnEffectContext:
-    @pytest.fixture
-    def g50t_session(self):
-        if not G50T_PATH.is_file():
-            pytest.skip("g50t recording missing")
-        session, _ = PerceptionSession.from_recording(G50T_PATH)
-        return session
-
-    def test_g50t_learns_terminal_rule(self, g50t_session):
-        scene = g50t_session.snapshot()
-        ctrl = scene.controllable_id()
-        assert ctrl is not None
-        meta = load_recording_meta(G50T_PATH)
-        ctx = learn_effect_context(
-            g50t_session.registry,
-            scene.catalog,
-            list(g50t_session.action_ids),
-            meta,
-            ctrl,
-        )
-        assert ctx is not None
-        game_over = [
-            r for r in ctx.terminal_rules
-            if r.kind == "terminal" and any(e.dim == "terminal" and e.value == TERMINAL_GAME_OVER for e in r.effects)
-        ]
-        assert game_over, "expected GAME_OVER terminal rule on g50t"
-        assert any(e.value == TERMINAL_GAME_OVER for e in game_over[0].effects)
-
-    def test_g50t_learns_counter_rules(self, g50t_session):
-        scene = g50t_session.snapshot()
-        ctrl = scene.controllable_id()
-        assert ctrl is not None
-        meta = load_recording_meta(G50T_PATH)
-        ctx = learn_effect_context(
-            g50t_session.registry,
-            scene.catalog,
-            list(g50t_session.action_ids),
-            meta,
-            ctrl,
-        )
-        assert ctx is not None
-        growth = [
-            r
-            for r in ctx.relational_rules
-            if r.kind == "delta" and any(e.dim == "size" and e.value == 1 for e in r.effects)
-        ]
-        assert growth, "expected counter +1 rules on g50t"
-
-    def test_ls20_no_terminal_rules(self):
-        cases = [c for c in load_manifest() if c.recording.name == "ls20-random-legal"]
-        if not cases:
-            pytest.skip("ls20 recording missing")
-        path = cases[0].recording.path
-        session, _ = PerceptionSession.from_recording(path)
-        scene = session.snapshot()
-        ctrl = scene.controllable_id()
-        assert ctrl is not None
-        ctx = learn_effect_context(
-            session.registry,
-            scene.catalog,
-            list(session.action_ids),
-            load_recording_meta(path),
-            ctrl,
-        )
-        assert ctx is not None
-        assert not ctx.terminal_rules
 
 
 @pytest.mark.unit
@@ -188,36 +106,6 @@ class TestBFSPrunesGameOver:
         )
         assert plan == [2]
 
-
-@pytest.mark.unit
-class TestEffectsManifest:
-    @pytest.fixture(params=load_effects_expectations(), ids=lambda e: e.recording.name)
-    def expect(self, request):
-        if not request.param.recording.path.is_file():
-            pytest.skip("recording missing")
-        return request.param
-
-    def test_manifest_effect_expectations(self, expect):
-        session, _ = PerceptionSession.from_recording(expect.recording.path)
-        scene = session.snapshot()
-        ctrl = scene.controllable_id()
-        assert ctrl is not None
-        ctx = learn_effect_context(
-            session.registry,
-            scene.catalog,
-            list(session.action_ids),
-            load_recording_meta(expect.recording.path),
-            ctrl,
-        )
-        assert ctx is not None
-        if expect.expect_terminal_rule:
-            assert ctx.terminal_rules
-        else:
-            assert not ctx.terminal_rules
-        if expect.expect_counter_rule:
-            assert ctx.relational_rules
-        else:
-            assert not ctx.relational_rules
 
 
 def _make_rule(**overrides):

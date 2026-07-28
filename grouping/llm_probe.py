@@ -234,7 +234,7 @@ def main(argv: list[str]) -> int:
     print(f"    {len(features)} entities", file=sys.stderr)
 
     proposals: list[GroupProposal] = []
-    proposals.extend(co_movement(features))
+    proposals.extend(co_movement(features, sess.registry, sess.catalog))
     proposals.extend(same_shape(features))
     proposals.extend(containment(features))
     proposals.extend(adjacency(features))

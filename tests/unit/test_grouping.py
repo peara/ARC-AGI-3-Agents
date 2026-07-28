@@ -11,7 +11,11 @@ from tests.conftest import make_mock_llm
 from grouping.engine import CompoundSplitVerdict, ConfirmedGroup, MemberLabel
 from grouping.features import EntityFeature
 from grouping.heuristics import (
+    ADJACENCY_CELL_RADIUS,
+    ADJACENCY_MIN_FRAMES,
     _canonical_shape_key,
+    _cell_sets_adjacent,
+    _direction,
     _displacement_close,
     _transitive_closure,
     adjacency,
@@ -73,6 +77,74 @@ T_SHAPE = frozenset({(0, 0), (0, 1), (0, 2), (1, 1)})
 SQUARE_SHAPE = frozenset({(0, 0), (0, 1), (1, 0), (1, 1)})
 
 
+def _make_registry_and_catalog(
+    entity_cells: dict[int, dict[int, frozenset[tuple[int, int]]]] | None = None,
+) -> tuple[object, object]:
+    """Create minimal (ObjectRegistry, EntityCatalog) mocks for co_movement tests.
+
+    entity_cells maps entity_id -> {frame_idx: frozenset of cells}.
+    If None, returns mocks where entity_cells_at always returns None
+    (which bypasses the adjacency gate).
+    """
+    from perception.entities import Entity, EntityCatalog
+    from perception.registry import ObjectRegistry
+
+    reg = ObjectRegistry.__new__(ObjectRegistry)
+    reg.tracks = {}
+
+    if entity_cells is None:
+        cat = EntityCatalog(entities={})
+        return reg, cat
+
+    entities: dict[int, Entity] = {}
+    for eid, frame_cells in entity_cells.items():
+        all_cells: set[tuple[int, int]] = set()
+        for cells in frame_cells.values():
+            all_cells.update(cells)
+        entities[eid] = Entity(
+            id=eid,
+            members=frozenset(),
+            composition="singleton",
+            cells=frozenset(all_cells),
+        )
+    cat = EntityCatalog(entities=entities)
+
+    for eid, frame_cells in entity_cells.items():
+        for fidx, cells in frame_cells.items():
+            pass
+
+    return reg, cat
+
+
+def _make_adjacent_registry_and_catalog(
+    entity_cells: dict[int, dict[int, frozenset[tuple[int, int]]]],
+) -> tuple[object, object]:
+    """Create (ObjectRegistry, EntityCatalog) where entity_cells_at returns cells per frame.
+
+    entity_cells maps entity_id -> {frame_idx: frozenset of cells}.
+    Stores cells on Entity.cells so entity_cells_at returns them directly.
+    """
+    from perception.entities import Entity, EntityCatalog
+    from perception.registry import ObjectRegistry
+
+    reg = ObjectRegistry.__new__(ObjectRegistry)
+    reg.tracks = {}
+
+    entities: dict[int, Entity] = {}
+    for eid, frame_cells in entity_cells.items():
+        all_cells: set[tuple[int, int]] = set()
+        for cells in frame_cells.values():
+            all_cells.update(cells)
+        entities[eid] = Entity(
+            id=eid,
+            members=frozenset(),
+            composition="singleton",
+            cells=frozenset(all_cells),
+        )
+    cat = EntityCatalog(entities=entities)
+    return reg, cat
+
+
 class TestCoMovement:
     def test_identical_displacements_produces_proposal(self) -> None:
         features = {
@@ -97,7 +169,12 @@ class TestCoMovement:
                 frame_displacements={0: (1, 0), 1: (0, 1)},
             ),
         }
-        proposals = co_movement(features)
+        cells = {
+            0: {0: frozenset({(0, 0), (0, 1)}), 1: frozenset({(0, 1), (0, 2)})},
+            1: {0: frozenset({(0, 2), (0, 3)}), 1: frozenset({(0, 3), (0, 4)})},
+        }
+        reg, cat = _make_adjacent_registry_and_catalog(cells)
+        proposals = co_movement(features, reg, cat)
         assert len(proposals) >= 1
         assert any(0 in p.member_ids and 1 in p.member_ids for p in proposals)
         assert all(p.heuristic == "co_movement" for p in proposals)
@@ -119,7 +196,8 @@ class TestCoMovement:
                 frame_displacements={0: (5, 5), 1: (5, 5)},
             ),
         }
-        proposals = co_movement(features)
+        reg, cat = _make_registry_and_catalog()
+        proposals = co_movement(features, reg, cat)
         co_groups = [p for p in proposals if 0 in p.member_ids and 1 in p.member_ids]
         assert len(co_groups) == 0
 
@@ -128,14 +206,16 @@ class TestCoMovement:
             0: _make_feature(entity_id=0, ever_moves=False),
             1: _make_feature(entity_id=1, ever_moves=False),
         }
-        proposals = co_movement(features)
+        reg, cat = _make_registry_and_catalog()
+        proposals = co_movement(features, reg, cat)
         assert len(proposals) == 0
 
     def test_single_moving_entity_no_proposal(self) -> None:
         features = {
             0: _make_feature(entity_id=0, ever_moves=True, displacements=[(1, 0), (1, 0)]),
         }
-        proposals = co_movement(features)
+        reg, cat = _make_registry_and_catalog()
+        proposals = co_movement(features, reg, cat)
         assert len(proposals) == 0
 
 
@@ -295,28 +375,36 @@ class TestGroupProposal:
 
 class TestDeduplication:
     def test_same_pair_same_heuristic_no_duplicate(self) -> None:
-        """Transitive closure should produce one group per connected component."""
         features = {
             0: _make_feature(
                 entity_id=0,
                 ever_moves=True,
                 displacements=[(1, 0), (1, 0)],
                 action_displacements={1: [(1, 0)], 2: [(0, 1)]},
+                frame_displacements={0: (1, 0), 1: (0, 1)},
             ),
             1: _make_feature(
                 entity_id=1,
                 ever_moves=True,
                 displacements=[(1, 0), (0, 1)],
                 action_displacements={1: [(1, 0)], 2: [(0, 1)]},
+                frame_displacements={0: (1, 0), 1: (0, 1)},
             ),
             2: _make_feature(
                 entity_id=2,
                 ever_moves=True,
                 displacements=[(1, 0), (0, 1)],
                 action_displacements={1: [(1, 0)], 2: [(0, 1)]},
+                frame_displacements={0: (1, 0), 1: (0, 1)},
             ),
         }
-        proposals = co_movement(features)
+        cells = {
+            0: {0: frozenset({(0, 0), (0, 1)}), 1: frozenset({(0, 1), (0, 2)})},
+            1: {0: frozenset({(0, 2), (0, 3)}), 1: frozenset({(0, 3), (0, 4)})},
+            2: {0: frozenset({(1, 2), (1, 3)}), 1: frozenset({(1, 3), (1, 4)})},
+        }
+        reg, cat = _make_adjacent_registry_and_catalog(cells)
+        proposals = co_movement(features, reg, cat)
         co_movement_groups = [p for p in proposals if p.heuristic == "co_movement"]
         for group in co_movement_groups:
             assert len(group.member_ids) > 1
@@ -1719,3 +1807,172 @@ def _make_confirmed_group(
         members=members,
         confidence=confidence,
     )
+
+
+class TestDirection:
+    def test_positive_directions_match(self) -> None:
+        assert _direction((3, 0)) == _direction((5, 0))
+        assert _direction((0, 7)) == _direction((0, 2))
+
+    def test_opposite_directions_differ(self) -> None:
+        assert _direction((3, 0)) != _direction((-2, 0))
+        assert _direction((0, 5)) != _direction((0, -1))
+
+    def test_zero_component(self) -> None:
+        assert _direction((0, 0)) == (0, 0)
+        assert _direction((3, 0)) == (1, 0)
+        assert _direction((-1, 0)) == (-1, 0)
+        assert _direction((0, -5)) == (0, -1)
+        assert _direction((7, -3)) == (1, -1)
+
+    def test_diagonal(self) -> None:
+        assert _direction((3, -4)) == (1, -1)
+        assert _direction((3, -4)) == _direction((100, -200))
+
+
+class TestCellSetsAdjacent:
+    def test_touching_cells_are_adjacent(self) -> None:
+        a = frozenset({(0, 0), (0, 1), (1, 0), (1, 1)})
+        b = frozenset({(0, 2), (0, 3), (1, 2), (1, 3)})
+        assert _cell_sets_adjacent(a, b)
+
+    def test_far_cells_are_not_adjacent(self) -> None:
+        a = frozenset({(0, 0), (0, 1), (1, 0), (1, 1)})
+        c = frozenset({(10, 10), (10, 11)})
+        assert not _cell_sets_adjacent(a, c)
+
+    def test_l_shape_and_dot_adjacent(self) -> None:
+        l_shape = frozenset({(0, 0), (1, 0), (2, 0), (2, 1)})
+        dot = frozenset({(3, 0)})
+        assert _cell_sets_adjacent(l_shape, dot)
+
+    def test_diagonal_touch_adjacent(self) -> None:
+        a = frozenset({(0, 0)})
+        b = frozenset({(1, 1)})
+        assert _cell_sets_adjacent(a, b, radius=1)
+        assert not _cell_sets_adjacent(a, b, radius=0)
+
+    def test_overlapping_cells_adjacent(self) -> None:
+        a = frozenset({(0, 0), (1, 1)})
+        b = frozenset({(0, 0)})
+        assert _cell_sets_adjacent(a, b)
+
+
+class TestCoMovementDirectionOnly:
+    def test_direction_only_matching_different_magnitudes(self) -> None:
+        features = {
+            0: _make_feature(
+                entity_id=0,
+                ever_moves=True,
+                displacements=[(3, 0), (3, 0)],
+                frame_displacements={0: (3, 0), 1: (3, 0)},
+            ),
+            1: _make_feature(
+                entity_id=1,
+                ever_moves=True,
+                displacements=[(5, 0), (5, 0)],
+                frame_displacements={0: (5, 0), 1: (5, 0)},
+            ),
+        }
+        cells = {
+            0: {0: frozenset({(0, 0), (0, 1)}), 1: frozenset({(0, 1), (0, 2)})},
+            1: {0: frozenset({(0, 2), (0, 3)}), 1: frozenset({(0, 3), (0, 4)})},
+        }
+        reg, cat = _make_adjacent_registry_and_catalog(cells)
+        proposals = co_movement(features, reg, cat)
+        assert len(proposals) >= 1
+        assert any(0 in p.member_ids and 1 in p.member_ids for p in proposals)
+
+    def test_opposite_directions_no_proposal(self) -> None:
+        features = {
+            0: _make_feature(
+                entity_id=0,
+                ever_moves=True,
+                displacements=[(1, 0), (1, 0)],
+                frame_displacements={0: (1, 0), 1: (1, 0)},
+            ),
+            1: _make_feature(
+                entity_id=1,
+                ever_moves=True,
+                displacements=[(-1, 0), (-1, 0)],
+                frame_displacements={0: (-1, 0), 1: (-1, 0)},
+            ),
+        }
+        reg, cat = _make_registry_and_catalog()
+        proposals = co_movement(features, reg, cat)
+        co_groups = [p for p in proposals if 0 in p.member_ids and 1 in p.member_ids]
+        assert len(co_groups) == 0
+
+    def test_non_adjacent_entities_no_proposal(self) -> None:
+        features = {
+            0: _make_feature(
+                entity_id=0,
+                ever_moves=True,
+                displacements=[(1, 0), (1, 0)],
+                frame_displacements={0: (1, 0), 1: (1, 0)},
+            ),
+            1: _make_feature(
+                entity_id=1,
+                ever_moves=True,
+                displacements=[(1, 0), (1, 0)],
+                frame_displacements={0: (1, 0), 1: (1, 0)},
+            ),
+        }
+        far_cells = {
+            0: {0: frozenset({(0, 0)}), 1: frozenset({(0, 1)})},
+            1: {0: frozenset({(50, 50)}), 1: frozenset({(50, 51)})},
+        }
+        reg, cat = _make_adjacent_registry_and_catalog(far_cells)
+        proposals = co_movement(features, reg, cat)
+        co_groups = [p for p in proposals if 0 in p.member_ids and 1 in p.member_ids]
+        assert len(co_groups) == 0
+
+    def test_adjacent_entities_with_same_direction_produces_proposal(self) -> None:
+        features = {
+            0: _make_feature(
+                entity_id=0,
+                ever_moves=True,
+                displacements=[(1, 0), (1, 0)],
+                frame_displacements={0: (1, 0), 1: (1, 0)},
+            ),
+            1: _make_feature(
+                entity_id=1,
+                ever_moves=True,
+                displacements=[(1, 0), (1, 0)],
+                frame_displacements={0: (1, 0), 1: (1, 0)},
+            ),
+        }
+        adjacent_cells = {
+            0: {0: frozenset({(0, 0), (0, 1)}), 1: frozenset({(0, 1), (0, 2)})},
+            1: {0: frozenset({(0, 2), (0, 3)}), 1: frozenset({(0, 3), (0, 4)})},
+        }
+        reg, cat = _make_adjacent_registry_and_catalog(adjacent_cells)
+        proposals = co_movement(features, reg, cat)
+        assert len(proposals) >= 1
+        assert any(0 in p.member_ids and 1 in p.member_ids for p in proposals)
+
+    def test_adjacency_evidence_in_proposal(self) -> None:
+        features = {
+            0: _make_feature(
+                entity_id=0,
+                ever_moves=True,
+                displacements=[(1, 0), (1, 0)],
+                frame_displacements={0: (1, 0), 1: (1, 0)},
+            ),
+            1: _make_feature(
+                entity_id=1,
+                ever_moves=True,
+                displacements=[(1, 0), (1, 0)],
+                frame_displacements={0: (1, 0), 1: (1, 0)},
+            ),
+        }
+        adjacent_cells = {
+            0: {0: frozenset({(0, 0), (0, 1)}), 1: frozenset({(0, 1), (0, 2)})},
+            1: {0: frozenset({(0, 2), (0, 3)}), 1: frozenset({(0, 3), (0, 4)})},
+        }
+        reg, cat = _make_adjacent_registry_and_catalog(adjacent_cells)
+        proposals = co_movement(features, reg, cat)
+        assert len(proposals) >= 1
+        proposal = next(p for p in proposals if 0 in p.member_ids and 1 in p.member_ids)
+        assert "adjacent_frames" in proposal.evidence
+        assert proposal.evidence["adjacent_frames"] >= ADJACENCY_MIN_FRAMES

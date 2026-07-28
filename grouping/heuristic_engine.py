@@ -34,7 +34,7 @@ class HeuristicGroupingEngine:
         self._frame_count += 1
         features = extract_features(registry, catalog, action_ids)
         raw = (
-            co_movement(features)
+            co_movement(features, registry, catalog)
             + same_shape(features)
             + containment(features)
             + adjacency(features)

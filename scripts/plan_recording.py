@@ -20,7 +20,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from effects import entity_pos_at, replay_predicted
+from effects import EffectContext, entity_pos_at, replay_predicted
 from perception import (
     ObjectRegistry,
     assign_roles,
@@ -29,7 +29,6 @@ from perception import (
 )
 from planning import PlanSpec, goal_pos, plan_bfs, snapshot
 from planning.recording_eval import (
-    build_effect_context,
     plan_and_evaluate,
     verify_plan_on_recording,
 )
@@ -114,8 +113,8 @@ def main() -> None:
     else:
         raise SystemExit("provide --goal-frame or --goal-pos")
 
-    ctx = build_effect_context(reg, catalog, action_ids, args.entity)
-    if ctx is None:
+    ctx = EffectContext(available_actions=tuple(sorted(set(action_ids) - {0})))
+    if not ctx.available_actions:
         raise SystemExit("could not build effect context")
 
     start_pos = start.pos(args.entity)
@@ -187,6 +186,7 @@ def run_manifest_case(case_id: str, max_nodes: int, verify_segments: bool) -> No
     print(f"recording: {case.recording.path.relative_to(REPO_ROOT)}")
 
     stack = build_perception_stack(case.recording.path)
+    ctx = EffectContext(available_actions=tuple(sorted(set(stack.action_ids) - {0})))
     result = plan_and_evaluate(
         stack.registry,
         stack.catalog,
@@ -194,8 +194,8 @@ def run_manifest_case(case_id: str, max_nodes: int, verify_segments: bool) -> No
         case.entity_id,
         case.start_frame,
         case.goal_frame,
+        ctx=ctx,
         max_nodes=max_nodes,
-        step_observations=stack.session.step_observations,
     )
     if result is None:
         print("plan: NOT FOUND")

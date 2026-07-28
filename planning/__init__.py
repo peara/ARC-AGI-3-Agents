@@ -26,7 +26,6 @@ from .probe import (
 from .protocol import Planner, PlannerStatus
 from .query import QueryInterface, UnknownAction
 from .recording_eval import (
-    build_effect_context,
     collect_observed_steps,
     plan_and_evaluate,
     plan_and_evaluate_session,
@@ -49,7 +48,7 @@ __all__ = [
     "QueryInterface",
     "UnknownAction",
     "RuleProposerFn",
-    "build_effect_context",
+
     "build_fallback_goal",
     "call_planner",
     "call_rule_proposer",

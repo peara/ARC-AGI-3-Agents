@@ -4,15 +4,7 @@ from __future__ import annotations
 
 import random
 
-from effects import (
-    EffectContext,
-    Pos,
-    entity_size_at,
-    inject_llm_proposals,
-    inject_validated_proposals,
-    learn_effect_context_multi,
-    merge_effect_context,
-)
+from effects import EffectContext, Pos, entity_size_at, inject_llm_proposals, inject_validated_proposals
 from effects.predict import predict
 from effects.rules import Rule
 from effects.state import SceneState
@@ -141,20 +133,10 @@ class RuleFirstPolicy:
             self._last_phase = "no_actions"
             return RESET_ACTION
 
-        # Learn rules every frame — bootstrap _ctx during random phase
-        # so the phase gate can open once movement rules appear.
-        base = learn_effect_context_multi(
-            scene.registry,
-            scene.catalog,
-            list(scene.action_ids),
-            grid_rows=scene.grid_rows,
-            grid_cols=scene.grid_cols,
-        )
-        if base is not None and base.available_actions:
-            if self._engine_ctx is None:
-                self._engine_ctx = base
-            else:
-                self._engine_ctx = merge_effect_context(base, self._engine_ctx)
+        if self._engine_ctx is None:
+            self._engine_ctx = EffectContext(
+                available_actions=tuple(sorted(set(scene.action_ids) - {RESET_ACTION}))
+            )
             self._ctx = self._engine_ctx
 
         # Phase gate: random until we have movement rules
@@ -166,7 +148,7 @@ class RuleFirstPolicy:
             action = self._random_action(actions, phase="explore_random")
             return self.record_step(scene, action)
 
-        if base is None or not base.available_actions:
+        if not self._ctx.available_actions:
             action = self._random_action(actions, phase="explore_random")
             return self.record_step(scene, action)
 

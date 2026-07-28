@@ -130,8 +130,8 @@ class TestRuleFirstPolicy:
         assert action in [1, 2, 3, 4]
         assert policy.status().phase == "explore_random"
 
-        # Multi-frame registry → transitions exist → movement rules produced
-        # Entity 0 moves from (5,5) to (5,6) between frames
+        # Multi-frame registry → context initialized with available_actions
+        # (movement rules come from LLM injection, not classical learner)
         reg2, catalog2 = _make_registry_and_catalog(
             positions={0: [(5, 5), (5, 6)]},
         )
@@ -140,10 +140,11 @@ class TestRuleFirstPolicy:
         policy.decide(scene2)
 
         assert policy.context is not None, "Context should be populated after decide"
-        assert len(policy.context.movement_rules) > 0, (
-            f"Should have movement rules from transitions, got {policy.context.movement_rules}"
+        assert policy.context.available_actions, (
+            f"Should have available_actions, got {policy.context.available_actions}"
         )
-        assert policy.status().phase != "explore_random"
+        # Without LLM-injected rules, still in random phase
+        assert policy.status().phase == "explore_random"
 
     def test_bfs_uses_fingerprint_not_position(self):
         """Visited set stores SceneState fingerprints, not Pos tuples."""
@@ -196,9 +197,9 @@ class TestRuleFirstPolicy:
 
         assert policy.controllable_id is None
 
-        # With transitions, learn_effect_context_multi produces rules
+        # Context initialized with available_actions from scene
         assert policy.context is not None
-        assert len(policy.context.movement_rules) > 0
+        assert policy.context.available_actions
 
     def test_decide_random_phase_without_rules(self):
         """Without EffectContext, decide returns random actions and phase is explore_random."""
@@ -232,7 +233,7 @@ class TestRuleFirstPolicy:
             config=ExplorationConfig(min_random_steps=0, seed=42, log_engine=False),
         )
 
-        # Two entities with 2 frames each so learn_effect_context_multi can learn movement
+        # Two entities with 2 frames each so movement rules can be learned
         reg, catalog = _make_registry_and_catalog(
             positions={
                 0: [(5, 5), (5, 6)],  # entity 0 moves right on action 1

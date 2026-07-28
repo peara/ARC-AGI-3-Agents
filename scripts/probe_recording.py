@@ -45,7 +45,7 @@ if str(REPO_ROOT) not in sys.path:
 from planning import ProbeGoal, execute_probe  # noqa: E402
 from planning.llm_planner import _parse_response, call_planner  # noqa: E402
 from planning.query import QueryInterface  # noqa: E402
-from planning.recording_eval import build_effect_context  # noqa: E402
+from effects.context import EffectContext  # noqa: E402
 from tests.perception_fixtures import build_perception_stack  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -202,13 +202,8 @@ def main() -> None:
         reason=args.reason,
     )
 
-    ctx = build_effect_context(
-        stack.registry,
-        stack.catalog,
-        stack.action_ids,
-        ctrl or 0,
-    )
-    if ctx is None:
+    ctx = EffectContext(available_actions=tuple(sorted(set(stack.action_ids) - {0})))
+    if not ctx.available_actions:
         raise SystemExit("could not build effect context")
 
     actions_available = sorted(ctx.available_actions)
