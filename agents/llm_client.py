@@ -92,6 +92,7 @@ class LLMClient:
             response = self._client.chat.completions.create(
                 model=self.model,
                 messages=messages,  # type: ignore[arg-type]
+                timeout=float(os.environ.get("LLM_TIMEOUT", "120")),
             )
         except openai.OpenAIError as exc:
             raise LLMCallError(str(exc)) from exc

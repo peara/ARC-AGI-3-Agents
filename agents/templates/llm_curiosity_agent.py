@@ -14,6 +14,8 @@ import random
 import time
 from typing import Any
 
+import numpy as np
+
 from arcengine import FrameData, GameAction, GameState
 
 from agents.llm_client import LLMClient
@@ -36,6 +38,7 @@ from planning.llm_rule_proposer import (
 )
 from planning.mechanics_notepad import MechanicsNotepad
 from planning.mechanics_prompt import build_action_legend
+from planning.coldstart import infer_color_config
 from planning.probe import ProbeGoal, execute_probe
 from planning.query import QueryInterface
 from planning.rule_first import RuleFirstPolicy
@@ -136,7 +139,11 @@ class LlmCuriosity(Agent):
         self._grid_history: list[list[list[int]]] = []
 
         # Phase management
-        self._phase: str = "random"  # "random" | "llm_directed"
+        self._phase: str = "coldstart"  # "coldstart" | "random" | "llm_directed"
+        self._coldstart_done: bool = False
+        self._coldstart_frame_threshold: int = int(os.environ.get("COLDSTART_FRAMES", "6"))
+        self._coldstart_probe_queue: list[int] = []
+        self._coldstart_seen_actions: set[int] = set()
 
         # Probe plan state
         self._probe_plan: list[int] | None = None
@@ -194,6 +201,58 @@ class LlmCuriosity(Agent):
 
     # ── Helpers ──────────────────────────────────────────────────────────
 
+    def _coldstart_probe_action(self, actions: list[int]) -> int:
+        """Pick the next probe action during the cold-start phase.
+
+        Cycles through available actions in sorted order (excluding RESET),
+        taking each one once, then one extra to capture the last action's
+        transition. This gives the cold-start LLM prompt one observation per
+        action.
+        """
+        non_reset = sorted(a for a in actions if a != RESET_ACTION)
+        if not non_reset:
+            return RESET_ACTION
+
+        if not self._coldstart_probe_queue:
+            self._coldstart_probe_queue = list(non_reset)
+
+        action_id = self._coldstart_probe_queue.pop(0)
+        self._coldstart_seen_actions.add(action_id)
+
+        seen_all = set(non_reset).issubset(self._coldstart_seen_actions)
+        extra = len(self._coldstart_seen_actions) > len(non_reset)
+        if seen_all and extra:
+            self._coldstart_done = True
+        elif not self._coldstart_probe_queue and seen_all:
+            self._coldstart_probe_queue = list(non_reset)
+
+        return action_id
+
+    def _run_coldstart(self, latest_frame: FrameData) -> None:
+        """Call the cold-start LLM prompt and set color config on the entity builder."""
+        self._coldstart_done = True
+        if not self._grid_history:
+            return
+        grids = [np.array(g) for g in self._grid_history]
+        actions = list(self.session.action_ids)
+        available = list(latest_frame.available_actions or [])
+        try:
+            config = infer_color_config(
+                grids=grids,
+                actions=actions,
+                available_actions=available,
+                llm_client=self._llm_client,
+                vision_enabled=self._vision_enabled,
+            )
+        except Exception as exc:
+            log.warning("cold-start LLM call failed: %s", exc)
+            return
+        if config is None:
+            log.warning("cold-start LLM returned no config")
+            return
+        log.info("cold-start color config: %s", {k: (v.role, v.track_dims) for k, v in sorted(config.items())})
+        self._entity_builder.set_color_config(config)
+
     def _reset(self) -> GameAction:
         """Clear agent state and return RESET action."""
         self._probe_plan = None
@@ -220,12 +279,13 @@ class LlmCuriosity(Agent):
         curr_grid = self.session._last_grid
         if curr_grid is not None:
             self._grid_history.append(curr_grid)
-            if len(self._grid_history) > 4:
-                self._grid_history = self._grid_history[-4:]
+            if len(self._grid_history) > max(4, self._coldstart_frame_threshold + 2):
+                self._grid_history = self._grid_history[-(max(4, self._coldstart_frame_threshold + 2)):]
         logical_registry, catalog = self._entity_builder.update(
             self.session.registry, self.session.action_ids,
             effect_context=self.policy.context,
             curr_grid=curr_grid,
+            skip_grouping=self._phase == "coldstart",
         )
         self._scene = SceneSnapshot(
             frame_idx=self.session.registry.frame_idx,
@@ -246,6 +306,9 @@ class LlmCuriosity(Agent):
         )
         self.policy.on_observed(self._scene)
         self._last_observed_frame_id = id(latest_frame)
+
+        if not self._coldstart_done and self._scene.frame_idx >= self._coldstart_frame_threshold:
+            self._run_coldstart(latest_frame)
 
         # Run engine step to compare prediction with observation
         if self._engine_step_pending is not None and self.policy.context is not None:
@@ -408,6 +471,13 @@ class LlmCuriosity(Agent):
         """Choose an action ID based on current agent state and phase."""
         scene = self._scene or self.session.snapshot()
         actions = self._legal_actions(available)
+
+        # ── Cold-start phase: deliberate probing, no LLM ──────────────
+        if self._phase == "coldstart":
+            if self._coldstart_done:
+                self._phase = "random"
+            else:
+                return self._coldstart_probe_action(actions)
 
         # ── Phase gate ──────────────────────────────────────────────────
         if self._phase == "random":
