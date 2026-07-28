@@ -210,7 +210,7 @@ def _build_heuristic_reason(
     elif p.heuristic == "adjacency":
         return f"adjacency: {len(members)} entities stayed close across many frames"
     elif p.heuristic == "containment":
-        return f"containment: one entity's bbox lies inside another's"
+        return "containment: one entity's bbox lies inside another's"
     elif p.heuristic == "same_shape":
         return f"same_shape: {len(members)} entities share a canonical shape"
     elif p.heuristic == "static_bounded":

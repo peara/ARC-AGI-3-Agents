@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import random
 
-from effects import EffectContext, Pos, entity_size_at, inject_llm_proposals, inject_validated_proposals
+from effects import (
+    EffectContext,
+    Pos,
+    entity_size_at,
+    inject_llm_proposals,
+    inject_validated_proposals,
+)
 from effects.predict import predict
 from effects.rules import Rule
 from effects.state import SceneState

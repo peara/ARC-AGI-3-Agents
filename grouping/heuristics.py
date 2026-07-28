@@ -3,10 +3,10 @@ from __future__ import annotations
 from collections import defaultdict
 from itertools import combinations
 
-from perception.shape import canonical_shape_key, normalize_shape_key
-from perception.registry import ObjectRegistry
-from perception.entities import EntityCatalog
 from effects.kinematics import entity_cells_at
+from perception.entities import EntityCatalog
+from perception.registry import ObjectRegistry
+from perception.shape import canonical_shape_key, normalize_shape_key
 
 from .features import EntityFeature
 from .proposal import GroupProposal
