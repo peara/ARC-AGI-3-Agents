@@ -59,11 +59,28 @@ class EntityBuilderConfig:
     agree: float = 0.8
 
 
+@dataclass(frozen=True)
+class ColorConfig:
+    """Cold-start color config from the mechanics prompt.
+
+    Maps a color index to its role and which dims the rule engine should
+    track. Colors with empty track_dims are ignored entirely.
+    """
+
+    role: str
+    track_dims: tuple[str, ...]
+
+
 class EntityBuilder:
     """Re-identify tracks → build entities → compound grouping → assign roles.
 
     Call ``update(registry, action_ids)`` each frame.  Returns
     ``(LogicalRegistry, EntityCatalog)``.
+
+    If ``color_config`` is provided, singleton entities whose colors are
+    all in the ignore set (empty ``track_dims``) are stripped from the
+    catalog after role assignment. Compound entities and the controllable
+    entity are never stripped.
     """
 
     def __init__(
@@ -72,13 +89,16 @@ class EntityBuilder:
         *,
         dormant_ttl: int = 3,
         combined_engine: CombinedEngine,
+        color_config: dict[int, ColorConfig] | None = None,
     ) -> None:
         self.config = config or EntityBuilderConfig()
         self._combined_engine = combined_engine
         self._reconciler = Reconciler(self.config.reconciler)
         self._logical_registry: LogicalRegistry | None = None
         self._catalog: EntityCatalog | None = None
+        self._color_config: dict[int, ColorConfig] | None = color_config
         # persistent cross-frame identity state
+        self._next_entity_id: int = 0
         self._next_entity_id: int = 0
         self._track_to_entity: dict[int, int] = {}
         self._prev_catalog_entities: dict[int, Entity] = {}
@@ -97,12 +117,17 @@ class EntityBuilder:
         self._prev_action: int | None = None
         self._effect_context: EffectContext | None = None
 
+    def set_color_config(self, config: dict[int, ColorConfig] | None) -> None:
+        self._color_config = config
+
     def update(
         self,
         registry: ObjectRegistry,
         action_ids: list[int],
         effect_context: EffectContext | None = None,
         curr_grid: Sequence[Sequence[int]] | None = None,
+        *,
+        skip_grouping: bool = False,
     ) -> tuple[LogicalRegistry, EntityCatalog]:
         """Re-identify tracks, build entities, group compounds, assign roles.
 
@@ -161,13 +186,14 @@ class EntityBuilder:
         )
 
         # 4. Compound grouping: merge co-moving entities into one compound
-        catalog = self._apply_compound_grouping(
-            self._logical_registry,
-            catalog,
-            action_ids,
-            effect_context,
-            curr_grid=curr_grid,
-        )
+        if not skip_grouping:
+            catalog = self._apply_compound_grouping(
+                self._logical_registry,
+                catalog,
+                action_ids,
+                effect_context,
+                curr_grid=curr_grid,
+            )
 
         # 5. Dormant / DEAD lifecycle transitions
         catalog = self._apply_lifecycle_transitions(catalog)
@@ -186,6 +212,12 @@ class EntityBuilder:
             action_ids,
             logical_map=logical_map,
         )
+
+        # 6b. Strip ignored entities (cold-start color config).
+        if self._color_config:
+            self._catalog = self._strip_ignored_entities(
+                self._catalog, cast(ObjectRegistry, self._logical_registry), frame_idx
+            )
 
         controllable = self._catalog.controllable()
         ctrl_id = controllable.id if controllable else None
@@ -260,6 +292,66 @@ class EntityBuilder:
         )
 
         return self._logical_registry, self._catalog
+
+    def _strip_ignored_entities(
+        self,
+        catalog: EntityCatalog,
+        reg: ObjectRegistry,
+        frame_idx: int,
+    ) -> EntityCatalog:
+        """Strip singleton entities whose colors are all in the ignore set.
+
+        An entity is stripped if:
+        - It is a singleton (not a compound — compounds may mix ignored and
+          non-ignored colors).
+        - It is not the controllable entity.
+        - All of its member tracks' colors have empty track_dims in the
+          color config.
+
+        Stripped entities are removed from the catalog entirely — they
+        won't appear in residuals, rules, or BFS state.
+        """
+        assert self._color_config is not None
+        controllable = catalog.controllable()
+        ctrl_id = controllable.id if controllable else None
+
+        ignore_colors = {
+            color for color, cfg in self._color_config.items()
+            if not cfg.track_dims
+        }
+
+        if not ignore_colors:
+            return catalog
+
+        kept: dict[int, Entity] = {}
+        stripped: list[int] = []
+        for eid, ent in catalog.entities.items():
+            if eid == ctrl_id:
+                kept[eid] = ent
+                continue
+            if ent.composition != "singleton":
+                kept[eid] = ent
+                continue
+            member_colors: set[int] = set()
+            for tid in ent.members:
+                track = reg.tracks.get(tid)
+                if track is not None:
+                    member_colors.add(track.color)
+            if member_colors and member_colors.issubset(ignore_colors):
+                stripped.append(eid)
+            else:
+                kept[eid] = ent
+
+        if not stripped:
+            return catalog
+
+        log.info(
+            "frame=%d strip_ignored: removed entities %s (colors %s)",
+            frame_idx,
+            stripped,
+            sorted(ignore_colors),
+        )
+        return EntityCatalog(entities=kept)
 
     def _same_frame_successors(
         self, registry: ObjectRegistry, merge_map: dict[int, int]

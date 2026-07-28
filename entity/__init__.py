@@ -16,7 +16,7 @@ Public API::
 
 from __future__ import annotations
 
-from .builder import EntityBuilder, EntityBuilderConfig
+from .builder import ColorConfig, EntityBuilder, EntityBuilderConfig
 from .logical_registry import LogicalRegistry
 from .reconciler import Reconciler, ReconcilerConfig
 
@@ -33,6 +33,7 @@ def __getattr__(name: str) -> object:
 
 
 __all__ = [
+    "ColorConfig",
     "EntityBuilder",
     "EntityBuilderConfig",
     "HeuristicRoleAssignerV1",
