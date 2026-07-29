@@ -103,14 +103,14 @@ def co_movement(features: dict[int, EntityFeature], registry: ObjectRegistry, ca
             continue
 
         matched_frames: list[int] = []
-        shared_disps: dict[int, tuple[int, int]] = {}
+        shared_disps: dict[int, dict[str, tuple[int, int]]] = {}
         adjacent_frames = 0
         for fidx in shared_frames:
             di = fi_fd[fidx]
             dj = fj_fd[fidx]
             if _direction(di) == _direction(dj):
                 matched_frames.append(fidx)
-                shared_disps[fidx] = di
+                shared_disps[fidx] = {"i": di, "j": dj}
                 # Cell adjacency check
                 cells_i = entity_cells_at(registry, catalog, i, fidx)
                 cells_j = entity_cells_at(registry, catalog, j, fidx)
@@ -131,7 +131,7 @@ def co_movement(features: dict[int, EntityFeature], registry: ObjectRegistry, ca
                 pairs.append((i, j))
                 pair_evidence[(i, j)] = {
                     "matched_frames": matched_frames,
-                    "displacements": {str(f): d for f, d in shared_disps.items()},
+                    "displacements": {str(f): {"i": d["i"], "j": d["j"]} for f, d in shared_disps.items()},
                     "adjacent_frames": adjacent_frames,
                 }
 

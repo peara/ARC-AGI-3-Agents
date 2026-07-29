@@ -155,8 +155,30 @@ def _parse_response(raw: str) -> list[dict[str, Any]] | None:
     return None
 
 
-def _entity_compact(f: EntityFeature) -> dict[str, Any]:
+def _displacement_to_direction(d: Sequence[int]) -> str:
+    """Convert a (dr, dc) displacement to a human-readable direction string."""
+    dr, dc = d[0], d[1]
+    parts: list[str] = []
+    if dr < 0:
+        parts.append("up")
+    elif dr > 0:
+        parts.append("down")
+    if dc < 0:
+        parts.append("left")
+    elif dc > 0:
+        parts.append("right")
+    if not parts:
+        return "stationary"
+    return "-".join(parts)
+
+
+def _entity_compact(f: EntityFeature, minimal: bool = False) -> dict[str, Any]:
     r0, c0, r1, c1 = f.bboxes[-1] if f.bboxes else (0, 0, 0, 0)
+    if minimal:
+        return {
+            "id": f.entity_id,
+            "bbox_last": [r0, c0, r1, c1],
+        }
     last_disp: list[int] | None = None
     if f.frame_displacements:
         max_frame = max(f.frame_displacements)
@@ -186,11 +208,17 @@ def _build_heuristic_reason(
         matched_frames = ev.get("matched_frames", [])
         disps = ev.get("displacements", {})
         n_matched = len(matched_frames)
-        nonzero_frames = [
-            f for f, d in disps.items() if d != (0, 0)
-        ] if disps else []
+        nonzero_frames: list[str] = []
+        for f, d in disps.items():
+            if isinstance(d, dict):
+                di = d.get("i", (0, 0))
+                if di != (0, 0):
+                    nonzero_frames.append(f)
+            elif isinstance(d, (list, tuple)):
+                if d != (0, 0):
+                    nonzero_frames.append(f)
         parts = [
-            f"co_movement: {len(members)} entities had matching displacements"
+            f"co_movement: {len(members)} entities moved in the same direction"
             f" on {n_matched} frame(s)"
         ]
         if nonzero_frames:
@@ -201,7 +229,7 @@ def _build_heuristic_reason(
             if f and f.frame_displacements:
                 max_frame = max(f.frame_displacements)
                 d = f.frame_displacements[max_frame]
-                member_disps.append(f"entity {eid} last moved by {d}")
+                member_disps.append(f"entity {eid} last moved {_displacement_to_direction(d)}")
             elif f:
                 member_disps.append(f"entity {eid} did not move recently")
         if member_disps:
@@ -219,13 +247,49 @@ def _build_heuristic_reason(
         return f"{p.heuristic}: proposed group of {len(members)} entities"
 
 
+def _convert_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
+    """Convert raw evidence values to LLM-friendly format.
+
+    Displacement tuples are converted to direction strings; dict-valued
+    displacements (both entities) get per-entity direction + same_direction flag.
+    """
+    ev_plain: dict[str, Any] = {}
+    for k, v in evidence.items():
+        if isinstance(v, frozenset):
+            ev_plain[k] = sorted(v)
+        elif k == "displacements" and isinstance(v, dict):
+            new_disps: dict[str, Any] = {}
+            for fk, fv in v.items():
+                if isinstance(fv, dict) and "i" in fv and "j" in fv:
+                    di = fv["i"]
+                    dj = fv["j"]
+                    dir_i = _displacement_to_direction(di)
+                    dir_j = _displacement_to_direction(dj)
+                    new_disps[str(fk)] = {
+                        "entity_i": dir_i,
+                        "entity_j": dir_j,
+                        "same_direction": dir_i == dir_j,
+                    }
+                elif isinstance(fv, (list, tuple)):
+                    new_disps[str(fk)] = _displacement_to_direction(fv)
+                else:
+                    new_disps[str(fk)] = fv
+            ev_plain[k] = new_disps
+        elif isinstance(v, dict):
+            ev_plain[k] = {str(kk): vv for kk, vv in v.items()}
+        else:
+            ev_plain[k] = v
+    return ev_plain
+
+
 def _build_proposal_payload(
     p: GroupProposal,
     features: dict[int, EntityFeature],
     proposal_id: int,
+    minimal: bool = False,
 ) -> dict[str, Any]:
     members = sorted(p.member_ids)
-    member_feats = [_entity_compact(features[eid]) for eid in members if eid in features]
+    member_feats = [_entity_compact(features[eid], minimal=minimal) for eid in members if eid in features]
 
     bboxes = [
         features[eid].bboxes[-1]
@@ -249,16 +313,9 @@ def _build_proposal_payload(
             continue
         neighbour_ids.append(eid)
     neighbour_ids.sort()
-    neighbour_feats = [_entity_compact(features[eid]) for eid in neighbour_ids if eid in features]
+    neighbour_feats = [_entity_compact(features[eid], minimal=minimal) for eid in neighbour_ids if eid in features]
 
-    ev_plain: dict[str, Any] = {}
-    for k, v in p.evidence.items():
-        if isinstance(v, frozenset):
-            ev_plain[k] = sorted(v)
-        elif isinstance(v, dict):
-            ev_plain[k] = {str(kk): vv for kk, vv in v.items()}
-        else:
-            ev_plain[k] = v
+    ev_plain = _convert_evidence(p.evidence)
     ev_plain["support_counter"] = p.support
 
     reason = _build_heuristic_reason(p, features)
@@ -279,12 +336,13 @@ def _build_proposal_payload(
 def _build_compound_review_payload(
     confirmed_groups: list[ConfirmedGroup],
     features: dict[int, EntityFeature],
+    minimal: bool = False,
 ) -> list[dict[str, Any]]:
     """Build one payload entry per confirmed group for compound review."""
     entries: list[dict[str, Any]] = []
     for idx, group in enumerate(confirmed_groups):
         member_feats = [
-            _entity_compact(features[eid])
+            _entity_compact(features[eid], minimal=minimal)
             for eid in sorted(group.member_ids)
             if eid in features
         ]
