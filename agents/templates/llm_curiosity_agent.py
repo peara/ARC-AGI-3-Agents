@@ -83,6 +83,8 @@ class LlmCuriosity(Agent):
         self.llm_call = self._llm_client.chat
         self._vision_enabled: bool = os.environ.get("LLM_VISION", "").lower() in ("true", "1", "yes")
         self._notepad_enabled: bool = os.environ.get("NOTEPAD_ENABLED", "true").lower() in ("true", "1", "yes")
+        self._grouping_image_scale: int = int(os.environ.get("GROUPING_IMAGE_SCALE", "4"))
+        self._grouping_minimal_members: bool = os.environ.get("GROUPING_MINIMAL_MEMBERS", "").lower() in ("true", "1", "yes")
 
         # Frame counter for LLM call logging (correlates calls to frame events).
         self._frame_index = -1
@@ -120,6 +122,8 @@ class LlmCuriosity(Agent):
                     thinking=False, max_tokens=512,
                 ),
                 vision=self._vision_enabled,
+                image_scale=self._grouping_image_scale,
+                minimal_members=self._grouping_minimal_members,
             )
         else:
             self._llm_logger = None
@@ -132,7 +136,7 @@ class LlmCuriosity(Agent):
                 )
             else:
                 self._mechanics_notepad = None
-            _combined_engine = CombinedEngine(llm_call=self.llm_call, vision=self._vision_enabled)
+            _combined_engine = CombinedEngine(llm_call=self.llm_call, vision=self._vision_enabled, image_scale=self._grouping_image_scale, minimal_members=self._grouping_minimal_members)
 
         self._entity_builder = EntityBuilder(combined_engine=_combined_engine)
 
