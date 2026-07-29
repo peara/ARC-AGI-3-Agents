@@ -49,20 +49,23 @@ class CombinedEngine:
 
     def __init__(
         self,
-        llm_call: _LLMCall,
+        llm_call: _LLmCall,
         vision: bool = True,
         config: ReadinessConfig | None = None,
+        image_scale: int = 4,
+        minimal_members: bool = False,
     ) -> None:
         if llm_call is None:
             raise ValueError("llm_call is required (was None)")
-        self._llm_call: _LLMCall = llm_call
+        self._llm_call: _LLmCall = llm_call
         self._vision: bool = vision
         self._config: ReadinessConfig = config or ReadinessConfig()
         self._heuristic_engine: HeuristicGroupingEngine = HeuristicGroupingEngine(
             config=self._config
         )
         self._llm_engine: LlmGroupingEngine = LlmGroupingEngine(
-            llm_call=llm_call, vision=vision
+            llm_call=llm_call, vision=vision, image_scale=image_scale,
+            minimal_members=minimal_members,
         )
 
         self._registry: ObjectRegistry | None = None

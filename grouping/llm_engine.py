@@ -12,6 +12,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from PIL import Image, ImageDraw
+
 from vision.render import grid_to_image, image_to_base64, make_image_block
 
 from .engine import (
@@ -31,6 +33,36 @@ from .proposal import GroupProposal
 log = logging.getLogger(__name__)
 
 _LLMCall = Callable[[list[dict[str, str]]], str]
+
+_BORDER_COLORS = [
+    (255, 0, 0, 200),
+    (0, 255, 0, 200),
+    (0, 100, 255, 200),
+    (255, 255, 0, 200),
+    (255, 0, 255, 200),
+]
+
+
+def _render_grid_with_borders(
+    grid: Sequence[Sequence[int]],
+    member_bboxes: list[list[int]],
+    scale: int,
+) -> Image.Image:
+    """Render grid and draw colored borders around proposed member bboxes."""
+    img = grid_to_image(grid, scale=scale).convert("RGB")
+    draw = ImageDraw.Draw(img, "RGBA")
+    for i, bbox in enumerate(member_bboxes):
+        r0, c0, r1, c1 = bbox
+        color = _BORDER_COLORS[i % len(_BORDER_COLORS)]
+        x0, y0 = c0 * scale, r0 * scale
+        x1, y1 = (c1 + 1) * scale - 1, (r1 + 1) * scale - 1
+        for w in range(2):
+            draw.rectangle(
+                [x0 - w, y0 - w, x1 + w, y1 + w],
+                outline=color,
+                width=1,
+            )
+    return img
 
 _TWO_IMAGE_EXTENSION = """\
 
@@ -238,11 +270,15 @@ class LlmGroupingEngine:
 
     def __init__(
         self,
-        llm_call: _LLMCall | None,
+        llm_call: _LLmCall | None,
         vision: bool = True,
+        image_scale: int = 4,
+        minimal_members: bool = False,
     ) -> None:
         self._llm_call = llm_call
         self._vision = vision
+        self._image_scale = image_scale
+        self._minimal_members = minimal_members
         self._system_prompt = _SYSTEM_PROMPT + _TWO_IMAGE_EXTENSION
 
     def adjudicate(
@@ -280,7 +316,8 @@ class LlmGroupingEngine:
             for new_id, p in enumerate(proposals)
         ]
         payloads = [
-            _build_proposal_payload(p, features, p.group_id) for p in renumbered
+            _build_proposal_payload(p, features, p.group_id, minimal=self._minimal_members)
+            for p in renumbered
         ]
 
         # --- Build messages ---
@@ -290,8 +327,26 @@ class LlmGroupingEngine:
 
         if self._vision:
             try:
-                prev_b64 = image_to_base64(grid_to_image(prev_grid))
-                curr_b64 = image_to_base64(grid_to_image(curr_grid))
+                member_bboxes_curr: list[list[int]] = []
+                member_bboxes_prev: list[list[int]] = []
+                for p in renumbered:
+                    for eid in sorted(p.member_ids):
+                        f = features.get(eid)
+                        if f and f.bboxes:
+                            member_bboxes_curr.append(list(f.bboxes[-1]))
+                            if len(f.bboxes) >= 2:
+                                member_bboxes_prev.append(list(f.bboxes[-2]))
+                            else:
+                                member_bboxes_prev.append(list(f.bboxes[-1]))
+
+                if member_bboxes_curr:
+                    prev_img = _render_grid_with_borders(prev_grid, member_bboxes_prev, self._image_scale)
+                    curr_img = _render_grid_with_borders(curr_grid, member_bboxes_curr, self._image_scale)
+                    prev_b64 = image_to_base64(prev_img)
+                    curr_b64 = image_to_base64(curr_img)
+                else:
+                    prev_b64 = image_to_base64(grid_to_image(prev_grid, scale=self._image_scale))
+                    curr_b64 = image_to_base64(grid_to_image(curr_grid, scale=self._image_scale))
                 user_content: str | list[dict[str, Any]] = [
                     make_image_block(prev_b64),
                     make_image_block(curr_b64),
