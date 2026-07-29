@@ -6,6 +6,7 @@ from collections.abc import Callable
 from typing import Protocol
 
 from effects.kinematics import (
+    entity_cells_at,
     entity_exists_at,
     entity_orientation_at,
     entity_pos_at,
@@ -49,11 +50,18 @@ def _read_orientation(
     return entity_orientation_at(reg, catalog, entity_id, frame_idx)
 
 
+def _read_cells(
+    reg: ObjectRegistry, catalog: EntityCatalog, entity_id: int, frame_idx: int
+) -> object | None:
+    return entity_cells_at(reg, catalog, entity_id, frame_idx)
+
+
 DIM_READERS: dict[str, DimReader] = {
     "pos": _read_pos,
     "exists": _read_exists,
     "size": _read_size,
     "orientation": _read_orientation,
+    "cells": _read_cells,
 }
 
 
