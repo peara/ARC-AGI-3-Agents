@@ -37,19 +37,19 @@ def _read_jsonl(path: str) -> list[dict]:
         return [json.loads(line) for line in f if line.strip()]
 
 
-def _ok_llm(messages: list[dict[str, str]]) -> str:
+def _ok_llm(messages: list[dict[str, str]], *, thinking=None, max_tokens=None) -> str:
     return "ok"
 
 
-def _hello_llm(messages: list[dict[str, str]]) -> str:
+def _hello_llm(messages: list[dict[str, str]], *, thinking=None, max_tokens=None) -> str:
     return "hello world"
 
 
-def _four_llm(messages: list[dict[str, str]]) -> str:
+def _four_llm(messages: list[dict[str, str]], *, thinking=None, max_tokens=None) -> str:
     return "4"
 
 
-def _raising_llm(messages: list[dict[str, str]]) -> str:
+def _raising_llm(messages: list[dict[str, str]], *, thinking=None, max_tokens=None) -> str:
     raise ValueError("bad model")
 
 

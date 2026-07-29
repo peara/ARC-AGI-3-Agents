@@ -28,7 +28,13 @@ MAX_CONTENT_CHARS = 40_000
 
 
 class LlmCallable(Protocol):
-    def __call__(self, messages: list[dict[str, Any]]) -> str: ...
+    def __call__(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        thinking: bool | None = ...,
+        max_tokens: int | None = ...,
+    ) -> str: ...
 
 
 class LlmCallLogger:
@@ -117,14 +123,27 @@ def wrap_llm_call(
     llm_call: LlmCallable,
     logger: LlmCallLogger,
     kind: str,
-) -> Callable[[list[dict[str, Any]]], str]:
+    *,
+    thinking: bool | None = None,
+    max_tokens: int | None = None,
+) -> Callable[..., str]:
     """Wrap ``llm_call`` so every invocation is logged to ``logger.path``.
 
     The returned callable has the same signature as ``llm_call``:
-    ``(messages: list[dict[str, Any]]) -> str``.
+    ``(messages, *, thinking=None, max_tokens=None) -> str``.
+
+    ``thinking`` / ``max_tokens`` set here act as per-kind defaults applied
+    to every call through this wrapper. They may be overridden per-call by
+    passing the same kwargs to the returned callable. Precedence:
+    per-call kwarg > wrap-time default > env var > server default.
     """
 
-    def wrapped(messages: list[dict[str, Any]]) -> str:
+    def wrapped(
+        messages: list[dict[str, Any]],
+        *,
+        thinking: bool | None = thinking,
+        max_tokens: int | None = max_tokens,
+    ) -> str:
         seq = logger.next_seq()
         frame_index = logger._frame_indexer()
         trigger = logger.trigger or kind
@@ -133,7 +152,7 @@ def wrap_llm_call(
         error: str | None = None
         raw = ""
         try:
-            raw = llm_call(messages)
+            raw = llm_call(messages, thinking=thinking, max_tokens=max_tokens)
             return raw
         except Exception as exc:
             ok = False
