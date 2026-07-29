@@ -97,20 +97,28 @@ class LlmCuriosity(Agent):
                 frame_indexer=lambda: self._frame_index,
             )
             self._planner_call = wrap_llm_call(
-                self.llm_call, self._llm_logger, kind="planner"
+                self.llm_call, self._llm_logger, kind="planner",
+                thinking=False, max_tokens=512,
             )
             self._proposer_call = wrap_llm_call(
-                self.llm_call, self._llm_logger, kind="rule_proposer"
+                self.llm_call, self._llm_logger, kind="rule_proposer",
+                thinking=False, max_tokens=8192,
             )
             if self._notepad_enabled:
                 self._mechanics_notepad = MechanicsNotepad(
-                    llm_call=wrap_llm_call(self.llm_call, self._llm_logger, kind="mechanics"),
+                    llm_call=wrap_llm_call(
+                        self.llm_call, self._llm_logger, kind="mechanics",
+                        thinking=False, max_tokens=512,
+                    ),
                     vision_enabled=self._vision_enabled,
                 )
             else:
                 self._mechanics_notepad = None
             _combined_engine = CombinedEngine(
-                llm_call=wrap_llm_call(self.llm_call, self._llm_logger, kind="grouping"),
+                llm_call=wrap_llm_call(
+                    self.llm_call, self._llm_logger, kind="grouping",
+                    thinking=False, max_tokens=512,
+                ),
                 vision=self._vision_enabled,
             )
         else:
