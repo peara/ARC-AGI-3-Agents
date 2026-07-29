@@ -56,7 +56,7 @@ graph TD
 `planning/rule_first.py` — owns the effects context and BFS.
 
 - **Random cold start:** before controllable entity is detected, pick random
-  actions. Classical learner (`learn_effect_context`) bootstraps initial rules.
+  actions. `EffectContext` is initialized directly from `scene.action_ids`.
 - **LLM-directed:** LLM planner drives. `decide()` is NOT called. Policy runs
   `engine_step` on each observation and provides BFS for probe plan execution.
 
@@ -327,8 +327,9 @@ Each mechanics call is wrapped with `wrap_llm_call(kind="mechanics")` and record
 
 ## 7. Key design decisions
 
-**No classical learner in LLM-directed phase.** `learn_effect_context` only
-runs during cold start. The LLM proposer is the sole rule source afterward.
+**No classical learner.** The classical learner was removed — `EffectContext`
+is initialized directly from `scene.action_ids` and rules come exclusively from
+the LLM proposer via `inject_llm_proposals`.
 
 **Proposed rules visible to predict.** Without this, unknown actions stay
 unknown forever — `confirm_rules` never runs on them.
