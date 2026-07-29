@@ -85,10 +85,10 @@ class RuleFirstPolicy:
     def _engine_plan_spec(self, scene: SceneSnapshot) -> PlanSpec:
         """Projection for residual-driven rule learning.
 
-        All tracked entities get ``pos``. Compound entities also get
-        ``orientation`` so the engine can detect rotation that isn't
-        captured by centroid movement alone. ``cells`` is internal data
-        stored in SceneState by the builder but not used as a rule dim.
+        All tracked entities get ``pos`` and ``cells``. ``cells`` is a
+        tracked dim used by overlap guards in the adapter path.
+        Compound entities also get ``orientation`` so the engine can
+        detect rotation that isn't captured by centroid movement alone.
         """
 
         rule_ids = self._rule_entity_ids()
@@ -96,7 +96,7 @@ class RuleFirstPolicy:
             eid for eid in rule_ids
             if eid in scene.catalog.entities and scene.catalog.entities[eid].lifecycle.value == "active"
         ]
-        dims: list[str] = ["pos"]
+        dims: list[str] = ["pos", "cells"]
         for eid in sorted(scene.catalog.entities):
             ent = scene.catalog.entities[eid]
             if ent.lifecycle.value not in ("active",):
