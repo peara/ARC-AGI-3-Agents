@@ -25,6 +25,7 @@ from .llm_rule_proposer import (
     validate_proposal_with_reason,
 )
 from .probe import ProbeGoal
+from .transition_diff import compute_transition_diff
 
 log = logging.getLogger(__name__)
 
@@ -426,6 +427,12 @@ def _build_rule_proposer_messages(
             f"## Observed transition (unknown action — propose a rule from this)\n```json\n"
             f"{json.dumps(observed_transition, indent=2)}\n```"
         )
+        diff = compute_transition_diff(observed_transition, bundle)
+        if diff.get("changed"):
+            user_parts.append(
+                f"## Pre-computed diff (what changed — use this, don't re-derive)\n```json\n"
+                f"{json.dumps(diff, indent=2)}\n```"
+            )
 
     if failure_context is not None:
         user_parts.append(

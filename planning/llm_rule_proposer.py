@@ -129,6 +129,13 @@ action that had no existing rule. The `before` and `after` fields show \
 entity positions (as `(entity_id, dim, value)` tuples) before and after \
 the action was taken.
 
+A **Pre-computed diff** section may also be provided. It lists exactly what \
+changed (`changed`), which entities were unaffected (`unchanged_entities`), \
+the controllable's expected motion (`expected_motion`), and whether the \
+controllable was blocked. Use this diff directly — do not re-derive it from \
+the raw before/after tuples. The raw tuples are kept as a fallback for any \
+edge case the diff does not cover.
+
 Propose a movement or collision rule that explains the observed transition:
 
 - If the entity **moved**, propose a `movement` rule. Prefer a **generic** \
