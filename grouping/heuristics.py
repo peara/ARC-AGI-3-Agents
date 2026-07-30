@@ -271,8 +271,8 @@ def containment(features: dict[int, EntityFeature]) -> list[GroupProposal]:
     return proposals
 
 
-def adjacency(features: dict[int, EntityFeature]) -> list[GroupProposal]:
-    eids = [eid for eid, f in features.items() if len(f.positions) >= 2]
+def adjacency(features: dict[int, EntityFeature], registry: ObjectRegistry, catalog: EntityCatalog) -> list[GroupProposal]:
+    eids = [eid for eid, f in features.items() if len(f.frame_displacements) >= 2]
     if len(eids) < 2:
         return []
 
@@ -283,25 +283,26 @@ def adjacency(features: dict[int, EntityFeature]) -> list[GroupProposal]:
         for j_idx in range(i_idx + 1, len(eids)):
             i, j = eids[i_idx], eids[j_idx]
             fi, fj = features[i], features[j]
-            min_len = min(len(fi.positions), len(fj.positions))
-            if min_len < 2:
+
+            shared = sorted(set(fi.frame_displacements) & set(fj.frame_displacements))
+            if len(shared) < 2:
                 continue
 
-            distances: list[float] = []
-            for k in range(min_len):
-                dr = fi.positions[k][0] - fj.positions[k][0]
-                dc = fi.positions[k][1] - fj.positions[k][1]
-                distances.append((dr * dr + dc * dc) ** 0.5)
+            adjacent_frames = 0
+            for fidx in shared:
+                cells_i = entity_cells_at(registry, catalog, i, fidx)
+                cells_j = entity_cells_at(registry, catalog, j, fidx)
+                if cells_i is not None and cells_j is not None:
+                    if _cell_sets_adjacent(cells_i, cells_j):
+                        adjacent_frames += 1
 
-            n_adjacent = sum(1 for d in distances if d < DISTANCE_THRESHOLD)
-            fraction = n_adjacent / len(distances) if distances else 0.0
-
+            fraction = adjacent_frames / len(shared) if shared else 0.0
             if fraction >= ADJACENCY_FRACTION:
                 pairs.append((i, j))
                 pair_evidence[(i, j)] = {
-                    "min_distance": round(min(distances), 2),
-                    "avg_distance": round(sum(distances) / len(distances), 2),
-                    "n_frames_adjacent": n_adjacent,
+                    "n_shared_frames": len(shared),
+                    "n_adjacent_frames": adjacent_frames,
+                    "fraction": round(fraction, 2),
                 }
 
     if not pairs:

@@ -284,24 +284,63 @@ class TestStaticBounded:
 
 class TestAdjacency:
     def test_close_entities_produces_proposal(self) -> None:
-        positions_a = [(1.0, 1.0), (1.0, 1.0), (1.0, 1.0)]
-        positions_b = [(2.0, 1.0), (2.0, 1.0), (2.0, 1.0)]
         features = {
-            0: _make_feature(entity_id=0, positions=positions_a),
-            1: _make_feature(entity_id=1, positions=positions_b),
+            0: _make_feature(
+                entity_id=0,
+                frame_displacements={0: (1, 0), 1: (0, 1)},
+            ),
+            1: _make_feature(
+                entity_id=1,
+                frame_displacements={0: (1, 0), 1: (0, 1)},
+            ),
         }
-        proposals = adjacency(features)
+        cells = {
+            0: {0: frozenset({(0, 0)}), 1: frozenset({(0, 0)})},
+            1: {0: frozenset({(0, 1)}), 1: frozenset({(0, 1)})},
+        }
+        reg, cat = _make_adjacent_registry_and_catalog(cells)
+        proposals = adjacency(features, reg, cat)
         assert len(proposals) >= 1
         assert any(0 in p.member_ids and 1 in p.member_ids for p in proposals)
 
     def test_far_entities_no_proposal(self) -> None:
-        positions_a = [(1.0, 1.0), (1.0, 1.0)]
-        positions_b = [(50.0, 50.0), (50.0, 50.0)]
         features = {
-            0: _make_feature(entity_id=0, positions=positions_a),
-            1: _make_feature(entity_id=1, positions=positions_b),
+            0: _make_feature(
+                entity_id=0,
+                frame_displacements={0: (0, 0), 1: (0, 0)},
+            ),
+            1: _make_feature(
+                entity_id=1,
+                frame_displacements={0: (0, 0), 1: (0, 0)},
+            ),
         }
-        proposals = adjacency(features)
+        cells = {
+            0: {0: frozenset({(0, 0)}), 1: frozenset({(0, 0)})},
+            1: {0: frozenset({(50, 50)}), 1: frozenset({(50, 50)})},
+        }
+        reg, cat = _make_adjacent_registry_and_catalog(cells)
+        proposals = adjacency(features, reg, cat)
+        assert len(proposals) == 0
+
+    def test_adjacency_different_birth_frames(self) -> None:
+        """Entities with non-overlapping frame_displacements must not produce
+        adjacency proposals (regression test for frame misalignment bug)."""
+        features = {
+            0: _make_feature(
+                entity_id=0,
+                frame_displacements={0: (1, 0), 1: (1, 0), 2: (1, 0)},
+            ),
+            20: _make_feature(
+                entity_id=20,
+                frame_displacements={5: (1, 0), 6: (1, 0)},
+            ),
+        }
+        cells = {
+            0: {0: frozenset({(0, 0)}), 1: frozenset({(0, 0)}), 2: frozenset({(0, 0)})},
+            20: {5: frozenset({(0, 0)}), 6: frozenset({(0, 0)})},
+        }
+        reg, cat = _make_adjacent_registry_and_catalog(cells)
+        proposals = adjacency(features, reg, cat)
         assert len(proposals) == 0
 
 

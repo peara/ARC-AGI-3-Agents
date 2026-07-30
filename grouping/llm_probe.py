@@ -237,7 +237,7 @@ def main(argv: list[str]) -> int:
     proposals.extend(co_movement(features, sess.registry, sess.catalog))
     proposals.extend(same_shape(features))
     proposals.extend(containment(features))
-    proposals.extend(adjacency(features))
+    proposals.extend(adjacency(features, sess.registry, sess.catalog))
     # NOTE: static_bounded is intentionally excluded from LLM input — its
     # singleton proposals are noise (LLM rejects them uniformly). The
     # `ever_moves: false` signal still flows through per-entity features.

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from effects.kinematics import entity_orientation_at, entity_pos_at
+from effects.kinematics import entity_cells_at, entity_orientation_at, entity_pos_at
 from perception.entities import Entity, EntityCatalog
 from perception.registry import ObjectRegistry
 
@@ -78,3 +78,38 @@ def test_singleton_entity_orientation_from_meta():
     catalog.entities[10] = ent
     result = entity_orientation_at(reg, catalog, 10, 0)
     assert result == 2
+
+
+def test_entity_cells_at_historical_frame():
+    """entity_cells_at should return observation cells for historical frames,
+    not the current-frame ent.cells shortcut."""
+    # Create registry at frame 5
+    reg = ObjectRegistry.__new__(ObjectRegistry)
+    reg.tracks = {}
+    reg.frame_idx = 5
+
+    # Track 0 has observations at frames 3 and 5
+    obs_frame3 = type('Obs', (), {
+        'frame_idx': 3,
+        'centroid': (10.0, 10.0),
+        'cells': frozenset({(10, 10), (10, 11)}),
+    })
+    obs_frame5 = type('Obs', (), {
+        'frame_idx': 5,
+        'centroid': (20.0, 20.0),
+        'cells': frozenset({(20, 20), (20, 21)}),
+    })
+    reg.tracks[0] = type('Track', (), {'observations': [obs_frame3, obs_frame5], 'alive': True})
+
+    # Entity with cells set (current-frame cells = frame 5 cells)
+    ent = Entity(id=1, members=frozenset({0}), composition="singleton", cells=frozenset({(20, 20), (20, 21)}))
+    catalog = EntityCatalog(entities={1: ent})
+
+    # Current frame (frame_idx == reg.frame_idx): should short-circuit and return ent.cells
+    current_cells = entity_cells_at(reg, catalog, 1, 5)
+    assert current_cells == frozenset({(20, 20), (20, 21)})
+
+    # Historical frame (frame_idx != reg.frame_idx): should fall through to observation loop
+    # and return frame 3's cells, NOT the current ent.cells
+    historical_cells = entity_cells_at(reg, catalog, 1, 3)
+    assert historical_cells == frozenset({(10, 10), (10, 11)})

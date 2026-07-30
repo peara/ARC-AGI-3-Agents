@@ -475,7 +475,7 @@ class GroupingEngine:
             co_movement(features, self._registry, self._catalog)
             + same_shape(features)
             + containment(features)
-            + adjacency(features)
+            + adjacency(features, self._registry, self._catalog)
         )
         gated = apply_gates(raw_proposals, features, self._frame_count, self._config)
         resolved = resolve_conflicts(gated)

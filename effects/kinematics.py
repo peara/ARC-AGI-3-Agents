@@ -89,7 +89,7 @@ def entity_cells_at(
     ent = catalog.entities.get(entity_id)
     if ent is None:
         return None
-    if ent.cells is not None:
+    if ent.cells is not None and frame_idx == getattr(reg, "frame_idx", frame_idx):
         return ent.cells
     all_cells: set[tuple[int, int]] = set()
     for tid in ent.members:

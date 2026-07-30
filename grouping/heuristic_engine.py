@@ -37,7 +37,7 @@ class HeuristicGroupingEngine:
             co_movement(features, registry, catalog)
             + same_shape(features)
             + containment(features)
-            + adjacency(features)
+            + adjacency(features, registry, catalog)
         )
         gated = apply_gates(raw, features, self._frame_count, self._config)
         return resolve_conflicts(gated)
