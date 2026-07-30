@@ -45,11 +45,20 @@ class SceneState:
     volatile: tuple[tuple[str, object], ...] = ()
     terminal: Terminal = TERMINAL_ALIVE
 
-    def fingerprint(self, *, include_terminal: bool = False) -> tuple[object, ...]:
-        """Hashable projection for BFS dedup (``relevant`` only by default)."""
+    def fingerprint(self, *, include_terminal: bool = False, internal_dims: tuple[str, ...] = ()) -> tuple[object, ...]:
+        """Hashable projection for BFS dedup (``relevant`` only by default).
+
+        ``internal_dims`` are excluded because they are used for guard data
+        only (e.g., cells) and would bloat the fingerprint with unhashable
+        frozensets.
+        """
+        relevant = tuple(
+            (eid, pair) for eid, pair in self.relevant
+            if pair[0] not in internal_dims
+        )
         if include_terminal:
-            return (self.relevant, self.terminal)
-        return (self.relevant,)
+            return (relevant, self.terminal)
+        return (relevant,)
 
     def get(self, entity_id: int, dim: str) -> object | None:
         for eid, (name, val) in self.relevant:

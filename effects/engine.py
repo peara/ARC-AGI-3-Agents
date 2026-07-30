@@ -711,16 +711,18 @@ def engine_step(
 class _ProjectionSpec:
     """Minimal projection spec for validate_rules_against_history."""
 
-    __slots__ = ("entities", "dims", "include_terminal")
+    __slots__ = ("entities", "dims", "internal_dims", "include_terminal")
 
     def __init__(
         self,
         entities: tuple[int, ...],
         dims: tuple[str, ...],
+        internal_dims: tuple[str, ...] = (),
         include_terminal: bool = False,
     ) -> None:
         self.entities = list(entities)
         self.dims = dims
+        self.internal_dims = internal_dims
         self.include_terminal = include_terminal
 
 
@@ -729,6 +731,7 @@ class ProjectionSpec(Protocol):
 
     entities: list[int]
     dims: tuple[str, ...]
+    internal_dims: tuple[str, ...]
     include_terminal: bool
 
 
@@ -755,6 +758,7 @@ def validate_rules_against_history(
 
     temp_ctx = inject_llm_proposals(ctx, proposed_rules)
     dims = spec.dims
+    compute_dims = tuple(d for d in dims if d not in spec.internal_dims)
 
     results: list[CounterEvidence] = []
 
@@ -780,7 +784,7 @@ def validate_rules_against_history(
             pred.state,
             t.state_after,
             entity_ids=existing_ids,
-            dims=dims,
+            dims=compute_dims,
             include_terminal=spec.include_terminal,
         )
 

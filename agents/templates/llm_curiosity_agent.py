@@ -553,6 +553,7 @@ class LlmCuriosity(Agent):
                 self.policy.context,
                 available_actions=actions,
                 mechanics_hypothesis=self._mechanics_notepad.to_bundle_dict() if self._mechanics_notepad else None,
+                internal_dims=self.policy._engine_plan_spec(self._scene).internal_dims if self._scene else (),
             ).bundle()
             if self._llm_logger is not None:
                 self._llm_logger.trigger = "planner_cycle"
@@ -603,7 +604,7 @@ class LlmCuriosity(Agent):
                 self._failure_context = {
                     "type": "unreachable",
                     "unknowns": [
-                        {"action": ua.action, "state": ua.state.fingerprint()}
+                        {"action": ua.action, "state": ua.state.fingerprint(internal_dims=("cells",))}
                         for ua in unknowns[:5]
                     ],
                     "last_action": self._last_action_id,
@@ -682,7 +683,9 @@ class LlmCuriosity(Agent):
             residual=residual,
             unknowns=fc.unknowns,
             observed_transition=observed_transition,
+            internal_dims=fc.spec.internal_dims,
         ).bundle()
+        residual_dims = tuple(d for d in fc.spec.dims if d not in fc.spec.internal_dims)
         residual_dicts = [
             {
                 "dim": r.dim,
@@ -691,6 +694,7 @@ class LlmCuriosity(Agent):
                 "observed": r.observed,
             }
             for r in residual
+            if r.dim in residual_dims
         ]
         try:
             proposals = call_rule_proposer(

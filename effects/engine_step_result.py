@@ -25,11 +25,12 @@ class _ProjectionSpec(Protocol):
     """Minimal protocol for entity projection specs.
 
     Satisfied by ``PlanSpec`` and ``SnapshotProjection`` — any object
-    with ``entities``, ``dims``, and ``include_terminal`` attributes.
+    with ``entities``, ``dims``, ``internal_dims``, and ``include_terminal`` attributes.
     """
 
     entities: list[int]
     dims: tuple[str, ...]
+    internal_dims: tuple[str, ...]
     include_terminal: bool
 
 
@@ -71,7 +72,7 @@ def run_engine_step(
         pred.state,
         observed,
         entity_ids=tuple(spec.entities),
-        dims=spec.dims,
+        dims=tuple(d for d in spec.dims if d not in spec.internal_dims),
         include_terminal=spec.include_terminal,
     )
 
@@ -81,7 +82,7 @@ def run_engine_step(
         action,
         observed,
         entity_ids=tuple(spec.entities),
-        dims=spec.dims,
+        dims=tuple(d for d in spec.dims if d not in spec.internal_dims),
         include_terminal=spec.include_terminal,
         controllable_id=controllable_id,
         history=history,

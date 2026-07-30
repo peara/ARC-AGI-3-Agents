@@ -412,6 +412,8 @@ def _build_rule_proposer_messages(
     bundle: dict[str, object],
     residual: list[dict[str, object]],
     failure_context: dict[str, object] | None = None,
+    *,
+    internal_dims: tuple[str, ...] = (),
 ) -> list[dict[str, str]]:
     """Build system + user messages for the LLM rule-proposer call."""
     user_parts: list[str] = []
@@ -427,7 +429,7 @@ def _build_rule_proposer_messages(
             f"## Observed transition (unknown action — propose a rule from this)\n```json\n"
             f"{json.dumps(observed_transition, indent=2)}\n```"
         )
-        diff = compute_transition_diff(observed_transition, bundle)
+        diff = compute_transition_diff(observed_transition, bundle, internal_dims=internal_dims)
         if diff.get("changed"):
             user_parts.append(
                 f"## Pre-computed diff (what changed — use this, don't re-derive)\n```json\n"
@@ -557,7 +559,8 @@ def call_rule_proposer(
     """
     try:
         _fpfx = f"frame={frame_index} " if frame_index is not None else ""
-        messages = _build_rule_proposer_messages(bundle, residual, failure_context)
+        internal_dims = spec.internal_dims if spec is not None else ()
+        messages = _build_rule_proposer_messages(bundle, residual, failure_context, internal_dims=internal_dims)
         raw = llm_call(messages)
         proposals = parse_proposals(raw)
 

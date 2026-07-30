@@ -45,6 +45,7 @@ class QueryInterface:
         unknowns: tuple[UnknownAction, ...] | None = None,
         observed_transition: tuple[SceneState, int, SceneState] | None = None,
         mechanics_hypothesis: dict[str, object] | None = None,
+        internal_dims: tuple[str, ...] = (),
     ) -> None:
         self._scene = scene
         self._ctx = ctx
@@ -55,6 +56,7 @@ class QueryInterface:
         self._unknowns = unknowns
         self._observed_transition = observed_transition
         self._mechanics_hypothesis = mechanics_hypothesis
+        self._internal_dims = internal_dims
 
     def bundle(
         self,
@@ -197,7 +199,7 @@ class QueryInterface:
             return []
         out: list[dict[str, object]] = []
         for r in self._residual:
-            if r.dim == "cells":
+            if r.dim in self._internal_dims:
                 continue
             entry: dict[str, object] = {
                 "dim": r.dim,
@@ -234,7 +236,7 @@ class QueryInterface:
                     and isinstance(item[0], int)
                 ):
                     eid, (dim, val) = item
-                    if dim == "cells":
+                    if dim in self._internal_dims:
                         continue
                     out.append((eid, (dim, _render_pos(val) if dim == "pos" else val)))
                 else:
@@ -242,7 +244,7 @@ class QueryInterface:
             return out
 
         return [
-            {"action": ua.action, "state": render_fingerprint(ua.state.fingerprint())}
+            {"action": ua.action, "state": render_fingerprint(ua.state.fingerprint(internal_dims=self._internal_dims))}
             for ua in capped
         ]
 
@@ -260,7 +262,7 @@ class QueryInterface:
                     and isinstance(item[0], int)
                 ):
                     eid, (dim, val) = item
-                    if dim == "cells":
+                    if dim in self._internal_dims:
                         continue
                     out.append((eid, (dim, _render_pos(val) if dim == "pos" else val)))
                 else:
@@ -269,6 +271,6 @@ class QueryInterface:
 
         return {
             "action": action,
-            "before": render_fingerprint(state_before.fingerprint()),
-            "after": render_fingerprint(state_after.fingerprint()),
+            "before": render_fingerprint(state_before.fingerprint(internal_dims=self._internal_dims)),
+            "after": render_fingerprint(state_after.fingerprint(internal_dims=self._internal_dims)),
         }

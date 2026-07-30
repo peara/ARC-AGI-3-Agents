@@ -76,6 +76,8 @@ def _parse_tuples(rows: Any) -> dict[tuple[int, str], Any]:
 def compute_transition_diff(
     observed: dict[str, Any],
     bundle: dict[str, Any],
+    *,
+    internal_dims: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Compute a structured diff over the bundle's ``observed_transition``.
 
@@ -90,6 +92,8 @@ def compute_transition_diff(
     changed_eids: set[int] = set()
 
     for eid, dim in sorted(all_keys):
+        if dim in internal_dims:
+            continue
         bv = bmap.get((eid, dim))
         av = amap.get((eid, dim))
         if bv == av:

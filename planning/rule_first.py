@@ -65,7 +65,8 @@ class RuleFirstPolicy:
         self._verify_expectation(scene)
         state = self._snapshot_state(scene)
         if state is not None:
-            self.visited.add(state.fingerprint())
+            spec = self._engine_plan_spec(scene)
+            self.visited.add(state.fingerprint(internal_dims=spec.internal_dims))
 
     # ------------------------------------------------------------------
     # Engine step helpers
@@ -121,6 +122,7 @@ class RuleFirstPolicy:
         return PlanSpec(
             entities=entities,
             dims=tuple(unique_dims) if unique_dims else ("pos",),
+            internal_dims=("cells",),
             goal=lambda s: False,
         )
 
@@ -183,7 +185,8 @@ class RuleFirstPolicy:
         pred = predict(verify_state, action, self._ctx)
         if pred.unknown:
             return action
-        self._expect = pred.state.fingerprint()
+        spec = self._engine_plan_spec(scene)
+        self._expect = pred.state.fingerprint(internal_dims=spec.internal_dims)
         return action
 
     def _verify_expectation(self, scene: SceneSnapshot) -> None:
@@ -197,7 +200,8 @@ class RuleFirstPolicy:
             self.plan = []
             self._expect = None
             return
-        if observed.fingerprint() != self._expect:
+        spec = self._engine_plan_spec(scene)
+        if observed.fingerprint(internal_dims=spec.internal_dims) != self._expect:
             self._last_diverged = True
             self.plan = []
         self._expect = None
@@ -223,12 +227,14 @@ class RuleFirstPolicy:
             legal = list(actions)
 
         visited = self.visited
+        spec = self._engine_plan_spec(scene)
         plan, _unknowns = plan_bfs(
             start,
-            lambda s: s.fingerprint() not in visited,
+            lambda s: s.fingerprint(internal_dims=spec.internal_dims) not in visited,
             legal,
             ctx,
             max_nodes=self.cfg.max_nodes,
+            internal_dims=spec.internal_dims,
         )
         if plan:
             self.plan = plan

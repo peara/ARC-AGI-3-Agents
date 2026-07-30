@@ -28,6 +28,7 @@ class PlanSpec:
     entities: list[int]
     goal: Callable[[SceneState], bool]
     dims: tuple[str, ...] = ("pos",)
+    internal_dims: tuple[str, ...] = ()  # dims excluded from fingerprint/residual/diff/LLM
     include_terminal: bool = False
 
 
@@ -53,13 +54,14 @@ def plan_bfs(
     ctx: EffectContext,
     *,
     max_nodes: int = 10_000,
+    internal_dims: tuple[str, ...] = (),
 ) -> tuple[list[int] | None, list[UnknownAction]]:
     """Return an action sequence reaching ``goal`` (or None) and collected unknowns."""
     if goal(start):
         return ([], [])
 
     queue: deque[tuple[SceneState, list[int]]] = deque([(start, [])])
-    visited: set[tuple[object, ...]] = {start.fingerprint()}
+    visited: set[tuple[object, ...]] = {start.fingerprint(internal_dims=internal_dims)}
     unknowns: list[UnknownAction] = []
 
     while queue and len(visited) < max_nodes:
@@ -72,7 +74,7 @@ def plan_bfs(
             if is_terminal_dead_end(pred.state):
                 continue
             nxt = pred.state
-            fp = nxt.fingerprint()
+            fp = nxt.fingerprint(internal_dims=internal_dims)
             if fp in visited:
                 continue
             visited.add(fp)

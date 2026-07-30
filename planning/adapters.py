@@ -23,6 +23,7 @@ DimReader = Callable[[ObjectRegistry, EntityCatalog, int, int], object | None]
 class SnapshotProjection(Protocol):
     entities: list[int]
     dims: tuple[str, ...]
+    internal_dims: tuple[str, ...]
     include_terminal: bool
 
 
