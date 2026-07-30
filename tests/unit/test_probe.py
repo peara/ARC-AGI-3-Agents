@@ -460,6 +460,29 @@ class TestProbeGoal:
         assert result == ([], [])
         assert mock_bfs.call_args[1]["max_nodes"] == 5000
 
+    def test_execute_probe_spec_includes_cells_as_internal_dim(self) -> None:
+        """execute_probe PlanSpec must include cells as internal_dim for collision guards."""
+        from unittest.mock import patch
+
+        from planning.search import PlanSpec
+
+        scene = _mock_scene()
+        goal = ProbeGoal(target={"dim": "pos", "of": 0, "eq": [5, 10]})
+        fake_start = _state(0, "pos", (5, 10))
+        fake_ctx = MagicMock()
+
+        with (
+            patch("planning.probe.snapshot_from_scene", return_value=fake_start) as mock_snapshot,
+            patch("planning.probe.plan_bfs", return_value=([], [])),
+        ):
+            execute_probe(goal, scene, fake_ctx, [0, 1])
+
+        spec = mock_snapshot.call_args[0][1]
+        assert isinstance(spec, PlanSpec)
+        assert "cells" in spec.dims
+        assert "cells" in spec.internal_dims
+        assert spec.dims.index("cells") == len(spec.dims) - 1
+
 
 # ===========================================================================
 # TestExecuteProbeWithAction

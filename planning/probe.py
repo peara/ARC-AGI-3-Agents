@@ -173,9 +173,13 @@ def execute_probe(
         dims = goal.dims if goal.dims is not None else derived_dims
 
     compiled_goal = compile_goal(resolved)
+    all_dims = list(dims)
+    if "cells" not in all_dims:
+        all_dims.append("cells")
     spec = PlanSpec(
         entities=list(entities),
-        dims=dims,
+        dims=tuple(all_dims),
+        internal_dims=("cells",),
         goal=compiled_goal,
         include_terminal=False,
     )

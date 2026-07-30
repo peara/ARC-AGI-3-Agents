@@ -60,9 +60,8 @@ def predict(
     Proposed rules (support=0) are treated the same as confirmed — they make
     the action "known" so the engine can confirm or prune them via observation.
 
-    Collision rules evaluate guards against the pre-action state. This matches
-    how collision rules are learned — the guard captures the entity's position
-    before the movement, and ``op="revert"`` restores that position.
+    Collision rules evaluate guards against the post-movement state (``nxt``).
+    This ensures overlap checks see translated cells and moved positions.
     Effects with ``op="revert"`` restore values from ``state_before``.
     """
     nxt: SceneState = state
@@ -84,11 +83,11 @@ def predict(
         return (pred, fired_rules) if return_fired else pred
 
     for rule in ctx.collision_rules:
-        if rule.guard(state, action):
+        if rule.guard(nxt, action):
             nxt = rule.apply(nxt, action, state_before=state)
             fired_rules.append(rule)
     for rule in ctx.proposed_rules:
-        if rule.kind == "collision" and rule.guard(state, action):
+        if rule.kind == "collision" and rule.guard(nxt, action):
             nxt = rule.apply(nxt, action, state_before=state)
             fired_rules.append(rule)
     for rule in ctx.terminal_rules:

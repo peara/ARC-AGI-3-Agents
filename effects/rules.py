@@ -154,6 +154,12 @@ class Rule:
                     if cur is not None:
                         new_pos = (cur[0] + effect.value[0], cur[1] + effect.value[1])
                         result = result.with_pos(effect.of, new_pos)
+                        # Translate cells by the same delta
+                        cur_cells = result.cells(effect.of)
+                        if cur_cells is not None:
+                            dr, dc = int(effect.value[0]), int(effect.value[1])
+                            new_cells = frozenset((r + dr, c + dc) for (r, c) in cur_cells)
+                            result = result.with_cells(effect.of, new_cells)
                 elif effect.dim == "orientation":
                     cur = result.orientation(effect.of)
                     if cur is not None:

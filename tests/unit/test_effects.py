@@ -603,3 +603,61 @@ class TestPrediction:
         assert result.state.pos(0) == (5, 5)
 
 
+def test_movement_delta_translates_cells():
+    """Movement delta rule must translate cells alongside pos."""
+    state = SceneState(relevant=(
+        (0, ("pos", (5.0, 5.0))),
+        (0, ("cells", frozenset({(5, 5), (5, 6)}))),
+    ))
+    rule = Rule(kind="movement", guard_spec={"action": 1},
+                effects=(Effect(dim="pos", of=0, op="delta", value=(0, 1)),),
+                support=1)
+    result = rule.apply(state, action=1, state_before=state)
+    assert result.pos(0) == (5.0, 6.0)
+    assert result.cells(0) == frozenset({(5, 6), (5, 7)})
+
+
+def test_collision_guard_evaluates_post_movement():
+    """Collision guard fires only when overlap exists AFTER movement."""
+    # Entity 0 at (5,5) with cells {(5,5)}, moves to (6,5) with cells {(6,5)}
+    # Entity 1 at (6,5) with cells {(6,5)} — overlap only after movement
+    state = SceneState(relevant=(
+        (0, ("pos", (5.0, 5.0))),
+        (0, ("cells", frozenset({(5, 5)}))),
+        (1, ("pos", (6.0, 5.0))),
+        (1, ("cells", frozenset({(6, 5)}))),
+    ))
+    move_rule = Rule(kind="movement", guard_spec={"action": 1},
+                     effects=(Effect(dim="pos", of=0, op="delta", value=(1, 0)),),
+                     support=1)
+    collision_rule = Rule(kind="collision",
+                          guard_spec={"all": [{"action": 1}, {"overlaps": {"entity_a": 0, "entity_b": 1}}]},
+                          effects=(Effect(dim="pos", of=0, op="revert", value="before"),),
+                          support=1)
+    ctx = EffectContext(movement_rules=(move_rule,), collision_rules=(collision_rule,))
+    pred = predict(state, 1, ctx)
+    assert not pred.unknown
+    assert pred.state.pos(0) == (5.0, 5.0)  # reverted to pre-action
+
+
+def test_collision_guard_no_overlap_no_revert():
+    """Collision guard does not fire when no overlap exists post-movement."""
+    state = SceneState(relevant=(
+        (0, ("pos", (5.0, 5.0))),
+        (0, ("cells", frozenset({(5, 5)}))),
+        (1, ("pos", (10.0, 10.0))),
+        (1, ("cells", frozenset({(10, 10)}))),
+    ))
+    move_rule = Rule(kind="movement", guard_spec={"action": 1},
+                     effects=(Effect(dim="pos", of=0, op="delta", value=(1, 0)),),
+                     support=1)
+    collision_rule = Rule(kind="collision",
+                          guard_spec={"all": [{"action": 1}, {"overlaps": {"entity_a": 0, "entity_b": 1}}]},
+                          effects=(Effect(dim="pos", of=0, op="revert", value="before"),),
+                          support=1)
+    ctx = EffectContext(movement_rules=(move_rule,), collision_rules=(collision_rule,))
+    pred = predict(state, 1, ctx)
+    assert not pred.unknown
+    assert pred.state.pos(0) == (6.0, 5.0)  # movement applied, no revert
+
+
