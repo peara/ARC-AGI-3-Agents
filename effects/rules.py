@@ -58,8 +58,6 @@ class EffectRule(Protocol):
         self,
         state: SceneState,
         action: int,
-        *,
-        entity_cells: dict[int, frozenset[tuple[int, int]]] | None = None,
     ) -> bool: ...
 
     def apply(self, state: SceneState, action: int) -> SceneState: ...
@@ -118,10 +116,8 @@ class Rule:
         self,
         state: SceneState,
         action: int,
-        *,
-        entity_cells: dict[int, frozenset[tuple[int, int]]] | None = None,
     ) -> bool:
-        return evaluate_guard(self.guard_spec, state, action, entity_cells=entity_cells)
+        return evaluate_guard(self.guard_spec, state, action)
 
     def apply(
         self,
@@ -129,10 +125,8 @@ class Rule:
         action: int,
         *,
         state_before: SceneState | None = None,
-        entity_cells: dict[int, frozenset[tuple[int, int]]] | None = None,
     ) -> SceneState:
         _ = action
-        _entity_cells = entity_cells  # preserved for future use
         result = state_after
         for effect in self.effects:
             if effect.op == "revert":
@@ -142,10 +136,6 @@ class Rule:
                     old_pos = state_before.pos(effect.of)
                     if old_pos is not None:
                         result = result.with_pos(effect.of, old_pos)
-                elif effect.dim == "cells":
-                    old_cells = state_before.cells(effect.of)
-                    if old_cells is not None:
-                        result = result.with_cells(effect.of, old_cells)
                 elif effect.dim == "orientation":
                     old_orient = state_before.orientation(effect.of)
                     if old_orient is not None:

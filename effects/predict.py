@@ -29,7 +29,6 @@ def predict(
     action: int,
     ctx: EffectContext,
     *,
-    entity_cells: dict[int, frozenset[tuple[int, int]]] | None = ...,
     return_fired: Literal[False] = ...,
 ) -> Prediction: ...
 
@@ -40,7 +39,6 @@ def predict(
     action: int,
     ctx: EffectContext,
     *,
-    entity_cells: dict[int, frozenset[tuple[int, int]]] | None = ...,
     return_fired: Literal[True] = ...,
 ) -> tuple[Prediction, list[Rule]]: ...
 
@@ -50,7 +48,6 @@ def predict(
     action: int,
     ctx: EffectContext,
     *,
-    entity_cells: dict[int, frozenset[tuple[int, int]]] | None = None,
     return_fired: bool = False,
 ) -> Prediction | tuple[Prediction, list[Rule]]:
     """Predict the next symbolic state after ``action``.
@@ -74,12 +71,12 @@ def predict(
 
     for rule in ctx.movement_rules:
         if rule.guard(state, action):
-            nxt = rule.apply(nxt, action, state_before=state, entity_cells=entity_cells)
+            nxt = rule.apply(nxt, action, state_before=state)
             any_fired = True
             fired_rules.append(rule)
     for rule in ctx.proposed_rules:
         if rule.kind == "movement" and rule.guard(state, action):
-            nxt = rule.apply(nxt, action, state_before=state, entity_cells=entity_cells)
+            nxt = rule.apply(nxt, action, state_before=state)
             any_fired = True
             fired_rules.append(rule)
     if not any_fired:
@@ -87,28 +84,28 @@ def predict(
         return (pred, fired_rules) if return_fired else pred
 
     for rule in ctx.collision_rules:
-        if rule.guard(state, action, entity_cells=entity_cells):
-            nxt = rule.apply(nxt, action, state_before=state, entity_cells=entity_cells)
+        if rule.guard(state, action):
+            nxt = rule.apply(nxt, action, state_before=state)
             fired_rules.append(rule)
     for rule in ctx.proposed_rules:
-        if rule.kind == "collision" and rule.guard(state, action, entity_cells=entity_cells):
-            nxt = rule.apply(nxt, action, state_before=state, entity_cells=entity_cells)
+        if rule.kind == "collision" and rule.guard(state, action):
+            nxt = rule.apply(nxt, action, state_before=state)
             fired_rules.append(rule)
     for rule in ctx.terminal_rules:
         if rule.guard(state, action):
-            nxt = rule.apply(nxt, action, state_before=state, entity_cells=entity_cells)
+            nxt = rule.apply(nxt, action, state_before=state)
             fired_rules.append(rule)
     for rule in ctx.proposed_rules:
         if rule.kind == "terminal" and rule.guard(state, action):
-            nxt = rule.apply(nxt, action, state_before=state, entity_cells=entity_cells)
+            nxt = rule.apply(nxt, action, state_before=state)
             fired_rules.append(rule)
     for rule in ctx.relational_rules:
         if rule.guard(state, action):
-            nxt = rule.apply(nxt, action, state_before=state, entity_cells=entity_cells)
+            nxt = rule.apply(nxt, action, state_before=state)
             fired_rules.append(rule)
     for rule in ctx.proposed_rules:
         if rule.kind == "delta" and rule.guard(state, action):
-            nxt = rule.apply(nxt, action, state_before=state, entity_cells=entity_cells)
+            nxt = rule.apply(nxt, action, state_before=state)
             fired_rules.append(rule)
     
     pred = Prediction(nxt, unknown=False)

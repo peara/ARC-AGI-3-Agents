@@ -800,7 +800,7 @@ def validate_rules_against_history(
         for eid in existing_ids:
             pred_eid: dict[str, object] = {}
             obs_eid: dict[str, object] = {}
-            for dim in dims:
+            for dim in compute_dims:
                 pv = pred.state.get(eid, dim)
                 ov = t.state_after.get(eid, dim)
                 pred_eid[dim] = pv

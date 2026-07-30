@@ -80,6 +80,10 @@ A guard is a dict that specifies when a rule fires:
 clauses are true.
 - **Position clause**: `{"dim": "pos", "of": EID, "eq": [R, C]}` — fires when \
 entity EID is at row R, column C.
+- **Overlap clause**: `{"overlaps": {"entity_a": EID_A, "entity_b": EID_B}}` \
+— fires when entity A's cells overlap entity B's cells. Use this for \
+entity-entity collisions; it generalises across all positions where the two \
+entities might meet.
 
 ## Effect formats
 
@@ -117,10 +121,18 @@ specific transition: `{"kind": "movement", "guard": {"all": [{"action": 1}, \
 {"dim": "pos", "of": 0, "eq": [47, 26]}]}, "effects": [{"dim": "pos", "of": 0, \
 "op": "set", "value": [42, 26]}], "support": 1}`.
 - `"collision"` — movement blocked. Effects use `op: "revert"` to restore \
-the pre-action position: `{"kind": "collision", "guard": {"all": [{"action": \
-1}, {"dim": "pos", "of": 0, "eq": [47, 26]}]}, "effects": [{"dim": "pos", \
-"of": 0, "op": "revert"}], "support": 1}` means action 1 at (47,26) is \
-blocked — entity stays put.
+the pre-action position. Two guard styles:
+  - **Overlap guard** (preferred for entity-entity blocks): \
+`{"kind": "collision", "guard": {"all": [{"action": 1}, \
+{"overlaps": {"entity_a": 0, "entity_b": 5}}]}, \
+"effects": [{"dim": "pos", "of": 0, "op": "revert"}], "support": 2}` \
+means action 1 is blocked whenever entity 0's cells overlap entity 5's \
+cells — generalises to every position where they meet.
+  - **Positional guard** (only for grid edges with no blocking entity): \
+`{"kind": "collision", "guard": {"all": [{"action": 1}, \
+{"dim": "pos", "of": 0, "eq": [47, 26]}]}, \
+"effects": [{"dim": "pos", "of": 0, "op": "revert"}], "support": 1}` \
+means action 1 at (47,26) is blocked — entity stays put.
 
 ## Observed transitions (unknown actions)
 
@@ -143,11 +155,19 @@ Propose a movement or collision rule that explains the observed transition:
 the displacement is consistent. Use a **positional** `set` rule when the \
 movement only works from that specific position.
 - If the entity **did not move** (before == after for the controllable's \
-pos), propose a `collision` rule with `op: "revert"` effect and a \
-positional guard.
-- Always include a positional guard for collision rules (the block is \
-position-specific). For movement rules, a generic action-only guard is \
-preferred unless the movement only applies at that position.
+pos), propose a `collision` rule with `op: "revert"` effect.
+- **Choosing the guard for a collision rule**:
+  - Look at the scene entities in the bundle. If another entity's bbox/cells \
+cover the cell the controllable tried to move into, that entity is the \
+blocker — propose an **overlap guard** referencing the controllable and the \
+blocker entity: `{"overlaps": {"entity_a": <controllable>, \
+"entity_b": <blocker>}}`. This generalises to every position where they meet.
+  - Only use a **positional guard** (`{"dim": "pos", "of": EID, "eq": [R,C]}`) \
+when the block is at a grid edge or void with NO entity occupying the \
+blocking cells. Positional collision rules do not generalise — prefer overlap \
+whenever a blocker entity exists.
+- For movement rules, a generic action-only guard is preferred unless the \
+movement only applies at that position.
 
 ## Rule coverage gaps
 
@@ -220,22 +240,29 @@ For `delta` and `terminal` kinds, use `"effect"` (singular) instead of \
 {"kind": "movement", "guard": {"action": 1}, "effects": [{"dim": "pos", "of": 0, "op": "delta", "value": [-5, 0]}], "support": 3}
 ```
 
-2. Action 1 at position (47, 26) is blocked — entity doesn't move:
+2. Action 1 is blocked because entity 0 would overlap entity 5 (observed 2 \
+times at different positions — the overlap guard generalises):
+```json
+{"kind": "collision", "guard": {"all": [{"action": 1}, {"overlaps": {"entity_a": 0, "entity_b": 5}}]}, "effects": [{"dim": "pos", "of": 0, "op": "revert"}], "support": 2}
+```
+
+3. Action 1 at position (47, 26) is blocked at a grid edge with no blocking \
+entity — entity doesn't move (use a positional guard only here):
 ```json
 {"kind": "collision", "guard": {"all": [{"action": 1}, {"dim": "pos", "of": 0, "eq": [47, 26]}]}, "effects": [{"dim": "pos", "of": 0, "op": "revert"}], "support": 1}
 ```
 
-3. Action 3 at position (47, 41) moves entity 0 to (47, 36):
+4. Action 3 at position (47, 41) moves entity 0 to (47, 36):
 ```json
 {"kind": "movement", "guard": {"all": [{"action": 3}, {"dim": "pos", "of": 0, "eq": [47, 41]}]}, "effects": [{"dim": "pos", "of": 0, "op": "set", "value": [47, 36]}], "support": 1}
 ```
 
-4. Pressing action 3 increments entity 5's size by 1 (observed 4 times):
+5. Pressing action 3 increments entity 5's size by 1 (observed 4 times):
 ```json
 {"kind": "delta", "guard": {"action": 3}, "effect": {"dim": "size", "of": 5, "delta": 1}, "support": 4}
 ```
 
-5. Action 1 sets entity 0's orientation to 0 (always faces direction 0, \
+6. Action 1 sets entity 0's orientation to 0 (always faces direction 0, \
 regardless of starting orientation):
 ```json
 {"kind": "movement", "guard": {"action": 1}, "effects": [{"dim": "orientation", "of": 0, "op": "set", "value": 0}], "support": 3}

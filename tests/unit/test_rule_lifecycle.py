@@ -18,9 +18,12 @@ from effects import (
     ResidualEntry,
     Rule,
     SceneState,
+    TransitionHistory,
+    _ProjectionSpec,
     confirm_rules,
     engine_step,
     propose_rules,
+    validate_rules_against_history,
 )
 from planning.llm_planner import call_rule_proposer
 from planning.llm_rule_proposer import (
@@ -710,3 +713,61 @@ class TestValidateCollisionProposal:
         scene_entities: dict[int, dict] = {5: {"dim": "pos"}}
         result = validate_proposal(proposal, scene_entities)
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Test 8: Overlap guard validates against history
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestOverlapGuardValidatesAgainstHistory:
+    """Integration test: SceneState cells → evaluate_guard → validate_rules_against_history."""
+
+    def test_overlap_guard_validates_against_history(self) -> None:
+        collision_rule = Rule(
+            guard_spec={"overlaps": {"entity_a": 0, "entity_b": 5}},
+            effects=(Effect("pos", 0, "revert", ""),),
+            support=1,
+            kind="collision",
+        )
+        movement_rule = Rule(
+            guard_spec={"action": 1},
+            effects=(Effect("pos", 0, "delta", (0, 1)),),
+            support=1,
+            kind="movement",
+        )
+        ctx = EffectContext(
+            movement_rules=(movement_rule,),
+            collision_rules=(collision_rule,),
+            available_actions=(1,),
+        )
+
+        before = SceneState(relevant=(
+            (0, ("pos", (5, 5))),
+            (0, ("cells", frozenset({(5, 5), (5, 6)}))),
+            (5, ("cells", frozenset({(5, 6)}))),
+        ))
+        after = before.with_pos(0, (5, 5))
+
+        history = TransitionHistory()
+        history.append(
+            state_before=before,
+            action=1,
+            state_after=after,
+            frame_idx=0,
+        )
+
+        spec = _ProjectionSpec(
+            entities=(0,),
+            dims=("pos",),
+        )
+
+        result = validate_rules_against_history(
+            proposed_rules=(collision_rule,),
+            ctx=ctx,
+            history=history,
+            spec=spec,
+        )
+
+        assert isinstance(result, list)

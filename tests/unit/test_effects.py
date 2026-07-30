@@ -265,33 +265,31 @@ class TestOverlapsGuard:
 
     def test_evaluate_overlaps_true(self):
         clause_guard = {"overlaps": {"entity_a": 0, "entity_b": 5}}
-        state = SceneState(relevant=())
-        entity_cells = {
-            0: frozenset({(1, 1), (2, 2)}),
-            5: frozenset({(1, 1), (3, 3)}),
-        }
-        assert evaluate_guard(clause_guard, state, 0, entity_cells=entity_cells) is True
+        state = SceneState(relevant=(
+            (0, ("cells", frozenset({(1, 1), (2, 2)}))),
+            (5, ("cells", frozenset({(1, 1), (3, 3)}))),
+        ))
+        assert evaluate_guard(clause_guard, state, 0) is True
 
     def test_evaluate_overlaps_false(self):
         clause_guard = {"overlaps": {"entity_a": 0, "entity_b": 5}}
-        state = SceneState(relevant=())
-        entity_cells = {
-            0: frozenset({(1, 1)}),
-            5: frozenset({(2, 2)}),
-        }
-        assert evaluate_guard(clause_guard, state, 0, entity_cells=entity_cells) is False
+        state = SceneState(relevant=(
+            (0, ("cells", frozenset({(1, 1)}))),
+            (5, ("cells", frozenset({(2, 2)}))),
+        ))
+        assert evaluate_guard(clause_guard, state, 0) is False
 
-    def test_evaluate_overlaps_requires_entity_cells(self):
+    def test_evaluate_overlaps_missing_cells_returns_false(self):
         clause_guard = {"overlaps": {"entity_a": 0, "entity_b": 5}}
-        state = SceneState(relevant=())
-        with pytest.raises(ValueError, match="overlaps guard requires entity_cells"):
-            evaluate_guard(clause_guard, state, 0)
+        state = SceneState(relevant=((0, ("pos", (1, 1))),))
+        assert evaluate_guard(clause_guard, state, 0) is False
 
     def test_evaluate_overlaps_missing_entity(self):
         clause_guard = {"overlaps": {"entity_a": 0, "entity_b": 5}}
-        state = SceneState(relevant=())
-        entity_cells = {0: frozenset({(1, 1)})}
-        assert evaluate_guard(clause_guard, state, 0, entity_cells=entity_cells) is False
+        state = SceneState(relevant=(
+            (0, ("cells", frozenset({(1, 1)}))),
+        ))
+        assert evaluate_guard(clause_guard, state, 0) is False
 
     def test_parse_action_guard_still_works(self):
         clauses = parse_guard_clauses({"action": 3})
@@ -594,13 +592,12 @@ class TestPrediction:
             collision_rules=(collision_rule,),
             available_actions=(1,),
         )
-        start = SceneState(relevant=((0, ("pos", (5, 5))),))
-        # Entity 0 cells include (5,6) (overlap with entity 5)
-        cells = {
-            0: frozenset({(5, 5), (5, 6)}),
-            5: frozenset({(5, 6)}),
-        }
-        result = predict(start, 1, ctx, entity_cells=cells)
+        start = SceneState(relevant=(
+            (0, ("pos", (5, 5))),
+            (0, ("cells", frozenset({(5, 5), (5, 6)}))),
+            (5, ("cells", frozenset({(5, 6)}))),
+        ))
+        result = predict(start, 1, ctx)
         assert not result.unknown
         # Revert should restore entity 0 to (5,5)
         assert result.state.pos(0) == (5, 5)

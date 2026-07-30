@@ -662,22 +662,23 @@ class EntityBuilder:
             relevant.append((eid, ("pos", ent.centroid)))
             relevant.append((eid, ("size", ent.size)))
 
-            if ent.cells is not None and len(ent.cells) >= 2:
-                if eid not in self._orientation_by_entity:
-                    self._orientation_by_entity[eid] = 0
-
-                if eid in self._prev_cells_by_entity:
-                    rot = detect_rotation(self._prev_cells_by_entity[eid], ent.cells)
-                    if rot is not None:
-                        self._orientation_by_entity[eid] = (
-                            self._orientation_by_entity[eid] + rot
-                        ) % 4
-
-                ent.meta["orientation"] = self._orientation_by_entity[eid]
+            if ent.cells is not None:
                 relevant.append((eid, ("cells", ent.cells)))
-                relevant.append(
-                    (eid, ("orientation", self._orientation_by_entity[eid]))
-                )
+                if len(ent.cells) >= 2:
+                    if eid not in self._orientation_by_entity:
+                        self._orientation_by_entity[eid] = 0
+
+                    if eid in self._prev_cells_by_entity:
+                        rot = detect_rotation(self._prev_cells_by_entity[eid], ent.cells)
+                        if rot is not None:
+                            self._orientation_by_entity[eid] = (
+                                self._orientation_by_entity[eid] + rot
+                            ) % 4
+
+                    ent.meta["orientation"] = self._orientation_by_entity[eid]
+                    relevant.append(
+                        (eid, ("orientation", self._orientation_by_entity[eid]))
+                    )
 
         if not relevant:
             return None
