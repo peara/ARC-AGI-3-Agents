@@ -197,6 +197,8 @@ class QueryInterface:
             return []
         out: list[dict[str, object]] = []
         for r in self._residual:
+            if r.dim == "cells":
+                continue
             entry: dict[str, object] = {
                 "dim": r.dim,
                 "entity_id": r.entity_id,
@@ -232,6 +234,8 @@ class QueryInterface:
                     and isinstance(item[0], int)
                 ):
                     eid, (dim, val) = item
+                    if dim == "cells":
+                        continue
                     out.append((eid, (dim, _render_pos(val) if dim == "pos" else val)))
                 else:
                     out.append(item)
@@ -256,6 +260,8 @@ class QueryInterface:
                     and isinstance(item[0], int)
                 ):
                     eid, (dim, val) = item
+                    if dim == "cells":
+                        continue
                     out.append((eid, (dim, _render_pos(val) if dim == "pos" else val)))
                 else:
                     out.append(item)
