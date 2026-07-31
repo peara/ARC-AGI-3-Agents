@@ -3,7 +3,7 @@
 A single frame is underdetermined (which cells form one object? which blob is
 the agent?). Interaction disambiguates: cells that change *together* under an
 action belong together, and the thing that translates with directional actions
-is controllable.
+is the agent.
 
 This module provides exploratory instruments, not a committed algorithm:
 

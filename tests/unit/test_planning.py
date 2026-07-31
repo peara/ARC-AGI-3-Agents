@@ -48,10 +48,9 @@ class TestPlanningOnRecordings:
     def stack(self, plan_case: PlanCase):
         return build_perception_stack(plan_case.recording.path)
 
-    def test_controllable_entity_exists(self, stack, plan_case: PlanCase):
+    def test_entity_exists_for_plan_case(self, stack, plan_case: PlanCase):
         ent = stack.catalog.entities.get(plan_case.entity_id)
         assert ent is not None
-        assert ent.affordances.get("controllable") is True
 
     def test_movement_model_from_recording(self, stack, plan_case: PlanCase):
         ctx = EffectContext(available_actions=tuple(stack.action_ids))

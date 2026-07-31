@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from perception.entities import CONTROLLABLE_ENTITY_ID
-
 from .guard_parse import parse_guard_clauses
 from .rules import Effect, Rule
 
@@ -141,12 +139,19 @@ def dsl_to_rule(dsl: DslRule) -> Rule:
     # terminal
     eff = dsl["effect"]
     terminal = eff["terminal"]
-    entity_id: int | None = CONTROLLABLE_ENTITY_ID
+    # Terminal rules require an explicit entity_id from the guard's pos clause.
+    # A terminal rule without a position context is meaningless.
+    pos_entity_id: int | None = None
     for gc in parse_guard_clauses(guard):
         if gc["has_pos"]:
-            entity_id = gc.get("entity_id", CONTROLLABLE_ENTITY_ID)
+            pos_entity_id = gc.get("entity_id")
+            break
+    if pos_entity_id is None:
+        raise ValueError(
+            "terminal rule requires a position guard clause with an explicit entity_id"
+        )
     return Rule(
         guard_spec=guard,
-        effects=(Effect("terminal", entity_id, "set", terminal),),
+        effects=(Effect("terminal", pos_entity_id, "set", terminal),),
         support=support,
     )

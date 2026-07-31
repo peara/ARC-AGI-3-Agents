@@ -51,7 +51,7 @@ log = logging.getLogger(__name__)
 
 def _format_status(status: Any) -> str:
     return (
-        f"{status.phase} ctrl={status.controllable_id} "
+        f"{status.phase} "
         f"target={status.target} plan={status.plan_len} "
         f"visited={status.n_visited}"
     )
@@ -327,14 +327,12 @@ class LlmCuriosity(Agent):
             state_before, spec, action = self._engine_step_pending
             observed = snapshot_from_scene(self._scene, spec)
             if observed is not None:
-                ctrl_id = None
                 result = run_engine_step(
                     ctx=self.policy.context,
                     state_before=state_before,
                     action=action,
                     observed=observed,
                     spec=spec,
-                    controllable_id=ctrl_id,
                     history=self._history,
                 )
                 self._last_engine_result = result
@@ -410,10 +408,6 @@ class LlmCuriosity(Agent):
                 for step in recent_steps:
                     summary: dict[str, object] = {
                         "levels_completed": step.levels_completed,
-                        "controllable_id": self._scene.controllable_id(),
-                        "controllable_pos": (
-                            list(pos) if (pos := self._scene.controllable_pos()) is not None else [0, 0]
-                        ),
                         "n_entities": n_entities,
                         "action_taken": step.action_id,
                     }
@@ -613,7 +607,7 @@ class LlmCuriosity(Agent):
                 self._current_goal = None
                 if unknowns:
                     ua = pick_fallback_unknown(
-                        unknowns, self._tried_fallback_unknowns, scene
+                        unknowns, self._tried_fallback_unknowns
                     )
                     if ua is not None:
                         self._tried_fallback_unknowns.add(tried_key(ua))

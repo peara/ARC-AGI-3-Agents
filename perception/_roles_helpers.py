@@ -7,8 +7,6 @@ from here to avoid a circular dependency.
 
 from __future__ import annotations
 
-from collections import Counter, defaultdict
-
 from .registry import ObjectRegistry, Track
 
 _RESET_ACTION = 0  # RESET is never a movement control (mirror session.RESET_ACTION)
@@ -33,55 +31,6 @@ def _is_structural(track_id: int, reg: ObjectRegistry) -> bool:
     if not track.observations:
         return False
     return sum(o.structural for o in track.observations) > track.n_obs / 2
-
-
-def _controllable_tracks(
-    reg: ObjectRegistry,
-    action_ids: list[int],
-    *,
-    min_samples: int = 3,
-    agree: float = 0.8,
-) -> tuple[set[int], dict[int, tuple[int, int]]]:
-    """Return track ids with consistent action→displacement and merged action map."""
-    candidates: set[int] = set()
-    per_track_maps: dict[int, dict[int, tuple[int, int]]] = {}
-
-    for tid in reg.tracks:
-        if _is_structural(tid, reg):
-            continue
-        pairs = _track_action_displacements(tid, reg, action_ids)
-        moving = [(a, d) for a, d in pairs if d != (0, 0)]
-        if len(moving) < min_samples:
-            continue
-
-        by_action: dict[int, list[tuple[int, int]]] = defaultdict(list)
-        for aid, disp in moving:
-            if aid == _RESET_ACTION:  # RESET is never a movement control
-                continue
-            by_action[aid].append(disp)
-
-        # Per-action map keeps only actions whose own displacement is consistent,
-        # so noisy actions (e.g. a replay/reset key) don't pollute the map.
-        action_map: dict[int, tuple[int, int]] = {}
-        agree_num = 0
-        agree_den = 0
-        for aid, disps in by_action.items():
-            dom, count = Counter(disps).most_common(1)[0]
-            agree_num += count
-            agree_den += len(disps)
-            if count / len(disps) >= agree:
-                action_map[aid] = dom
-
-        if agree_den and agree_num / agree_den >= agree and action_map:
-            candidates.add(tid)
-            per_track_maps[tid] = action_map
-
-    merged: dict[int, tuple[int, int]] = {}
-    for tid in candidates:
-        for aid, disp in per_track_maps[tid].items():
-            merged[aid] = disp
-
-    return candidates, merged
 
 
 def _is_counter_track(

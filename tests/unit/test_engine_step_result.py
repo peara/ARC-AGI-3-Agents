@@ -18,6 +18,7 @@ class TestEngineStepResult:
             ctx=ctx,
             residual=(),
             observed_transition=None,
+            unknowns=(),
         )
         with pytest.raises(AttributeError):
             result.ctx = ctx  # type: ignore[misc]
@@ -29,10 +30,12 @@ class TestEngineStepResult:
             ctx=ctx,
             residual=(),
             observed_transition=None,
+            unknowns=(),
         )
         assert result.ctx is ctx
         assert result.residual == ()
         assert result.observed_transition is None
+        assert result.unknowns == ()
 
 
 class TestRunEngineStep:
@@ -52,7 +55,6 @@ class TestRunEngineStep:
             action=action,
             observed=observed,
             spec=spec,
-            controllable_id=None,
             history=None,
         )
 
@@ -87,7 +89,6 @@ class TestRunEngineStep:
             action=action,
             observed=observed,
             spec=spec,
-            controllable_id=0,
             history=None,
         )
 

@@ -61,21 +61,16 @@ def is_structural_entity(scene: SceneSnapshot, entity_id: int) -> bool:
 def curiosity_entity_target(
     scene: SceneSnapshot,
     *,
-    controllable_id: int,
     current: Pos,
     reached_targets: set[Pos],
     cfg: ExplorationConfig,
     movement_rules: tuple[Rule, ...] = (),
 ) -> Pos | None:
-    """Nearest unconfirmed, non-structural entity not yet reached."""
+    """Nearest non-structural entity not yet reached."""
     radius = reach_radius(cfg, movement_rules)
     best: Pos | None = None
     best_d = None
-    for eid, ent in scene.catalog.entities.items():
-        if eid == controllable_id:
-            continue
-        if ent.affordances.get("controllable") is True:
-            continue
+    for eid in scene.catalog.entities:
         if is_structural_entity(scene, eid):
             continue
         pos = scene.entity_pos(eid)

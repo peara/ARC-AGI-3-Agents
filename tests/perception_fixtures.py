@@ -30,7 +30,6 @@ class PlanCase:
 @dataclass(frozen=True)
 class PerceptionExpect:
     recording: RecordingRef
-    controllable_entity_id: int | None
     min_counters: int = 0
     min_animation_events: int = 0
 
@@ -74,11 +73,9 @@ def load_perception_expectations(
             name=entry["name"],
             path=REPO_ROOT / entry["path"],
         )
-        ctrl = perc.get("controllable_entity_id")
         out.append(
             PerceptionExpect(
                 recording=rec,
-                controllable_entity_id=int(ctrl) if ctrl is not None else None,
                 min_counters=int(perc.get("min_counters", 0)),
                 min_animation_events=int(perc.get("min_animation_events", 0)),
             )

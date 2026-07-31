@@ -41,8 +41,8 @@ objective and the key interactions.
    - New visual elements appearing
 
 4. **Entities and roles** — What types of objects exist? The system
-   already labels `controllable` (the player) and `counter` (HUD step
-   counter). Infer any additional roles you can observe:
+    already labels `counter` (HUD step counter). Infer any additional
+    roles you can observe:
    - Collectible / movable objects
    - Target zone / goal area
    - Obstacles / walls
@@ -200,8 +200,6 @@ def build_messages(
         summary_text = (
             f"Action taken: {summary.get('action_taken', 'unknown')}\n"
             f"Levels completed: {summary.get('levels_completed')}\n"
-            f"Controllable entity: {summary.get('controllable_id')} "
-            f"at {summary.get('controllable_pos')}\n"
             f"Entity count: {summary.get('n_entities')}"
         )
         user_content.append({

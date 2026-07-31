@@ -46,7 +46,6 @@ def _make_agent() -> LlmCuriosity:
         mock_policy.context = None
         mock_policy.status.return_value = MagicMock(
             phase="init",
-            controllable_id=None,
             target=None,
             plan_len=0,
             n_observed=0,
@@ -98,18 +97,25 @@ class TestChooseActionPipeline:
 
     def test_perceive_returns_frame_context(self) -> None:
         """Verify _perceive() returns FrameContext when a new frame is ingested."""
+        from effects.context import EffectContext
+        from perception.entities import EntityCatalog
+
         agent = _make_agent()
-        agent.policy.context = MagicMock()  # Required for FrameContext return
-        
+        agent.policy.context = EffectContext(available_actions=(1, 2, 3, 4))
+        agent._coldstart_done = True
+
         # Mock a frame that is not None and differs in ID from _last_observed_frame_id
         frame = _FakeFrameData(frame=MagicMock())
-        
+
         with patch.object(agent.session, "ingest") as mock_ingest, \
-             patch.object(agent._entity_builder, "update", return_value=(MagicMock(), MagicMock())) as mock_update:
-            
+             patch.object(agent._entity_builder, "update", return_value=(MagicMock(), EntityCatalog(entities={}))) as mock_update, \
+             patch.object(agent.policy, "on_observed"), \
+             patch.object(agent, "_mechanics_notepad", MagicMock(spec_set=["should_trigger", "update"])) as mock_nb:
+            mock_nb.should_trigger.return_value = False
+
             from planning.frame_context import FrameContext
             fc = agent._perceive(frame)
-            
+
             assert isinstance(fc, FrameContext)
             mock_ingest.assert_called_once()
             mock_update.assert_called_once()

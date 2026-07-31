@@ -342,7 +342,6 @@ def propose_rules(
     action: int,
     residual: tuple[ResidualEntry, ...],
     *,
-    controllable_id: int | None = None,
     llm_proposals: tuple[Rule, ...] = (),
 ) -> EffectContext:
     """Add candidate rules for unexplained Markovian residuals."""
@@ -415,27 +414,6 @@ def propose_rules(
             if candidate.key() not in relational_keys | proposed_keys:
                 proposed.append(candidate)
                 proposed_keys.add(candidate.key())
-        elif entry.dim == "terminal" and controllable_id is not None:
-            pos = state_before.pos(controllable_id)
-            if pos is None:
-                continue
-            terminal = entry.observed
-            if not isinstance(terminal, str):
-                continue
-            candidate = Rule(
-                guard_spec={
-                    "all": [
-                        {"action": action},
-                        {"dim": "pos", "of": controllable_id, "eq": list(pos)},
-                    ]
-                },
-                effects=(Effect("terminal", controllable_id, "set", terminal),),
-                support=0,
-            )
-            if candidate.key() in terminal_keys | proposed_keys:
-                continue
-            proposed.append(candidate)
-            proposed_keys.add(candidate.key())
     return replace(ctx, proposed_rules=tuple(proposed))
 
 
@@ -661,7 +639,6 @@ def engine_step(
     entity_ids: tuple[int, ...],
     dims: tuple[str, ...],
     include_terminal: bool = False,
-    controllable_id: int | None = None,
     step_label: str | None = None,
     log_changes: bool = False,
     llm_proposals: tuple[Rule, ...] = (),
@@ -693,7 +670,6 @@ def engine_step(
             state_before,
             action,
             residual,
-            controllable_id=controllable_id,
         )
     else:
         updated = ctx

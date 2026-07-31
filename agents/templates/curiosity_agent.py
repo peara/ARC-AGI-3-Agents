@@ -72,7 +72,6 @@ class Curiosity(Agent):
                         action=action,
                         observed=observed,
                         spec=spec,
-                        controllable_id=self._scene.controllable_id(),
                     )
                     self.policy.update_context(result.ctx)
                 self._engine_step_pending = None
@@ -102,7 +101,7 @@ class Curiosity(Agent):
 
 def _format_status(status: PlannerStatus) -> str:
     return (
-        f"{status.phase} ctrl={status.controllable_id} "
+        f"{status.phase} "
         f"target={status.target} plan={status.plan_len} "
         f"visited={status.n_visited}"
     )

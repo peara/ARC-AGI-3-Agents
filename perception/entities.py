@@ -20,15 +20,9 @@ class LifecycleState(StrEnum):
     DEAD = "dead"
 
 DEFAULT_AFFORDANCES: dict[str, bool | None] = {
-    "controllable": None,
     "solid": None,
     "interactable": None,
 }
-
-#: Sentinel for "the controllable entity, resolved at runtime".
-#: Used in rule DSL and validation wherever entity ID 0 was previously
-#: hard-coded as a placeholder for the player-controlled entity.
-CONTROLLABLE_ENTITY_ID: None = None
 
 
 @dataclass
@@ -121,28 +115,7 @@ class EntityCatalog:
     def with_entity(self, entity: Entity) -> EntityCatalog:
         return EntityCatalog(entities={**self.entities, entity.id: entity})
 
-    def controllable(self) -> Entity | None:
-        """Entity tagged controllable, or None if detection did not run or failed."""
-        hits = self.controllables()
-        return hits[0] if len(hits) == 1 else (hits[0] if hits else None)
 
-    def controllables(self) -> list[Entity]:
-        """All entities tagged controllable (may be empty or many)."""
-        return [
-            ent
-            for ent in self.entities.values()
-            if ent.affordances.get("controllable") is True
-        ]
-
-    def observed_motion_by_action(self) -> dict[int, tuple[int, int]] | None:
-        """Observed action→displacement from controllable detector, if any."""
-        ent = self.controllable()
-        if ent is None:
-            return None
-        raw = ent.meta.get("motion_by_action")
-        if not isinstance(raw, dict):
-            return None
-        return raw
 
 
 def build_entities(

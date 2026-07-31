@@ -15,13 +15,8 @@ from typing import Callable
 from effects.dsl import dsl_to_rule
 from effects.guard_parse import parse_guard_clauses
 from effects.rules import Rule
-from perception.entities import CONTROLLABLE_ENTITY_ID
 
 log = logging.getLogger(__name__)
-
-# Both 0 (legacy convention) and None (new sentinel) are accepted as
-# "the controllable entity" placeholder in proposals.
-_CONTROLLABLE_IDS: frozenset[int | None] = frozenset({0, CONTROLLABLE_ENTITY_ID})
 
 # ---------------------------------------------------------------------------
 # TypedDict for a raw proposal dict (mirrors DslRule in effects/dsl.py)
@@ -143,10 +138,10 @@ the action was taken.
 
 A **Pre-computed diff** section may also be provided. It lists exactly what \
 changed (`changed`), which entities were unaffected (`unchanged_entities`), \
-the controllable's expected motion (`expected_motion`), and whether the \
-controllable was blocked. Use this diff directly — do not re-derive it from \
-the raw before/after tuples. The raw tuples are kept as a fallback for any \
-edge case the diff does not cover.
+per-entity expected motions from confirmed movement rules (`expected_motions`), \
+and whether any entity was blocked. Use this diff directly — do not re-derive \
+it from the raw before/after tuples. The raw tuples are kept as a fallback for \
+any edge case the diff does not cover.
 
 Propose a movement or collision rule that explains the observed transition:
 
@@ -154,13 +149,13 @@ Propose a movement or collision rule that explains the observed transition:
 `delta` rule (e.g., `{"action": 1}` guard with `op: "delta"` effect) when \
 the displacement is consistent. Use a **positional** `set` rule when the \
 movement only works from that specific position.
-- If the entity **did not move** (before == after for the controllable's \
-pos), propose a `collision` rule with `op: "revert"` effect.
+- If the entity **did not move** (before == after for an entity's pos), \
+propose a `collision` rule with `op: "revert"` effect.
 - **Choosing the guard for a collision rule**:
   - Look at the scene entities in the bundle. If another entity's bbox/cells \
-cover the cell the controllable tried to move into, that entity is the \
-blocker — propose an **overlap guard** referencing the controllable and the \
-blocker entity: `{"overlaps": {"entity_a": <controllable>, \
+cover the cell the moving entity tried to move into, that entity is the \
+blocker — propose an **overlap guard** referencing the moving entity and the \
+blocker entity: `{"overlaps": {"entity_a": <moving_entity>, \
 "entity_b": <blocker>}}`. This generalises to every position where they meet.
   - Only use a **positional guard** (`{"dim": "pos", "of": EID, "eq": [R,C]}`) \
 when the block is at a grid edge or void with NO entity occupying the \
@@ -398,7 +393,7 @@ def validate_proposal_with_reason(
                 referenced_ids.add(of_val)
             referenced_ids |= _extract_entity_ids(eff)
         for eid in referenced_ids:
-            if eid not in _CONTROLLABLE_IDS and eid not in scene_entities:
+            if eid not in scene_entities:
                 log.debug(
                     "validate_proposal: reject unknown eid=%d (known=%s)",
                     eid,
@@ -426,7 +421,7 @@ def validate_proposal_with_reason(
                 referenced_ids.add(of_val)
             referenced_ids |= _extract_entity_ids(eff)
         for eid in referenced_ids:
-            if eid not in _CONTROLLABLE_IDS and eid not in scene_entities:
+            if eid not in scene_entities:
                 log.debug(
                     "validate_proposal: reject unknown eid=%d (known=%s)",
                     eid,
@@ -441,7 +436,7 @@ def validate_proposal_with_reason(
         referenced_ids = _extract_entity_ids(guard) | _extract_entity_ids(effect)
 
         for eid in referenced_ids:
-            if eid not in _CONTROLLABLE_IDS and eid not in scene_entities:
+            if eid not in scene_entities:
                 log.debug(
                     "validate_proposal: reject unknown eid=%d (known=%s)",
                     eid,

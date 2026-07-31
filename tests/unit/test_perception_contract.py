@@ -83,14 +83,6 @@ class TestPerceptionContract:
         assert "events" in roundtrip
         assert "globals" in roundtrip
 
-    def test_controllable_expectation(self, expect):
-        session, _ = PerceptionSession.from_recording(expect.recording.path)
-        scene = session.snapshot()
-        if expect.controllable_entity_id is None:
-            assert scene.controllable_id() is None
-        else:
-            assert scene.controllable_id() == expect.controllable_entity_id
-
     def test_counter_expectation(self, expect):
         session, _ = PerceptionSession.from_recording(expect.recording.path)
         summary = session.snapshot().summary()

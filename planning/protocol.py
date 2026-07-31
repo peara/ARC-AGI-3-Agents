@@ -14,7 +14,6 @@ class PlannerStatus:
     """Snapshot of the last planner decision (logging / tests)."""
 
     phase: str
-    controllable_id: int | None
     target: Pos | None
     plan_len: int
     n_observed: int

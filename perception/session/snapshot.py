@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from effects import entity_exists_at, entity_pos_at, entity_size_at
 
-from ..entities import Entity, EntityCatalog, LifecycleState
+from ..entities import EntityCatalog, LifecycleState
 from ..registry import ObjectRegistry, derive_roles
 
 if TYPE_CHECKING:
@@ -42,22 +42,6 @@ class SceneSnapshot:
     last_step: StepObservation | None = None
     step_observations: tuple[StepObservation, ...] = ()
     determinism_violations: tuple[dict[str, object], ...] = ()
-
-    def controllable(self) -> Entity | None:
-        return self.catalog.controllable()
-
-    def controllable_id(self) -> int | None:
-        ent = self.controllable()
-        return ent.id if ent else None
-
-    def controllable_pos(self) -> tuple[float, float] | None:
-        ctrl = self.controllable()
-        if ctrl is not None and ctrl.centroid is not None:
-            return ctrl.centroid
-        eid = self.controllable_id()
-        if eid is None:
-            return None
-        return entity_pos_at(self.registry, self.catalog, eid, self.frame_idx)
 
     def entity_pos(self, entity_id: int) -> tuple[float, float] | None:
         ent = self.catalog.entities.get(entity_id)
@@ -228,7 +212,6 @@ class SceneSnapshot:
                 }
             )
 
-        ctrl = self.controllable()
         violations = [
             dict(v) for v in self.determinism_violations
             if int(v.get("frame_idx", -1)) <= self.frame_idx
@@ -238,12 +221,6 @@ class SceneSnapshot:
             "n_observed": self.n_observed,
             "n_entities": len(self.catalog.entities),
             "n_tracks": len(self.registry.tracks),
-            "controllable_id": ctrl.id if ctrl else None,
-            "controllable_pos": (
-                _render_pos(self.controllable_pos())
-                if self.controllable_pos() is not None
-                else None
-            ),
             "entities": entities,
             "events": self._registry_events(),
             "globals": self._globals(),

@@ -1,4 +1,4 @@
-"""Rule-first exploration policy: directed by rules, no controllable_id required."""
+"""Rule-first exploration policy: directed by rules, state-fingerprint novelty."""
 
 from __future__ import annotations
 
@@ -23,9 +23,8 @@ from .search import PlanSpec, plan_bfs
 
 
 class RuleFirstPolicy:
-    """Rule-driven planner without controllable_id.
+    """Rule-driven planner using state-fingerprint novelty.
 
-    Uses state-fingerprint novelty instead of position tracking.
     Phase gate: transitions from random to directed when EffectContext
     has movement rules.
     """
@@ -292,16 +291,10 @@ class RuleFirstPolicy:
             self._engine_ctx = inject_validated_proposals(self._engine_ctx, proposals)
             self._ctx = self._engine_ctx
 
-    @property
-    def controllable_id(self) -> int | None:
-        """Rule-first policy never tracks a controllable entity."""
-        return None
-
     def status(self) -> PlannerStatus:
         n_obs = self._last_scene.n_observed if self._last_scene else 0
         return PlannerStatus(
             phase=self._last_phase,
-            controllable_id=None,
             target=self.target,
             plan_len=len(self.plan),
             n_observed=n_obs,

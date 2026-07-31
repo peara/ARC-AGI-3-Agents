@@ -41,12 +41,12 @@ def _bundle(
     if entities is None:
         entities = (
             [
-                {"id": 0, "role": "controllable", "pos": [32, 16]},
+                {"id": 0, "role": "player", "pos": [32, 16]},
                 {"id": 17, "role": "counter", "pos": [12, 36]},
             ]
             if entities_format == "list"
             else {
-                "0": {"role": "controllable", "pos": [32, 16]},
+                "0": {"role": "player", "pos": [32, 16]},
                 "17": {"role": "counter", "pos": [12, 36]},
             }
         )

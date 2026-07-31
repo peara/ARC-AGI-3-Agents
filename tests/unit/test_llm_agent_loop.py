@@ -49,7 +49,6 @@ def _make_agent() -> LlmCuriosity:
         mock_policy.context = None
         mock_policy.status.return_value = MagicMock(
             phase="init",
-            controllable_id=None,
             target=None,
             plan_len=0,
             n_observed=0,
@@ -73,11 +72,10 @@ def _make_agent() -> LlmCuriosity:
     return agent
 
 
-def _make_scene_with_controllable(ctrl_id: int = 0) -> MagicMock:
-    """Return a MagicMock scene that reports a controllable entity."""
+def _make_scene() -> MagicMock:
+    """Return a MagicMock scene for testing."""
     scene = MagicMock()
-    scene.controllable_id.return_value = ctrl_id
-    scene.controllable_pos.return_value = (5, 5)
+    scene.frame_idx = 100
     return scene
 
 
@@ -95,7 +93,7 @@ class TestLlmCuriosityAgentLoop:
     # -----------------------------------------------------------------------
 
     def test_cold_start_no_llm_call(self) -> None:
-        """When controllable_id is None and policy.context is None, agent stays in 'random' and never calls LLM."""
+        """When policy.context is None, agent stays in 'random' and never calls LLM."""
         agent = _make_agent()
         # Force llm_call to raise if ever called
         agent.llm_call = MagicMock(
@@ -105,11 +103,10 @@ class TestLlmCuriosityAgentLoop:
         frame = _FakeFrameData(
             state=GameState.NOT_FINISHED, available_actions=[1, 2, 3, 4]
         )
-        # With no scene controllable and no context, phase stays "random"
+        # With no scene context and no context, phase stays "random"
         agent._phase = "random"
-        # Mock scene with no controllable
+        # Mock scene with no context
         mock_scene = MagicMock()
-        mock_scene.controllable_id.return_value = None
         agent._scene = mock_scene
 
         action = agent.choose_action([frame], frame)
@@ -126,14 +123,19 @@ class TestLlmCuriosityAgentLoop:
     # -----------------------------------------------------------------------
 
     def test_phase_transition_to_llm_directed(self) -> None:
-        """When controllable_id and context become available, phase transitions to 'llm_directed' and LLM is called."""
+        """When context becomes available, phase transitions from random to llm_directed and LLM is called."""
         agent = _make_agent()
+        agent._phase = "random"
+        agent._coldstart_done = True
+        agent._probe_plan = None
+        agent._llm_cooldown = 0
+
         frame = _FakeFrameData(
             state=GameState.NOT_FINISHED, available_actions=[1, 2, 3, 4]
         )
 
-        # Set up scene with controllable entity
-        scene = _make_scene_with_controllable()
+        # Set up scene
+        scene = _make_scene()
         agent._scene = scene
 
         # Set policy context so phase gate passes
@@ -169,7 +171,7 @@ class TestLlmCuriosityAgentLoop:
         agent._probe_plan = None
         agent._llm_cooldown = 0
 
-        scene = _make_scene_with_controllable()
+        scene = _make_scene()
         agent._scene = scene
         agent.policy.context = MagicMock()
         agent.policy.status.return_value.diverged = False
@@ -202,7 +204,7 @@ class TestLlmCuriosityAgentLoop:
         agent._probe_plan = None
         agent._llm_cooldown = 0
 
-        scene = _make_scene_with_controllable()
+        scene = _make_scene()
         agent._scene = scene
         agent.policy.context = MagicMock()
         agent.policy.status.return_value.diverged = False
@@ -251,7 +253,7 @@ class TestLlmCuriosityAgentLoop:
         )
         agent._llm_cooldown = 0
 
-        scene = _make_scene_with_controllable()
+        scene = _make_scene()
         agent._scene = scene
         agent.policy.context = MagicMock()
         agent.policy.status.return_value.diverged = False
@@ -291,7 +293,7 @@ class TestLlmCuriosityAgentLoop:
         )
         agent._llm_cooldown = 0
 
-        scene = _make_scene_with_controllable()
+        scene = _make_scene()
         agent._scene = scene
         agent.policy.context = MagicMock()
         agent.policy.status.return_value.diverged = True  # ← divergence!
@@ -350,7 +352,7 @@ class TestLlmCuriosityAgentLoop:
         agent._probe_plan = None
         agent._llm_cooldown = 0
 
-        scene = _make_scene_with_controllable()
+        scene = _make_scene()
         agent._scene = scene
         agent.policy.context = MagicMock()
         agent.policy.status.return_value.diverged = False
@@ -387,7 +389,7 @@ class TestLlmCuriosityAgentLoop:
         agent._probe_plan = None
         agent._llm_cooldown = 0
 
-        scene = _make_scene_with_controllable()
+        scene = _make_scene()
         agent._scene = scene
         agent.policy.context = MagicMock()
         agent.policy.status.return_value.diverged = False
@@ -436,7 +438,7 @@ class TestLlmCuriosityAgentLoop:
         agent._probe_plan = None
         agent._llm_cooldown = 0
 
-        scene = _make_scene_with_controllable()
+        scene = _make_scene()
         agent._scene = scene
         agent.policy.context = MagicMock()
         agent.policy.status.return_value.diverged = False
@@ -477,7 +479,7 @@ class TestLlmCuriosityAgentLoop:
         agent._probe_plan = None
         agent._llm_cooldown = 0
 
-        scene = _make_scene_with_controllable()
+        scene = _make_scene()
         agent._scene = scene
         agent.policy.context = MagicMock()
         agent.policy.status.return_value.diverged = False
@@ -521,7 +523,7 @@ class TestLlmCuriosityAgentLoop:
         )
         agent._llm_cooldown = 0
 
-        scene = _make_scene_with_controllable()
+        scene = _make_scene()
         agent._scene = scene
         agent.policy.context = MagicMock()
         agent.policy.status.return_value.diverged = True
@@ -549,9 +551,8 @@ class TestLlmCuriosityAgentLoop:
     # 13. Nearest unknown selection in fallback
     # -----------------------------------------------------------------------
 
-    def test_fallback_picks_nearest_unknown(self) -> None:
-        """When BFS fails with unknowns, the fallback picks the unknown closest
-        to the current controllable position (Manhattan distance)."""
+    def test_fallback_picks_first_fresh_unknown(self) -> None:
+        """When BFS fails with unknowns, the fallback picks the first fresh unknown."""
         from effects.state import SceneState
         from planning.query import UnknownAction
 
@@ -560,9 +561,7 @@ class TestLlmCuriosityAgentLoop:
         agent._probe_plan = None
         agent._llm_cooldown = 0
 
-        scene = MagicMock()
-        scene.controllable_id.return_value = 0
-        scene.controllable_pos.return_value = (47, 31)
+        scene = _make_scene()
         agent._scene = scene
         agent.policy.context = MagicMock()
         agent.policy.status.return_value.diverged = False
@@ -576,15 +575,15 @@ class TestLlmCuriosityAgentLoop:
             reason="probe entity 17",
         )
 
-        far_unknown = UnknownAction(
+        first_unknown = UnknownAction(
             action=3,
             state=SceneState(relevant=((0, ("pos", (17, 31))),)),
         )
-        near_unknown = UnknownAction(
+        second_unknown = UnknownAction(
             action=3,
             state=SceneState(relevant=((0, ("pos", (47, 31))),)),
         )
-        fake_unknowns = [far_unknown, near_unknown]
+        fake_unknowns = [first_unknown, second_unknown]
 
         with (
             patch(
@@ -604,7 +603,7 @@ class TestLlmCuriosityAgentLoop:
         pos_pred = target_dict["all"][0]
         assert pos_pred["dim"] == "pos"
         assert pos_pred["of"] == 0
-        assert list(pos_pred["eq"]) == [47, 31]
+        assert list(pos_pred["eq"]) == [17, 31]
 
     # -----------------------------------------------------------------------
     # 14. Unknown action triggers rule proposer via observed transition
@@ -618,7 +617,7 @@ class TestLlmCuriosityAgentLoop:
         agent = _make_agent()
         agent._phase = "llm_directed"
 
-        scene = _make_scene_with_controllable()
+        scene = _make_scene()
         agent._scene = scene
         agent.policy.context = MagicMock()
         agent.policy.status.return_value.diverged = False

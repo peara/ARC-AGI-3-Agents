@@ -24,8 +24,7 @@ from .reconciler import Reconciler, ReconcilerConfig
 def __getattr__(name: str) -> object:
     if name in {
         "HeuristicRoleAssignerV1", "RoleAssigner", "RolePatch",
-        "apply_patches", "assign_roles", "detect_agent",
-        "detect_controllable", "detect_counter",
+        "apply_patches", "assign_roles", "detect_counter",
     }:
         from . import roles
         return getattr(roles, name)
@@ -44,7 +43,5 @@ __all__ = [
     "RolePatch",
     "apply_patches",
     "assign_roles",
-    "detect_agent",
-    "detect_controllable",
     "detect_counter",
 ]

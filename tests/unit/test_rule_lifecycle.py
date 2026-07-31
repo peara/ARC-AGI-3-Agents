@@ -158,7 +158,6 @@ class TestLlmProposalRoundTrip:
             before,
             3,
             residual,
-            controllable_id=0,
             llm_proposals=(rule,),
         )
         assert any(r.kind == "terminal" for r in ctx.proposed_rules)
@@ -290,8 +289,8 @@ class TestLlmProposalRejectedByEntityValidation:
         result = call_rule_proposer(bundle, residual, mock_llm)
         assert len(result) == 0  # entity 99 not in scene → rejected
 
-    def test_entity_zero_placeholder_allowed(self) -> None:
-        """Entity ID 0 (placeholder convention) should pass validation."""
+    def test_entity_zero_in_scene_passes_validation(self) -> None:
+        """Entity ID 0 passes validation when present in scene_entities."""
         proposal: dict = {
             "kind": "terminal",
             "guard": {
@@ -303,8 +302,8 @@ class TestLlmProposalRejectedByEntityValidation:
             "effect": {"dim": "terminal", "of": 0, "terminal": "win"},
             "support": 2,
         }
-        # Entity 5 exists, entity 0 is placeholder
-        scene_entities: dict[int, dict] = {5: {"dim": "pos"}}
+        # Entity 5 and entity 0 both exist in scene
+        scene_entities: dict[int, dict] = {0: {"dim": "terminal"}, 5: {"dim": "pos"}}
         result = validate_proposal(proposal, scene_entities)
         assert result is not None
 

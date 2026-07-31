@@ -49,7 +49,7 @@ from .registry import (
 def __getattr__(name: str) -> object:
     if name in {
         "HeuristicRoleAssignerV1", "RolePatch", "assign_roles",
-        "detect_controllable", "detect_counter",
+        "detect_counter",
     }:
         from . import roles
         return getattr(roles, name)
@@ -92,6 +92,5 @@ __all__ = [
     "HeuristicRoleAssignerV1",
     "RolePatch",
     "assign_roles",
-    "detect_controllable",
     "detect_counter",
 ]

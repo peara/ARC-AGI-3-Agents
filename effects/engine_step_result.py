@@ -48,7 +48,6 @@ def run_engine_step(
     action: int,
     observed: SceneState,
     spec: _ProjectionSpec,
-    controllable_id: int | None = None,
     history: TransitionHistory | None = None,
 ) -> EngineStepResult:
     """Execute a single rule engine step: predict -> residual -> engine_step.
@@ -84,7 +83,6 @@ def run_engine_step(
         entity_ids=tuple(spec.entities),
         dims=tuple(d for d in spec.dims if d not in spec.internal_dims),
         include_terminal=spec.include_terminal,
-        controllable_id=controllable_id,
         history=history,
     )
 

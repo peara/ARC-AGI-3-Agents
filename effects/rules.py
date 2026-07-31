@@ -231,14 +231,13 @@ class CounterRule:  # deprecated, replaced by Rule
     action: int
     delta_size: int
     support: int
-    controllable_id: int | None = None
     guard_pos: Pos | None = None
 
     def guard(self, state: SceneState, action: int) -> bool:
         if action != self.action:
             return False
-        if self.guard_pos is not None and self.controllable_id is not None:
-            pos = state.pos(self.controllable_id)
+        if self.guard_pos is not None:
+            pos = state.pos(self.entity_id)
             if pos != self.guard_pos:
                 return False
         return True

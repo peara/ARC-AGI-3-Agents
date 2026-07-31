@@ -1,4 +1,4 @@
-"""Tests for RuleFirstPolicy: phase transition, fingerprint visited, no controllable_id, engine step."""
+"""Tests for RuleFirstPolicy: phase transition, fingerprint visited, engine step."""
 
 from __future__ import annotations
 
@@ -43,7 +43,6 @@ def _obs(frame_idx: int, centroid: tuple[float, float], size: int = 1) -> Observ
 def _make_registry_and_catalog(
     positions: dict[int, list[tuple[int, int]]],
     roles: dict[int, str] | None = None,
-    controllable_ids: set[int] | None = None,
 ) -> tuple[ObjectRegistry, EntityCatalog]:
     """Build registry/catalog from entity_id -> list of (row, col) per frame."""
     reg = ObjectRegistry()
@@ -57,7 +56,6 @@ def _make_registry_and_catalog(
         reg.tracks[track_id] = track
 
         affordances: dict[str, bool | None] = {
-            "controllable": True if controllable_ids and eid in controllable_ids else None,
             "solid": None,
             "interactable": None,
         }
@@ -175,27 +173,23 @@ class TestRuleFirstPolicy:
                 and isinstance(entry[1], int)
             ), f"Visited entry looks like a Pos tuple, not a fingerprint: {entry}"
 
-    def test_no_controllable_dependency(self):
-        """Policy works when controllable_id() returns None."""
+    def test_policy_works_without_context(self):
+        """Policy works when no EffectContext has been initialized yet."""
         policy = RuleFirstPolicy(
             action_space=[1, 2, 3, 4],
             config=ExplorationConfig(min_random_steps=0, seed=42),
         )
 
-        # Two entities with multi-frame positions, neither controllable
         reg, catalog = _make_registry_and_catalog(
             positions={0: [(5, 5), (5, 6)], 1: [(3, 3), (2, 3)]},
         )
         action_ids = (0, 1, 2)
         scene = _scene(reg, catalog, n_observed=10, action_ids=action_ids)
-        assert scene.controllable_id() is None
 
         action = policy.decide(scene)
         assert action in [1, 2, 3, 4]
 
         policy.on_observed(scene)
-
-        assert policy.controllable_id is None
 
         # Context initialized with available_actions from scene
         assert policy.context is not None
@@ -239,7 +233,6 @@ class TestRuleFirstPolicy:
                 0: [(5, 5), (5, 6)],  # entity 0 moves right on action 1
                 1: [(3, 3), (4, 3)],  # entity 1 moves down on action 1
             },
-            controllable_ids={0},
         )
         action_ids = (0, 1)
 
@@ -295,7 +288,6 @@ class TestRuleFirstPolicy:
         # Two entities with 2 frames so we can learn movement rules
         reg, catalog = _make_registry_and_catalog(
             positions={0: [(5, 5), (5, 6)]},
-            controllable_ids={0},
         )
         action_ids = (0, 1)
         scene0 = _scene(reg, catalog, frame_idx=0, n_observed=1, action_ids=action_ids)
@@ -315,7 +307,6 @@ class TestRuleFirstPolicy:
         # Now observe scene1 but with DIFFERENT positions (mismatch from prediction)
         reg_mismatch, catalog_mismatch = _make_registry_and_catalog(
             positions={0: [(10, 10), (10, 10)]},  # completely different from (5,6)
-            controllable_ids={0},
         )
         scene_mismatch = _scene(reg_mismatch, catalog_mismatch, frame_idx=1, n_observed=2, action_ids=action_ids)
 
@@ -333,7 +324,6 @@ class TestRuleFirstPolicy:
 
         reg, catalog = _make_registry_and_catalog(
             positions={0: [(5, 5), (5, 6)]},
-            controllable_ids={0},
         )
         action_ids = (0, 1)
         scene0 = _scene(reg, catalog, frame_idx=0, n_observed=1, action_ids=action_ids)
@@ -470,8 +460,8 @@ def _load_raw_frames(path: str):
 class TestRuleFirstOnRecording:
     """Integration test: RuleFirstPolicy on a recording.
 
-    V2 policy should reach directed phase even when controllable_id
-    detection fails (which happens in wa30 due to track fragmentation).
+    V2 policy should reach directed phase by learning movement rules
+    from entity motion patterns.
     """
 
     def test_rule_first_reaches_directed_phase(self):
@@ -502,13 +492,11 @@ class TestRuleFirstOnRecording:
             action = policy.decide(scene)
             last_action = action
 
-        # V2 should learn movement rules even without controllable_id
+        # V2 should learn movement rules
         assert policy.context is not None, "V2 should build an EffectContext"
         assert len(policy.context.movement_rules) > 0, (
             "V2 should learn movement rules for multiple entities"
         )
-        # V2 never has controllable_id
-        assert policy.controllable_id is None
 
     def test_rule_first_no_crash_on_recording(self):
         cases = [c for c in load_manifest() if c.recording.path.is_file()]

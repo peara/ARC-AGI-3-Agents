@@ -1,7 +1,7 @@
-import pytest
-from perception.session import SceneSnapshot
-from perception.entities import EntityCatalog, Entity, LifecycleState
+from perception.entities import Entity, EntityCatalog, LifecycleState
 from perception.registry import ObjectRegistry
+from perception.session import SceneSnapshot
+
 
 def test_pos_rendered_2_decimal():
     registry = ObjectRegistry()
@@ -13,7 +13,7 @@ def test_pos_rendered_2_decimal():
         composition="compound",
         role="player",
         lifecycle=LifecycleState.ACTIVE,
-        affordances={"controllable": True},
+        affordances={},
         centroid=(10.333, 20.667),
         bbox=(0, 0, 1, 1),
         meta={}
@@ -37,27 +37,21 @@ def test_pos_rendered_2_decimal():
     summary = snapshot.summary()
     entity = summary["entities"][0]
     assert entity["pos"] == [10.33, 20.67]
-    assert summary["controllable_pos"] == [10.33, 20.67]
 
 def test_motion_by_action_absent():
-    # Minimal setup to satisfy SceneSnapshot
-    # Minimal setup to satisfy SceneSnapshot
     registry = ObjectRegistry()
     catalog = EntityCatalog(entities={})
     
-    # Add a controllable compound entity
-    # We just need an entity in the catalog to avoid empty state if that's a concern,
-    # but the summary() should not have motion_by_action regardless of content.
     ent = Entity(
         id=0,
         members={1},
         composition="compound",
         role="player",
         lifecycle=LifecycleState.ACTIVE,
-        affordances={"controllable": True},
+        affordances={},
         centroid=(0, 0),
         bbox=(0, 0, 1, 1),
-        meta={"motion_by_action": {1: (1, 0)}}
+        meta={}
     )
     catalog.entities[0] = ent
     

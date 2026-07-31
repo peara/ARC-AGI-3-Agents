@@ -58,6 +58,33 @@ class QueryInterface:
         self._mechanics_hypothesis = mechanics_hypothesis
         self._internal_dims = internal_dims
 
+    @staticmethod
+    def _sanitize_scene(scene: dict[str, object]) -> dict[str, object]:
+        """Strip controllable-detection artifacts from a ``SceneSnapshot.summary()`` dict."""
+        entities = scene.get("entities")
+        if not isinstance(entities, list):
+            return scene
+        sanitized_entities: list[dict[str, object]] = []
+        for entity in entities:
+            if not isinstance(entity, dict):
+                sanitized_entities.append(entity)
+                continue
+            clean = dict(entity)
+            affordances = clean.get("affordances")
+            if isinstance(affordances, dict):
+                clean["affordances"] = {
+                    k: v for k, v in affordances.items() if k != "controllable"
+                }
+            meta = clean.get("meta")
+            if isinstance(meta, dict):
+                clean["meta"] = {
+                    k: v
+                    for k, v in meta.items()
+                    if k not in ("motion_by_action", "motion_agreement", "detector")
+                }
+            sanitized_entities.append(clean)
+        return {**scene, "entities": sanitized_entities}
+
     def bundle(
         self,
         *,
@@ -74,7 +101,7 @@ class QueryInterface:
         result: dict[str, object] = {}
         for field in fields:
             if field == "scene":
-                result["scene"] = self._scene.summary()
+                result["scene"] = self._sanitize_scene(self._scene.summary())
             elif field == "action_legend":
                 result["action_legend"] = self._build_action_legend()
             elif field == "engine_rules":

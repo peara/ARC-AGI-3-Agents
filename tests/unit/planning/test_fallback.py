@@ -2,20 +2,12 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
 import pytest
 
 from effects.state import SceneState
 from planning.fallback import build_fallback_goal, pick_fallback_unknown, tried_key
 from planning.probe import ProbeGoal
 from planning.query import UnknownAction
-
-
-def _make_scene(pos: tuple[int, int] | None = (5, 5)) -> MagicMock:
-    scene = MagicMock()
-    scene.controllable_pos.return_value = pos
-    return scene
 
 
 def _make_unknown(action: int, pos: tuple[int, int] | None) -> UnknownAction:
@@ -29,50 +21,39 @@ def _make_unknown(action: int, pos: tuple[int, int] | None) -> UnknownAction:
 @pytest.mark.unit
 class TestPickFallbackUnknown:
     def test_empty_unknowns_returns_none(self) -> None:
-        assert pick_fallback_unknown([], set(), _make_scene()) is None
+        assert pick_fallback_unknown([], set()) is None
 
     def test_all_tried_returns_none(self) -> None:
         ua = _make_unknown(3, (10, 10))
         tried = {tried_key(ua)}
-        assert pick_fallback_unknown([ua], tried, _make_scene()) is None
+        assert pick_fallback_unknown([ua], tried) is None
 
     def test_single_fresh_unknown_returned(self) -> None:
         ua = _make_unknown(3, (10, 10))
-        result = pick_fallback_unknown([ua], set(), _make_scene((0, 0)))
+        result = pick_fallback_unknown([ua], set())
         assert result is ua
 
-    def test_picks_nearest_by_manhattan(self) -> None:
-        near = _make_unknown(1, (6, 5))
-        far = _make_unknown(2, (20, 20))
-        result = pick_fallback_unknown([far, near], set(), _make_scene((5, 5)))
-        assert result is near
-
-    def test_filters_tried_picks_next_nearest(self) -> None:
+    def test_filters_tried_picks_next_fresh(self) -> None:
         near = _make_unknown(1, (6, 5))
         mid = _make_unknown(2, (8, 8))
         far = _make_unknown(3, (20, 20))
         tried = {tried_key(near)}
-        result = pick_fallback_unknown([far, near, mid], tried, _make_scene((5, 5)))
-        assert result is mid
+        # pick_fallback_unknown returns the first fresh unknown in list order
+        result = pick_fallback_unknown([far, near, mid], tried)
+        assert result is far  # far is first untried in list order
 
     def test_same_action_different_state_both_fresh(self) -> None:
         ua_a = _make_unknown(5, (5, 5))
         ua_b = _make_unknown(5, (10, 10))
         tried = {tried_key(ua_a)}
-        result = pick_fallback_unknown([ua_a, ua_b], tried, _make_scene((9, 9)))
+        result = pick_fallback_unknown([ua_a, ua_b], tried)
         assert result is ua_b
 
-    def test_no_pos_defaults_distance_zero(self) -> None:
+    def test_first_fresh_unknown_when_no_pos(self) -> None:
         ua_no_pos = _make_unknown(1, None)
         ua_far = _make_unknown(2, (50, 50))
-        result = pick_fallback_unknown([ua_far, ua_no_pos], set(), _make_scene((0, 0)))
-        assert result is ua_no_pos
-
-    def test_scene_controllable_none_defaults_zero(self) -> None:
-        ua_a = _make_unknown(1, (50, 50))
-        ua_b = _make_unknown(2, (1, 1))
-        result = pick_fallback_unknown([ua_a, ua_b], set(), _make_scene(None))
-        assert result in (ua_a, ua_b)
+        result = pick_fallback_unknown([ua_far, ua_no_pos], set())
+        assert result is ua_far  # first in list is returned
 
 
 @pytest.mark.unit

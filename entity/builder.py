@@ -8,16 +8,14 @@ engine (grouping).  Owns four concerns:
 2. **Entity composition** (``build_entities``): group logical tracks into
    entities by common-fate co-movement.
 3. **Compound grouping** (``CombinedEngine``): when two or more entities
-   co-move, confirm them as a compound entity.  This reduces the entity
-   count for the LLM bundle and stabilises identity.  Individual member
-   tracks are kept for role detection — ``detect_controllable`` maps a
-   controllable member track to the containing compound entity.
+    co-move, confirm them as a compound entity.  This reduces the entity
+    count for the LLM bundle and stabilises identity.
 
-   A ``CombinedEngine`` must be injected — LLM adjudication filters bad
-   compounds *before* role assignment.
+    A ``CombinedEngine`` must be injected — LLM adjudication filters bad
+    compounds *before* role assignment.
 
-4. **Role assignment** (``assign_roles``): detect controllable and counter
-   entities.  Runs **once**, on the final catalog (after compound grouping).
+4. **Role assignment** (``assign_roles``): detect counter entities.
+    Runs **once**, on the final catalog (after compound grouping).
 """
 
 from __future__ import annotations
@@ -79,8 +77,7 @@ class EntityBuilder:
 
     If ``color_config`` is provided, singleton entities whose colors are
     all in the ignore set (empty ``track_dims``) are stripped from the
-    catalog after role assignment. Compound entities and the controllable
-    entity are never stripped.
+    catalog after role assignment. Compound entities are never stripped.
     """
 
     def __init__(
@@ -107,7 +104,6 @@ class EntityBuilder:
 
         self._track_to_original_entity: dict[int, int] = {}
         self._compound_signature_map: dict[frozenset[int], int] = {}
-        self._prev_controllable_id: int | None = None
         # Orientation tracking: cell-based rotation detection per entity.
         self._prev_cells_by_entity: dict[int, frozenset[tuple[int, int]]] = {}
         self._orientation_by_entity: dict[int, int] = {}
@@ -219,38 +215,6 @@ class EntityBuilder:
                 self._catalog, cast(ObjectRegistry, self._logical_registry), frame_idx
             )
 
-        controllable = self._catalog.controllable()
-        ctrl_id = controllable.id if controllable else None
-        prev_ctrl_id = self._prev_controllable_id
-        if ctrl_id is not None and prev_ctrl_id is not None and ctrl_id != prev_ctrl_id:
-            log.warning(
-                "frame=%d CONTROLLABLE ID CHANGED: %d -> %d",
-                frame_idx,
-                prev_ctrl_id,
-                ctrl_id,
-            )
-        self._prev_controllable_id = ctrl_id
-        if controllable and controllable.composition == "compound":
-            orig_entity_ids = sorted(
-                eid
-                for tid in controllable.members
-                for eid in [self._track_to_original_entity.get(tid)]
-                if eid is not None
-            )
-            member_display: str | None = (
-                f"tracks={sorted(controllable.members)} entities={orig_entity_ids}"
-            )
-        else:
-            member_display = str(sorted(controllable.members)) if controllable else None
-        log.info(
-            "frame=%d controllable: id=%s %s role=%s lifecycle=%s",
-            frame_idx,
-            ctrl_id,
-            member_display,
-            controllable.role if controllable else None,
-            controllable.lifecycle.value if controllable else None,
-        )
-
         # 7. Persist cross-frame identity state from final catalog.
         #    For compound member tracks, restore their original singleton
         #    entity IDs (not the compound ID) so next frame's build_entities
@@ -304,7 +268,6 @@ class EntityBuilder:
         An entity is stripped if:
         - It is a singleton (not a compound — compounds may mix ignored and
           non-ignored colors).
-        - It is not the controllable entity.
         - All of its member tracks' colors have empty track_dims in the
           color config.
 
@@ -312,8 +275,6 @@ class EntityBuilder:
         won't appear in residuals, rules, or BFS state.
         """
         assert self._color_config is not None
-        controllable = catalog.controllable()
-        ctrl_id = controllable.id if controllable else None
 
         ignore_colors = {
             color for color, cfg in self._color_config.items()
@@ -326,9 +287,6 @@ class EntityBuilder:
         kept: dict[int, Entity] = {}
         stripped: list[int] = []
         for eid, ent in catalog.entities.items():
-            if eid == ctrl_id:
-                kept[eid] = ent
-                continue
             if ent.composition != "singleton":
                 kept[eid] = ent
                 continue

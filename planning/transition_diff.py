@@ -10,10 +10,10 @@ ourselves.
 
 - ``changed``: list of {entity, dim, before, after, delta, blocked?}
 - ``unchanged_entities``: entity ids with no state change
-- ``expected_motion``: the controllable's known delta for this action
-  (from ``meta.motion_by_action``), if available
-- ``blocked``: flagged when the controllable was expected to move but
-  its position did not change
+- ``expected_motions``: per-entity expected deltas derived from confirmed
+  movement rules whose guard matches the observed action
+- ``blocked``: flagged per-entity when a movement rule predicts a delta
+  but the entity's position did not change
 
 The diff is appended to the rule-proposer prompt *alongside* the raw
 before/after dump — it supplements, never replaces, so the LLM retains
@@ -23,6 +23,8 @@ full information.
 from __future__ import annotations
 
 from typing import Any
+
+from effects.rules import Rule
 
 
 def _as_pair(v: Any) -> tuple[float, ...] | None:
@@ -75,9 +77,9 @@ def _parse_tuples(rows: Any) -> dict[tuple[int, str], Any]:
 
 def compute_transition_diff(
     observed: dict[str, Any],
-    bundle: dict[str, Any],
     *,
     internal_dims: tuple[str, ...] = (),
+    movement_rules: tuple[Rule, ...] = (),
 ) -> dict[str, Any]:
     """Compute a structured diff over the bundle's ``observed_transition``.
 
@@ -105,50 +107,60 @@ def compute_transition_diff(
             entry["delta"] = delta
         changed.append(entry)
 
-    scene = bundle.get("scene", {}) if isinstance(bundle, dict) else {}
-    controllable_id = scene.get("controllable_id")
-    expected_motion: list[float] | None = None
-    cid: int | None = None
-    if isinstance(controllable_id, int):
-        cid = controllable_id
-        for e in scene.get("entities", []):
-            if isinstance(e, dict) and e.get("id") == cid:
-                meta = e.get("meta", {}) or {}
-                mba = meta.get("motion_by_action", {}) or {}
-                key = str(action) if action is not None else None
-                if key is not None and key in mba:
-                    mv = mba[key]
-                    if isinstance(mv, list) and len(mv) == 2:
-                        expected_motion = [float(mv[0]), float(mv[1])]
-                break
+    # ── Derive expected motions from confirmed movement rules ──────────
+    expected_motions: list[dict[str, Any]] = []
+    if action is not None:
+        for rule in movement_rules:
+            action_val = rule.guard_spec.get("action")
+            if action_val is None:
+                all_clauses = rule.guard_spec.get("all")
+                if isinstance(all_clauses, list):
+                    action_match = any(
+                        isinstance(c, dict) and c.get("action") == action
+                        for c in all_clauses
+                    )
+                else:
+                    action_match = False
+            else:
+                action_match = action_val == action
 
-    if cid is not None and expected_motion is not None and expected_motion != [0.0, 0.0]:
-        for entry in changed:
-            if (
-                entry["entity"] == cid
-                and entry["dim"] == "pos"
-                and entry.get("delta") == [0.0, 0.0]
-            ):
-                entry["blocked"] = True
-        controllable_pos_changed = any(
-            e["entity"] == cid and e["dim"] == "pos" for e in changed
+            if not action_match:
+                continue
+
+            for eff in rule.effects:
+                if eff.dim == "pos" and eff.op == "delta":
+                    delta_val = eff.value
+                    if isinstance(delta_val, tuple) and len(delta_val) == 2:
+                        expected_motions.append({
+                            "entity": eff.of,
+                            "delta": [float(delta_val[0]), float(delta_val[1])],
+                        })
+
+    # ── Mark blocked entities ──────────────────────────────────────────
+    for em in expected_motions:
+        eid = em["entity"]
+        pos_entry = next(
+            (e for e in changed if e["entity"] == eid and e["dim"] == "pos"),
+            None,
         )
-        if not controllable_pos_changed:
-            bv = bmap.get((cid, "pos"))
+        if pos_entry is not None:
+            if pos_entry.get("delta") == [0.0, 0.0]:
+                pos_entry["blocked"] = True
+        else:
+            bv = bmap.get((eid, "pos"))
             changed.append({
-                "entity": cid, "dim": "pos",
+                "entity": eid, "dim": "pos",
                 "before": bv, "after": bv, "delta": [0.0, 0.0],
                 "blocked": True, "note": "expected motion but no position change",
             })
-            changed_eids.add(cid)
+            changed_eids.add(eid)
 
     all_eids = {eid for eid, _ in all_keys}
     unchanged_entities = sorted(all_eids - changed_eids)
 
     return {
         "action": action,
-        "controllable_id": controllable_id,
-        "expected_motion": expected_motion,
+        "expected_motions": expected_motions,
         "changed": changed,
         "unchanged_entities": unchanged_entities,
     }

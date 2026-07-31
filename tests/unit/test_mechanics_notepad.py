@@ -40,8 +40,6 @@ ZERO_GRID = [[0] * 64 for _ in range(64)]
 
 MOCK_SCENE_SUMMARY = {
     "levels_completed": 0,
-    "controllable_id": 1,
-    "controllable_pos": (10, 10),
     "n_entities": 5,
     "action_taken": "ACTION1",
 }
@@ -227,7 +225,6 @@ def test_confidence_monotonicity():
     "Levels_completed counter incrementing."
   ],
   "entity_roles": {
-    "controllable": "Green rectangular block.",
     "collectible": "Small blue squares.",
     "target_zone": "Larger blue rectangular outline."
   },
