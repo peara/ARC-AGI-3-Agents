@@ -96,7 +96,6 @@ class EntityBuilder:
         self._color_config: dict[int, ColorConfig] | None = color_config
         # persistent cross-frame identity state
         self._next_entity_id: int = 0
-        self._next_entity_id: int = 0
         self._track_to_entity: dict[int, int] = {}
         self._prev_catalog_entities: dict[int, Entity] = {}
         self._dormant_ttl: int = dormant_ttl
