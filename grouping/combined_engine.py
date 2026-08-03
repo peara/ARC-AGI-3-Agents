@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
+if TYPE_CHECKING:
+    from agents.llm_client import ChatResponse
 from perception.entities import EntityCatalog
 from perception.registry import ObjectRegistry
 
@@ -36,7 +38,7 @@ from .stale_detection import SplitProposal, detect_stale_groups
 
 log = logging.getLogger(__name__)
 
-_LLMCall = Callable[[list[dict[str, str]]], str]
+_LLMCall = Callable[[list[dict[str, str]]], Any]  # Returns ChatResponse | str at runtime
 
 
 class CombinedEngine:
@@ -49,7 +51,7 @@ class CombinedEngine:
 
     def __init__(
         self,
-        llm_call: _LLmCall,
+        llm_call: _LLMCall,
         vision: bool = True,
         config: ReadinessConfig | None = None,
         image_scale: int = 4,
@@ -57,7 +59,7 @@ class CombinedEngine:
     ) -> None:
         if llm_call is None:
             raise ValueError("llm_call is required (was None)")
-        self._llm_call: _LLmCall = llm_call
+        self._llm_call: _LLMCall = llm_call
         self._vision: bool = vision
         self._config: ReadinessConfig = config or ReadinessConfig()
         self._heuristic_engine: HeuristicGroupingEngine = HeuristicGroupingEngine(

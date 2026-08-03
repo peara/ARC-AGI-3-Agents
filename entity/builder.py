@@ -134,7 +134,7 @@ class EntityBuilder:
         prev_next_id = self._next_entity_id
 
         # 1. Re-identify: link dead→born tracks
-        merge_map, logical_map = self._reconciler.reconcile(registry, action_ids)
+        merge_map, logical_map, _absorb_events = self._reconciler.reconcile(registry, action_ids)
         if merge_map:
             log.info("frame=%d reconciler merge_map=%s", frame_idx, dict(merge_map))
 

@@ -213,7 +213,9 @@ class MechanicsNotepad:
             log.warning("mechanics_notepad: LLM call failed: %s", exc)
             return None
 
-        parsed = self._parse_json_response(raw_response)
+        from agents.llm_client import ChatResponse as _CR
+        raw_str = raw_response.content if isinstance(raw_response, _CR) else raw_response
+        parsed = self._parse_json_response(raw_str)
         if parsed is None:
             log.warning("mechanics_notepad: could not parse LLM response as JSON")
             return None

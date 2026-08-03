@@ -119,7 +119,7 @@ class LlmCuriosity(Agent):
             _combined_engine = CombinedEngine(
                 llm_call=wrap_llm_call(
                     self.llm_call, self._llm_logger, kind="grouping",
-                    thinking=False, max_tokens=512,
+                    thinking=False, max_tokens=2048,
                 ),
                 vision=self._vision_enabled,
                 image_scale=self._grouping_image_scale,

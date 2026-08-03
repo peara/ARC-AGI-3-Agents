@@ -6,7 +6,7 @@ Usage::
     logger = LlmCallLogger(guid=recorder.guid, path=recorder.llm_log_path(),
                            frame_indexer=lambda: agent._frame_index)
     wrapped = wrap_llm_call(agent.llm_call, logger, kind="planner")
-    # wrapped(messages) -> str  (same signature as llm_call)
+    # wrapped(messages) -> ChatResponse | str  (same signature as llm_call)
     # Each call appends one JSONL line to logger.path.
 
 Truncation: any single message ``content`` longer than ``MAX_CONTENT_CHARS``
@@ -18,13 +18,25 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Protocol
 
+from agents.llm_client import ChatResponse
+
 log = logging.getLogger(__name__)
 
 MAX_CONTENT_CHARS = 40_000
+
+
+class LLMTruncationError(Exception):
+    """Raised when an LLM response is truncated (finish_reason=='length')
+    and ``LLM_STRICT_MODE`` is enabled."""
+
+
+def _is_strict_mode() -> bool:
+    return os.environ.get("LLM_STRICT_MODE", "").strip().lower() in ("true", "1", "yes")
 
 
 class LlmCallable(Protocol):
@@ -34,7 +46,7 @@ class LlmCallable(Protocol):
         *,
         thinking: bool | None = ...,
         max_tokens: int | None = ...,
-    ) -> str: ...
+    ) -> ChatResponse | str: ...
 
 
 class LlmCallLogger:
@@ -56,8 +68,6 @@ class LlmCallLogger:
         self._frame_indexer = frame_indexer
         self._seq = 0
         self._fp: Any = None
-        # Mutable trigger label; caller sets this before each call site.
-        # Defaults to the ``kind`` passed at wrap time.
         self.trigger: str = ""
 
     def _ensure_open(self) -> None:
@@ -75,7 +85,6 @@ class LlmCallLogger:
             self._fp.write("\n")
             self._fp.flush()
         except Exception:
-            # Logging must never break the agent loop.
             log.exception("LlmCallLogger.emit failed")
 
 
@@ -126,16 +135,20 @@ def wrap_llm_call(
     *,
     thinking: bool | None = None,
     max_tokens: int | None = None,
-) -> Callable[..., str]:
+) -> Callable[..., ChatResponse | str]:
     """Wrap ``llm_call`` so every invocation is logged to ``logger.path``.
 
     The returned callable has the same signature as ``llm_call``:
-    ``(messages, *, thinking=None, max_tokens=None) -> str``.
+    ``(messages, *, thinking=None, max_tokens=None) -> ChatResponse | str``.
 
     ``thinking`` / ``max_tokens`` set here act as per-kind defaults applied
     to every call through this wrapper. They may be overridden per-call by
     passing the same kwargs to the returned callable. Precedence:
     per-call kwarg > wrap-time default > env var > server default.
+
+    Truncation detection: if the LLM response has ``finish_reason == "length"``
+    the event is marked ``truncated: true``.  In ``LLM_STRICT_MODE`` this
+    raises :class:`LLMTruncationError`; otherwise a WARNING is logged.
     """
 
     def wrapped(
@@ -143,7 +156,7 @@ def wrap_llm_call(
         *,
         thinking: bool | None = thinking,
         max_tokens: int | None = max_tokens,
-    ) -> str:
+    ) -> ChatResponse | str:
         seq = logger.next_seq()
         frame_index = logger._frame_indexer()
         trigger = logger.trigger or kind
@@ -151,9 +164,17 @@ def wrap_llm_call(
         ok = True
         error: str | None = None
         raw = ""
+        finish_reason: str | None = None
         try:
-            raw = llm_call(messages, thinking=thinking, max_tokens=max_tokens)
-            return raw
+            result = llm_call(messages, thinking=thinking, max_tokens=max_tokens)
+            if isinstance(result, ChatResponse):
+                raw = result.content
+                finish_reason = result.finish_reason
+            else:
+                # Backward compat: bare-string return from fakes / old callables.
+                raw = result
+                finish_reason = None
+            return result
         except Exception as exc:
             ok = False
             error = repr(exc)
@@ -164,7 +185,37 @@ def wrap_llm_call(
             trunc_raw, raw_truncated = (
                 _truncate_content(raw, MAX_CONTENT_CHARS) if raw else ("", False)
             )
-            event: dict[str, Any] = {
+            finish_truncated = finish_reason == "length"
+            is_truncated = truncated or raw_truncated or finish_truncated
+            if finish_truncated:
+                log.warning(
+                    "LLM response truncated (finish_reason='length') "
+                    "kind=%s frame=%d seq=%d",
+                    kind, frame_index, seq,
+                )
+                if _is_strict_mode():
+                    truncation_exc = LLMTruncationError(
+                        f"LLM response truncated: finish_reason='length' "
+                        f"(kind={kind}, frame={frame_index}, seq={seq})"
+                    )
+                    event: dict[str, Any] = {
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "guid": logger.guid,
+                        "seq": seq,
+                        "frame_index": frame_index,
+                        "kind": kind,
+                        "trigger": trigger,
+                        "messages": trunc_msgs,
+                        "response_raw": trunc_raw,
+                        "latency_ms": latency_ms,
+                        "ok": ok,
+                        "error": error,
+                        "truncated": is_truncated,
+                        "finish_reason": finish_reason,
+                    }
+                    logger.emit(event)
+                    raise truncation_exc
+            event = {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "guid": logger.guid,
                 "seq": seq,
@@ -176,7 +227,8 @@ def wrap_llm_call(
                 "latency_ms": latency_ms,
                 "ok": ok,
                 "error": error,
-                "truncated": truncated or raw_truncated,
+                "truncated": is_truncated,
+                "finish_reason": finish_reason,
             }
             logger.emit(event)
 

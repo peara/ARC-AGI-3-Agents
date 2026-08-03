@@ -110,7 +110,7 @@ def _replay_recording(
 
         # The Reconciler internally calls find_absorb_emit_events and
         # _chain_absorb_emit, so logical_map includes mediated links.
-        _, logical_map = reconciler.reconcile(registry, action_ids)
+        _, logical_map, _ = reconciler.reconcile(registry, action_ids)
 
     return registry, action_ids, logical_map, all_absorbs, all_emits
 

@@ -9,12 +9,28 @@ is configurable via constructor arguments or environment variables
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from typing import Any
 
 import openai
 from openai import OpenAI as OpenAIClient
 
-__all__ = ["LLMClient", "LLMCallError"]
+__all__ = ["LLMClient", "LLMCallError", "ChatResponse"]
+
+
+@dataclass(frozen=True)
+class ChatResponse:
+    """Result of an LLM chat completion call.
+
+    ``str(resp)`` returns ``resp.content`` for backward compatibility with
+    code that expects a plain string.
+    """
+
+    content: str
+    finish_reason: str | None
+
+    def __str__(self) -> str:
+        return self.content
 
 
 class LLMCallError(Exception):
@@ -75,36 +91,14 @@ class LLMClient:
         *,
         thinking: bool | None = None,
         max_tokens: int | None = None,
-    ) -> str:
-        """Send a chat completion request and return the assistant content string.
-
-        Parameters
-        ----------
-        messages:
-            A list of message dicts with ``role`` and ``content`` keys,
-            compatible with the OpenAI chat API.
-        thinking:
-            Override the server's reasoning/thinking behaviour. ``None`` falls
-            back to the ``LLM_ENABLE_THINKING`` env var (unset = server default).
-            ``True``/``False`` forces thinking on/off via
-            ``extra_body={"chat_template_kwargs": {"enable_thinking": ...}}``,
-            the control used by vLLM / LM Studio / TGI for Qwen3-style hybrid
-            reasoning models. Disabling thinking typically yields a large
-            latency reduction for tasks that don't need multi-step deduction.
-        max_tokens:
-            Cap on generated tokens. ``None`` falls back to the ``LLM_MAX_TOKENS``
-            env var (unset = no cap). Always recommended as a safety net —
-            without it a thinking-on call can burn an unbounded budget.
+    ) -> ChatResponse:
+        """Send a chat completion request and return a :class:`ChatResponse`.
 
         Returns
         -------
-        str
-            The assistant's reply text.
-
-        Raises
-        ------
-        LLMCallError
-            On any ``openai.OpenAIError`` (connection, auth, rate-limit, etc.).
+        ChatResponse
+            ``content`` is the assistant reply text, ``finish_reason`` is
+            e.g. ``"stop"`` or ``"length"``.
         """
         # Resolve env defaults: explicit arg > env var > server default.
         if thinking is None:
@@ -142,4 +136,5 @@ class LLMClient:
             raise LLMCallError(str(exc)) from exc
 
         content: str | None = response.choices[0].message.content
-        return content or ""
+        finish_reason: str | None = response.choices[0].finish_reason
+        return ChatResponse(content=content or "", finish_reason=finish_reason)

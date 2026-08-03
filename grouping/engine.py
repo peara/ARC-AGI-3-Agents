@@ -11,8 +11,10 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
+if TYPE_CHECKING:
+    from agents.llm_client import ChatResponse
 from perception.entities import EntityCatalog
 from perception.registry import ObjectRegistry
 
@@ -24,7 +26,7 @@ from .resolver import resolve_conflicts
 
 log = logging.getLogger(__name__)
 
-_LLMCall = Callable[[list[dict[str, str]]], str]
+_LLMCall = Callable[[list[dict[str, str]]], Any]  # Returns ChatResponse | str at runtime
 
 
 @dataclass(frozen=True)
@@ -537,11 +539,13 @@ class GroupingEngine:
         ]
 
         try:
-            raw = self._llm_call(messages)
+            result = self._llm_call(messages)
         except Exception:
             log.exception("GroupingEngine LLM call failed")
             return
 
+        from agents.llm_client import ChatResponse as _CR
+        raw = result.content if isinstance(result, _CR) else result
         parsed = _parse_response(raw)
         if parsed is None:
             log.warning("GroupingEngine: could not parse LLM response")

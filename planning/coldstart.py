@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -329,11 +329,13 @@ def infer_color_config(
     ]
 
     try:
+        from agents.llm_client import ChatResponse as _CR
         raw = llm_client.chat(messages)
     except Exception:
         return None
 
-    parsed = _parse_json_response(raw)
+    raw_str = raw.content if isinstance(raw, _CR) else raw
+    parsed = _parse_json_response(raw_str)
     if parsed is None:
         return None
 

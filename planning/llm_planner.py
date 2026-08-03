@@ -9,7 +9,10 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
+
+if TYPE_CHECKING:
+    from agents.llm_client import ChatResponse
 
 from effects.context import EffectContext
 from effects.counter_evidence import format_counter_evidence
@@ -345,7 +348,7 @@ def _validate_goal(
 def call_planner(
     bundle: dict[str, object],
     available_actions: list[int],
-    llm_call: Callable[[list[dict[str, Any]]], str],
+    llm_call: Callable[[list[dict[str, Any]]], ChatResponse | str],
     failure_context: dict[str, object] | None = None,
     vision: bool = False,
     grid: list[list[int]] | None = None,
@@ -378,7 +381,9 @@ def call_planner(
     """
     messages = _build_messages(bundle, available_actions, failure_context, vision, grid)
     raw = llm_call(messages)
-    parsed = _parse_response(raw)
+    from agents.llm_client import ChatResponse as _CR
+    raw_str = raw.content if isinstance(raw, _CR) else raw
+    parsed = _parse_response(raw_str)
     if parsed is None:
         return None
 
@@ -509,7 +514,7 @@ def _extract_engine_rules_with_counts(
 def call_rule_proposer(
     bundle: dict[str, object],
     residual: list[dict[str, object]],
-    llm_call: Callable[[list[dict[str, str]]], str],
+    llm_call: Callable[[list[dict[str, str]]], ChatResponse | str],
     failure_context: dict[str, object] | None = None,
     history: TransitionHistory | None = None,
     ctx: EffectContext | None = None,
@@ -559,11 +564,13 @@ def call_rule_proposer(
         Validated, deduplicated rule proposals. Returns ``[]`` on any error.
     """
     try:
+        from agents.llm_client import ChatResponse as _CR
         _fpfx = f"frame={frame_index} " if frame_index is not None else ""
         internal_dims = spec.internal_dims if spec is not None else ()
         messages = _build_rule_proposer_messages(bundle, residual, failure_context, internal_dims=internal_dims, movement_rules=ctx.movement_rules if ctx else ())
         raw = llm_call(messages)
-        proposals = parse_proposals(raw)
+        raw_str = raw.content if isinstance(raw, _CR) else raw
+        proposals = parse_proposals(raw_str)
 
         scene_entities = _extract_scene_entities(bundle)
 
@@ -786,7 +793,8 @@ def call_rule_proposer(
 
             # Call LLM again (retry)
             raw = llm_call(messages)
-            proposals = parse_proposals(raw)
+            raw_str = raw.content if isinstance(raw, _CR) else raw
+            proposals = parse_proposals(raw_str)
 
             rules = []
             retry_rejection_reasons: dict[str, int] = {}

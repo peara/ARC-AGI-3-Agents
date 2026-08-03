@@ -14,6 +14,7 @@ from .proposal import GroupProposal, ProposedGroup
 from .readiness import ReadinessConfig, apply_gates
 from .resolver import resolve_conflicts
 from .stale_detection import SplitProposal, detect_stale_groups
+from .absorb_proposal import absorb_events_to_proposals
 
 __all__ = [
     "ConfirmedGroup",
@@ -37,4 +38,5 @@ __all__ = [
     "Verdict",
     "SplitProposal",
     "detect_stale_groups",
+    "absorb_events_to_proposals",
 ]

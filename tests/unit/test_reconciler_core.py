@@ -678,7 +678,7 @@ class TestReconcilerEndToEnd:
             ], alive=True),
         )
         reconciler = Reconciler()
-        merge_map, logical_map = reconciler.reconcile(reg, [0, 1, 1])
+        merge_map, logical_map, _ = reconciler.reconcile(reg, [0, 1, 1])
         assert 0 in merge_map, "dead track 0 should be linked to a born track"
         assert merge_map[0] == 1
         assert logical_map[0] == logical_map[1]
@@ -708,7 +708,7 @@ class TestReconcilerEndToEnd:
                 _make_obs(2, color=1, centroid=(14.0, 10.0), shape_key=shape),
             ], alive=True),
         )
-        merge_map, logical_map = reconciler.reconcile(reg1, [0, 1, 1])
+        merge_map, logical_map, _ = reconciler.reconcile(reg1, [0, 1, 1])
         assert 0 in merge_map
         assert logical_map[0] == logical_map[1]
 
@@ -1076,7 +1076,7 @@ class TestReconcilerAbsorbEmitIntegration:
         ], alive=False)
 
         reg_frame2 = _make_registry_with_tracks(emitter, dead_track_still, born)
-        merge_map, logical_map = reconciler.reconcile(reg_frame2, [0, 1, 2])
+        merge_map, logical_map, _ = reconciler.reconcile(reg_frame2, [0, 1, 2])
 
         assert logical_map.get(1) == logical_map.get(2), \
             "dead_tid 1 and born_tid 2 should share the same logical root"

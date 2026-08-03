@@ -655,11 +655,13 @@ class Reconciler:
         self,
         registry: ObjectRegistry,
         action_ids: list[int],
-    ) -> tuple[dict[int, int], dict[int, int]]:
-        """Find new dead→born links and return (merge_map, logical_map).
+    ) -> tuple[dict[int, int], dict[int, int], list[AbsorbEvent]]:
+        """Find new dead→born links and return (merge_map, logical_map, absorb_events).
 
         ``merge_map`` is {dead_tid → born_tid} (raw links).
         ``logical_map`` is {raw_tid → logical_tid} (union-find closure).
+        ``absorb_events`` is the list of ``AbsorbEvent`` detected this frame
+        (empty on the first frame when no previous registry exists).
         """
         infos = _extract_track_infos(registry, action_ids)
 
@@ -678,6 +680,7 @@ class Reconciler:
             self._merge_map[dead_tid] = born_tid
 
         # Absorb/emit chaining: D absorbed by A → A emits B ⟹ D↔B same root
+        absorbs: list[AbsorbEvent] = []
         if self._prev_registry is not None:
             absorbs, emits = find_absorb_emit_events(
                 registry, self._prev_registry, self.config.absorb_emit
@@ -693,7 +696,7 @@ class Reconciler:
         all_tids = list(registry.tracks.keys())
         logical_map = compute_logical_map(all_tids, self._merge_map)
         self._last_tinfo_count = len(infos)
-        return dict(self._merge_map), logical_map
+        return dict(self._merge_map), logical_map, absorbs
 
     @property
     def merge_map(self) -> dict[int, int]:

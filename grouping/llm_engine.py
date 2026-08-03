@@ -32,7 +32,8 @@ from .proposal import GroupProposal
 
 log = logging.getLogger(__name__)
 
-_LLMCall = Callable[[list[dict[str, str]]], str]
+
+_LLMCall = Callable[[list[dict[str, str]]], Any]
 
 _BORDER_COLORS = [
     (255, 0, 0, 200),
@@ -270,7 +271,7 @@ class LlmGroupingEngine:
 
     def __init__(
         self,
-        llm_call: _LLmCall | None,
+        llm_call: _LLMCall | None,
         vision: bool = True,
         image_scale: int = 4,
         minimal_members: bool = False,
@@ -297,6 +298,8 @@ class LlmGroupingEngine:
         When *compound_review* is provided, it is appended to the user
         message so the LLM can also review existing confirmed groups.
         """
+        from agents.templates.llm_logging import LLMTruncationError, _is_strict_mode
+
         if not proposals and compound_review is None:
             return [], []
 
@@ -363,15 +366,40 @@ class LlmGroupingEngine:
 
         # --- Call LLM ---
         try:
-            raw = self._llm_call(messages)
+            result = self._llm_call(messages)
+        except LLMTruncationError:
+            raise
         except Exception:
             log.exception("LlmGroupingEngine LLM call failed")
             return _fallback_verdicts(renumbered), []
+
+        # --- Truncation check ---
+        from agents.llm_client import ChatResponse as _CR
+        if isinstance(result, _CR):
+            raw = result.content
+            if result.finish_reason == "length":
+                log.error(
+                    "LlmGroupingEngine: LLM response truncated (finish_reason='length') "
+                    "proposals=%d",
+                    len(renumbered),
+                )
+                if _is_strict_mode():
+                    raise LLMTruncationError(
+                        f"LLM response truncated: finish_reason='length' "
+                        f"(proposals={len(renumbered)})"
+                    )
+                return _fallback_verdicts(renumbered), []
+        else:
+            raw = result
 
         # --- Parse response ---
         parsed = _parse_response(raw)
         if parsed is None:
             log.warning("LlmGroupingEngine: could not parse LLM response")
+            if _is_strict_mode():
+                raise LLMTruncationError(
+                    f"LLM response parse failure (proposals={len(renumbered)})"
+                )
             return _fallback_verdicts(renumbered), []
 
         verdicts: list[Verdict] = []
