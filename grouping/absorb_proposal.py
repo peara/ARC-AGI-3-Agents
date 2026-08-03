@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from entity.reconciler import AbsorbEvent
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from entity.reconciler import AbsorbEvent
+
 from grouping.proposal import GroupProposal
 
 
