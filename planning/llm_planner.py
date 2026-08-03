@@ -775,9 +775,11 @@ def call_rule_proposer(
                     log.info("%srule_proposer: + %s", _fpfx, " ".join(parts))
                 return unique
 
-            # Append assistant response + counter-evidence user message
+            # Append assistant response + counter-evidence user message.
+            # Use raw_str (str) not raw (ChatResponse) — ChatResponse is not
+            # JSON-serializable and would crash the next llm_call's HTTP body.
             messages = messages + [
-                {"role": "assistant", "content": raw},
+                {"role": "assistant", "content": raw_str},
                 {
                     "role": "user",
                     "content": (
