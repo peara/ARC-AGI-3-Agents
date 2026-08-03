@@ -27,11 +27,13 @@ from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from grouping.combined_engine import CombinedEngine
+    from grouping.proposal import GroupProposal
 
 from effects.context import EffectContext
 from effects.predict import predict
 from effects.state import SceneState
 from entity.roles import assign_roles
+from grouping.absorb_proposal import absorb_events_to_proposals
 from perception.entities import (
     Entity,
     EntityCatalog,
@@ -134,7 +136,7 @@ class EntityBuilder:
         prev_next_id = self._next_entity_id
 
         # 1. Re-identify: link dead→born tracks
-        merge_map, logical_map, _absorb_events = self._reconciler.reconcile(registry, action_ids)
+        merge_map, logical_map, absorb_events = self._reconciler.reconcile(registry, action_ids)
         if merge_map:
             log.info("frame=%d reconciler merge_map=%s", frame_idx, dict(merge_map))
 
@@ -180,6 +182,26 @@ class EntityBuilder:
             dict(catalog.track_to_entity),
         )
 
+        # 3b. Convert absorb events to GroupProposal objects for CombinedEngine
+        absorb_proposals: list[GroupProposal] = []
+        if absorb_events:
+            compound_members: dict[int, frozenset[int]] = {}
+            for eid, ent in catalog.entities.items():
+                if ent.composition == "compound" and ent.lifecycle == LifecycleState.ACTIVE:
+                    member_entity_ids = frozenset(
+                        catalog.track_to_entity[tid]
+                        for tid in ent.members
+                        if tid in catalog.track_to_entity
+                    )
+                    compound_members[eid] = member_entity_ids
+            absorb_proposals = absorb_events_to_proposals(
+                absorb_events=absorb_events,
+                track_to_entity=dict(catalog.track_to_entity),
+                compound_members=compound_members,
+            )
+            if absorb_proposals:
+                log.info("frame=%d absorb_proposals=%d", frame_idx, len(absorb_proposals))
+
         # 4. Compound grouping: merge co-moving entities into one compound
         if not skip_grouping:
             catalog = self._apply_compound_grouping(
@@ -188,6 +210,7 @@ class EntityBuilder:
                 action_ids,
                 effect_context,
                 curr_grid=curr_grid,
+                absorb_proposals=absorb_proposals,
             )
 
         # 5. Dormant / DEAD lifecycle transitions
@@ -370,6 +393,7 @@ class EntityBuilder:
         effect_context: EffectContext | None = None,
         *,
         curr_grid: Sequence[Sequence[int]] | None = None,
+        absorb_proposals: list[GroupProposal] | None = None,
     ) -> EntityCatalog:
         """Apply confirmed merge groups from CombinedEngine as compound entities.
 
@@ -390,6 +414,7 @@ class EntityBuilder:
             catalog,
             action_ids[-1] if action_ids else 0,
             curr_grid=curr_grid,
+            extra_proposals=absorb_proposals,
         )
         merge_groups = [g for g in confirmed if g.relation == "merge"]
         desired_sets: set[frozenset[int]] = {

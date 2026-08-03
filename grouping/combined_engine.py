@@ -94,6 +94,7 @@ class CombinedEngine:
         action_id: int,
         prev_grid: Sequence[Sequence[int]] | None = None,
         curr_grid: Sequence[Sequence[int]] | None = None,
+        extra_proposals: list[GroupProposal] | None = None,
     ) -> list[ConfirmedGroup]:
         """Called every frame. Returns full snapshot of confirmed groups.
 
@@ -122,6 +123,10 @@ class CombinedEngine:
         proposals = self._heuristic_engine.propose(
             self._registry, self._catalog, self._action_ids
         )
+
+        # Merge extra proposals (e.g., absorb events from reconciler)
+        if extra_proposals:
+            proposals = proposals + extra_proposals
 
         # --- Step 2: Detect stale groups and apply splits ---
         confirmed_list = list(self._confirmed.values())
