@@ -122,6 +122,7 @@ def make_observe_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
             grid_changed=grid_changed,
             cells_changed=cells_changed,
             level_changed=level_changed,
+            needs_reflection=needs_reflection,
         )
 
         return {

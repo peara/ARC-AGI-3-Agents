@@ -146,6 +146,25 @@ class TestObserveNode:
         result = observe(state)
         assert result["needs_reflection"] is True
 
+    def test_observe_logs_needs_reflection(self, make_frame, mock_services, caplog):
+        import logging
+        from agents.langgraph_vision_agent.logging import node_logger
+
+        frame = make_frame()
+        state = {
+            "latest_frame": frame,
+            "frame_index": 0,
+            "history": [],
+        }
+        services = mock_services()
+        observe = make_observe_node(services)
+
+        with caplog.at_level(logging.DEBUG, logger=node_logger.name):
+            observe(state)
+
+        msg = caplog.records[-1].getMessage()
+        assert "needs_reflection=True" in msg
+
     def test_observe_caption_includes_expectation(
         self, make_frame, mock_services
     ):

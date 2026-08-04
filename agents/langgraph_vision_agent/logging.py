@@ -47,15 +47,16 @@ def log_node(frame_index: int, node_name: str, **diffs: Any) -> None:
 
 
 def extract_state_for_recording(state: dict[str, Any]) -> dict[str, Any]:
-    """Return a serialisable subset of LangGraph state for the recording.
-
-    The parameter type is ``dict`` rather than the concrete ``GameState`` to
-    avoid a hard dependency on the state schema while Task 1 is pending.
-    """
+    """Return a serialisable subset of LangGraph state for the recording."""
     return {
         "mechanics": state.get("mechanics", []),
+        "mechanics_summary": state.get("mechanics_summary", ""),
         "tactical": state.get("tactical", []),
+        "tactical_summary": state.get("tactical_summary", ""),
         "plan": state.get("plan", ""),
         "uncertain_about": state.get("uncertain_about"),
+        "needs_reflection": state.get("needs_reflection", False),
+        "expectation": state.get("expectation", ""),
+        "history": state.get("history", []),
         "node_path": state.get("node_path", []),
     }

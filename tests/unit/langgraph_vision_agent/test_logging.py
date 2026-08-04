@@ -61,24 +61,60 @@ class TestLogging:
     def test_extract_state_for_recording(self):
         state = {
             "mechanics": ["player moves"],
+            "mechanics_summary": "summary of mechanics",
             "tactical": ["avoid walls"],
+            "tactical_summary": "summary of tactical",
             "plan": "go north",
             "uncertain_about": None,
+            "needs_reflection": True,
+            "expectation": "player advances",
+            "history": ["frame 0: action=1"],
             "node_path": ["observe", "reflect", "plan"],
             "extra_field": "should_not_appear",
         }
         extracted = extract_state_for_recording(state)
         assert extracted["mechanics"] == ["player moves"]
+        assert extracted["mechanics_summary"] == "summary of mechanics"
         assert extracted["tactical"] == ["avoid walls"]
+        assert extracted["tactical_summary"] == "summary of tactical"
         assert extracted["plan"] == "go north"
         assert extracted["uncertain_about"] is None
+        assert extracted["needs_reflection"] is True
+        assert extracted["expectation"] == "player advances"
+        assert extracted["history"] == ["frame 0: action=1"]
         assert extracted["node_path"] == ["observe", "reflect", "plan"]
         assert "extra_field" not in extracted
+
+    def test_extract_state_includes_all_fields(self):
+        expected = [
+            "mechanics",
+            "mechanics_summary",
+            "tactical",
+            "tactical_summary",
+            "plan",
+            "uncertain_about",
+            "needs_reflection",
+            "expectation",
+            "history",
+            "node_path",
+        ]
+        extracted = extract_state_for_recording({})
+        assert sorted(extracted.keys()) == sorted(expected)
+
+    def test_extract_state_mechanics_is_list(self):
+        extracted = extract_state_for_recording({"mechanics": ["m1", "m2"]})
+        assert isinstance(extracted["mechanics"], list)
+        assert extracted["mechanics"] == ["m1", "m2"]
 
     def test_extract_state_for_recording_defaults(self):
         extracted = extract_state_for_recording({})
         assert extracted["mechanics"] == []
+        assert extracted["mechanics_summary"] == ""
         assert extracted["tactical"] == []
+        assert extracted["tactical_summary"] == ""
         assert extracted["plan"] == ""
         assert extracted["uncertain_about"] is None
+        assert extracted["needs_reflection"] is False
+        assert extracted["expectation"] == ""
+        assert extracted["history"] == []
         assert extracted["node_path"] == []
