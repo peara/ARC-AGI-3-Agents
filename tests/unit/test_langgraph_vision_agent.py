@@ -833,3 +833,158 @@ class TestPlanRouter:
 
     def test_router_empty_dict_returns_end(self):
         assert _plan_router({}) == END
+
+
+# ===================================================================
+# Regression tests for WAF-30 bugfixes
+# ===================================================================
+
+
+@pytest.mark.unit
+class TestRegressionWaf30Bugfixes:
+    """Regression tests for four bugs fixed in the LangGraph vision agent.
+
+    Bug 1: node_path accumulated across frames (agent.py now resets to [])
+    Bug 2: needs_reflection missing from Command updates in plan node
+    Bug 3: render_observation caption showed 'unknown' instead of frame_index
+    Bug 4: _parse_response in reflect node didn't handle **bold** markdown headers
+    """
+
+    # -- Bug 1: node_path reset between frames --
+
+    def test_node_path_resets_between_frames(self):
+        """Bug 1 regression: node_path must not accumulate across frames.
+
+        The fix in agent.py adds ``"node_path": []`` to the state dict
+        passed to workflow.invoke(), ensuring the path tracker starts
+        fresh every frame.  Without it, node_path grew unboundedly
+        (197 entries by frame 60).
+        """
+        services = _mock_services(planner_return="ACTION 1 because clear path")
+        graph = build_workflow(services)
+
+        frame = _make_frame()
+
+        # Frame 1
+        state1 = {
+            "latest_frame": frame,
+            "available_actions": [1, 2, 3],
+            "frame_index": 1,
+        }
+        result1 = graph.invoke(state1)
+        path1 = result1.get("node_path", [])
+        assert len(path1) <= 5, f"node_path too long after frame 1: {path1}"
+
+        # Frame 2: simulate agent.py's choose_action which resets node_path
+        # to [] while preserving other state from the previous result.
+        state2 = {
+            **{k: v for k, v in result1.items() if k != "node_path"},
+            "latest_frame": frame,
+            "available_actions": [1, 2, 3],
+            "frame_index": 2,
+            "node_path": [],
+        }
+        result2 = graph.invoke(state2)
+        path2 = result2.get("node_path", [])
+        assert len(path2) <= 5, f"node_path too long after frame 2: {path2}"
+
+    # -- Bug 2: needs_reflection in Command updates --
+
+    def test_plan_uncertain_sets_needs_reflection(self):
+        """Bug 2 regression: UNCERTAIN response sets needs_reflection=True."""
+        services = _mock_services(planner_return="UNCERTAIN because unknown rule")
+        plan = make_plan_node(services)
+        state = {
+            "frame_index": 1,
+            "observation": "obs",
+            "mechanics": "",
+            "tactical": [],
+            "plan": "",
+            "history": [],
+            "available_actions": [1, 2],
+        }
+        result = plan(state)
+        assert isinstance(result, Command)
+        assert result.update.get("needs_reflection") is True
+
+    def test_plan_malformed_action_sets_needs_reflection(self):
+        """Bug 2 regression: malformed action ID sets needs_reflection=True."""
+        services = _mock_services(planner_return="ACTION abc because oops")
+        plan = make_plan_node(services)
+        state = {
+            "frame_index": 1,
+            "observation": "obs",
+            "mechanics": "",
+            "tactical": [],
+            "plan": "",
+            "history": [],
+            "available_actions": [1, 2],
+        }
+        result = plan(state)
+        assert isinstance(result, Command)
+        assert result.update.get("needs_reflection") is True
+
+    def test_plan_malformed_response_sets_needs_reflection(self):
+        """Bug 2 regression: malformed response sets needs_reflection=True."""
+        services = _mock_services(planner_return="I think we should go left")
+        plan = make_plan_node(services)
+        state = {
+            "frame_index": 1,
+            "observation": "obs",
+            "mechanics": "",
+            "tactical": [],
+            "plan": "",
+            "history": [],
+            "available_actions": [1, 2],
+        }
+        result = plan(state)
+        assert isinstance(result, Command)
+        assert result.update.get("needs_reflection") is True
+
+    def test_plan_llm_failure_no_needs_reflection(self):
+        """Bug 2 guardrail: LLM failure returns dict without needs_reflection."""
+        services = _mock_services(planner_return=RuntimeError)
+        plan = make_plan_node(services)
+        state = {
+            "frame_index": 1,
+            "observation": "obs",
+            "mechanics": "",
+            "tactical": [],
+            "plan": "",
+            "history": [],
+            "available_actions": [2, 4],
+        }
+        result = plan(state)
+        assert isinstance(result, dict)
+        assert "needs_reflection" not in result
+
+    # -- Bug 3: render_observation uses frame_index --
+
+    def test_render_observation_uses_frame_index(self):
+        """Bug 3 regression: caption shows actual frame number, not 'unknown'."""
+        frame = _make_frame()
+        result = render_observation(frame, frame_index=7)
+        assert isinstance(result, list)
+        text_blocks = [b for b in result if isinstance(b, dict) and b.get("type") == "text"]
+        assert len(text_blocks) == 1
+        caption = text_blocks[0]["text"]
+        assert "7" in caption
+        assert "unknown" not in caption
+
+    # -- Bug 4: markdown bold headers in reflect parse --
+
+    def test_parse_response_markdown_bold_headers(self):
+        """Bug 4 regression: **Mechanics:** and **Tactical:** headers are parsed."""
+        text = "**Mechanics:**\nPlayer moves in 4 directions.\n\n**Tactical:**\n- Push boxes\n- Avoid walls"
+        mechanics, tactical = reflect_parse_response(text)
+        assert "4 directions" in mechanics
+        assert "Push boxes" in tactical
+        assert "Avoid walls" in tactical
+        assert len(tactical) == 2
+
+    def test_parse_response_mixed_bold_and_plain_headers(self):
+        """Bug 4 regression: mixed bold/plain headers still parse correctly."""
+        text = "MECHANICS:\nPlain header mechanics.\n\n**Tactical:**\n- Bold tactical"
+        mechanics, tactical = reflect_parse_response(text)
+        assert "Plain header" in mechanics
+        assert "Bold tactical" in tactical
