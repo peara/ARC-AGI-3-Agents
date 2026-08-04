@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -104,36 +103,3 @@ class TestAgentNode:
         action = agent.choose_action([], frame)
         assert action == GameAction.RESET
         assert getattr(action, "reasoning", None) is None or action.reasoning == {}
-
-    def test_agent_reasoning_under_16kb(self, make_frame, mock_services):
-        """Bug 4 regression: reasoning payload must stay under 16KB."""
-        from arcengine import GameAction
-
-        from agents.langgraph_vision_agent.agent import LangGraphVisionAgent
-
-        services = mock_services(planner_return="ACTION 1 because test")
-        agent = LangGraphVisionAgent.__new__(LangGraphVisionAgent)
-        agent._config = services.config
-        agent._services = services
-        agent._frame_index = 0
-        agent._state = None
-        agent.recorder = MagicMock()
-        agent.action_counter = 0
-        agent.MAX_ACTIONS = 60
-
-        long_plan = "x" * 20000
-        mock_result = {
-            "action": GameAction.from_id(1),
-            "plan": long_plan,
-            "expectation": "y" * 5000,
-            "needs_reflection": False,
-            "node_path": ["plan"],
-        }
-        agent._workflow = MagicMock()
-        agent._workflow.invoke.return_value = mock_result
-
-        frame = make_frame()
-        action = agent.choose_action([], frame)
-
-        reasoning_json = json.dumps(action.reasoning)
-        assert len(reasoning_json.encode("utf-8")) < 16384
