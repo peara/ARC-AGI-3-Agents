@@ -1,7 +1,7 @@
 """Reflect node for the LangGraph vision agent.
 
 Updates mechanics and tactical observations when needs_reflection is True.
-On LLM failure, preserves existing values and clears the reflection flag.
+Uses call_with_retry with curated-list response format.
 """
 
 from __future__ import annotations
@@ -18,58 +18,89 @@ from vision.render import (
 )
 
 from ..logging import log_node
-from ..services import AgentServices
+from ..prompts import REFLECTOR_SYSTEM_PROMPT
+from ..services import AgentServices, call_with_retry
 
 logger = logging.getLogger(__name__)
 
-_MECHANICS_HEADER = "MECHANICS:"
-_TACTICAL_HEADER = "TACTICAL:"
+_SECTION_RE = re.compile(
+    r"(?:^|\n)(?:\*{0,2}\s*)?(NEW_MECHANICS|MECHANICS_SUMMARY|NEW_TACTICAL|TACTICAL_SUMMARY)\s*:\s*\*{0,2}",
+    re.IGNORECASE,
+)
 
 
-def _parse_response(text: str) -> tuple[str, list[str]]:
-    """Parse a reflect response into (mechanics, tactical_items).
+def _parse_response(
+    text: str,
+) -> tuple[list[str], str, list[str], str] | None:
+    """Parse a reflect response into four sections.
 
     Expected format::
 
-        MECHANICS:
-        <free text>
+        NEW_MECHANICS:
+        - mechanic 1
+        - mechanic 2
 
-        TACTICAL:
-        - item1
-        - item2
+        MECHANICS_SUMMARY: free text summary
+
+        NEW_TACTICAL:
+        - tactical observation 1
+        - tactical observation 2
+
+        TACTICAL_SUMMARY: free text summary
+
+    Returns ``(mechanics_list, mechanics_summary, tactical_list, tactical_summary)``
+    if ALL four sections are present and non-empty, or ``None`` on parse failure.
     """
-    mechanics = ""
-    tactical: list[str] = []
+    parts = re.split(_SECTION_RE, text)
 
-    # Split on MECHANICS: / TACTICAL: headers (case-insensitive)
-    parts = re.split(r"(?i)^\*{0,2}\s*(MECHANICS|TACTICAL)\s*:\s*\*{0,2}$", text, flags=re.MULTILINE)
-
-    # parts: [preamble, "MECHANICS", body, "TACTICAL", body]
-    # Walk pairs of (label, body)
+    # parts: [preamble, "NEW_MECHANICS", body, "MECHANICS_SUMMARY", body,
+    #         "NEW_TACTICAL", body, "TACTICAL_SUMMARY", body]
+    sections: dict[str, str] = {}
     i = 1  # skip preamble
     while i + 1 < len(parts):
         label = parts[i].upper()
         body = parts[i + 1].strip()
-        if label == "MECHANICS":
-            mechanics = body
-        elif label == "TACTICAL":
-            # Parse bullet items ("- item" or "* item" lines)
-            for line in body.splitlines():
-                line = line.strip()
-                if line.startswith(("-", "*")):
-                    item = line[1:].strip()
-                    if item:
-                        tactical.append(item)
-                elif line:
-                    # Non-bullet line in tactical section → treat as item
-                    tactical.append(line)
+        sections[label] = body
         i += 2
 
-    # Fallback: if no headers found, treat entire text as mechanics
-    if not mechanics and not tactical:
-        mechanics = text.strip()
+    required = {"NEW_MECHANICS", "MECHANICS_SUMMARY", "NEW_TACTICAL", "TACTICAL_SUMMARY"}
+    if not required.issubset(sections):
+        return None
 
-    return mechanics, tactical
+    mechanics_raw = sections.get("NEW_MECHANICS", "")
+    mechanics_summary = sections.get("MECHANICS_SUMMARY", "")
+    tactical_raw = sections.get("NEW_TACTICAL", "")
+    tactical_summary = sections.get("TACTICAL_SUMMARY", "")
+
+    if not mechanics_raw or not mechanics_summary or not tactical_raw or not tactical_summary:
+        return None
+
+    # Parse bullet items from mechanics section
+    mechanics_list: list[str] = []
+    for line in mechanics_raw.splitlines():
+        line = line.strip()
+        if line.startswith(("-", "*")):
+            item = line[1:].strip()
+            if item:
+                mechanics_list.append(item)
+        elif line:
+            mechanics_list.append(line)
+
+    # Parse bullet items from tactical section
+    tactical_list: list[str] = []
+    for line in tactical_raw.splitlines():
+        line = line.strip()
+        if line.startswith(("-", "*")):
+            item = line[1:].strip()
+            if item:
+                tactical_list.append(item)
+        elif line:
+            tactical_list.append(line)
+
+    if not mechanics_list or not tactical_list:
+        return None
+
+    return mechanics_list, mechanics_summary, tactical_list, tactical_summary
 
 
 def make_reflect_node(services: AgentServices):
@@ -85,20 +116,29 @@ def make_reflect_node(services: AgentServices):
         # Build prompt
         prev_mechanics: list[str] = state.get("mechanics", [])
         prev_tactical: list[str] = state.get("tactical", [])
+        mechanics_summary: str = state.get("mechanics_summary", "")
+        tactical_summary: str = state.get("tactical_summary", "")
         history: list[str] = state.get("history", [])
         observation = state.get("observation", "")
         last_action_result = history[-1] if history else "none"
         expectation = state.get("expectation", "none")
 
-        mechanics_text = "\n".join(prev_mechanics) if isinstance(prev_mechanics, list) else str(prev_mechanics)
+        mechanics_bullets = "\n".join(f"- {m}" for m in prev_mechanics) if prev_mechanics else "(none yet)"
+        tactical_bullets = "\n".join(f"- {t}" for t in prev_tactical) if prev_tactical else "(none yet)"
+
         text_part = (
-            f"Previous mechanics:\n{mechanics_text}\n"
-            f"Previous tactical: {prev_tactical}\n"
+            f"Current mechanics:\n{mechanics_bullets}\n\n"
+            f"Current mechanics summary: {mechanics_summary}\n\n"
+            f"Current tactical:\n{tactical_bullets}\n\n"
+            f"Current tactical summary: {tactical_summary}\n\n"
             f"Last action result: {last_action_result}\n"
             f"What you expected to happen: {expectation}\n\n"
-            "Compare what you expected with what actually happened in the frames above. "
-            "If your expectation was wrong, update your understanding. "
-            "Output your updated mechanics and tactical observations."
+            "Remove mechanics that are wrong or no longer relevant. Add new discoveries.\n"
+            "Output the curated list and a summary.\n\n"
+            "NEW_MECHANICS:\n- ...\n\n"
+            "MECHANICS_SUMMARY: ...\n\n"
+            "NEW_TACTICAL:\n- ...\n\n"
+            "TACTICAL_SUMMARY: ..."
         )
 
         # Red-box overlay: when prev_frame is available, re-render both frames
@@ -129,26 +169,35 @@ def make_reflect_node(services: AgentServices):
                     "RED BOXES are drawn around regions where pixels changed — "
                     "the grid colors inside the boxes are original, only the outline is red.\n"
                     "Focus on the objects inside the red boxes. What moved? In which direction?\n\n"
-                    "Output your updated mechanics and tactical observations."
+                    "Remove mechanics that are wrong or no longer relevant. Add new discoveries.\n"
+                    "Output the curated list and a summary.\n\n"
+                    "NEW_MECHANICS:\n- ...\n\n"
+                    "MECHANICS_SUMMARY: ...\n\n"
+                    "NEW_TACTICAL:\n- ...\n\n"
+                    "TACTICAL_SUMMARY: ..."
                 )},
             ]
 
+        system_message = {"role": "system", "content": REFLECTOR_SYSTEM_PROMPT}
+
         if prev_frame is not None and latest_frame is not None:
             # Red-box overlay path
-            messages = [{"role": "user", "content": redbox_blocks}]
+            messages = [system_message, {"role": "user", "content": redbox_blocks}]
         elif isinstance(observation, list):
             content_blocks = list(observation) + [{"type": "text", "text": text_part}]
-            messages = [{"role": "user", "content": content_blocks}]
+            messages = [system_message, {"role": "user", "content": content_blocks}]
         else:
             prompt = f"Observation: {observation}\n{text_part}"
-            messages = [{"role": "user", "content": prompt}]
+            messages = [system_message, {"role": "user", "content": prompt}]
 
-        # Call LLM with graceful failure handling
+        # Call LLM with retry on parse failure; catch LLM exceptions gracefully
         try:
-            response = services.reflector_call(messages)
-            response_text = response if isinstance(response, str) else str(response)
-            if not response_text or not response_text.strip():
-                raise ValueError("Empty response from reflector")
+            result, raw, attempts = call_with_retry(
+                services.reflector_call,
+                messages,
+                _parse_response,
+                nudge_prefix="Expected NEW_MECHANICS:, MECHANICS_SUMMARY:, NEW_TACTICAL:, TACTICAL_SUMMARY: sections",
+            )
         except Exception:
             logger.warning(
                 "frame=%s reflect LLM call failed; keeping existing mechanics/tactical",
@@ -157,31 +206,48 @@ def make_reflect_node(services: AgentServices):
             log_node(frame_index, "reflect", mechanics_changed=False, tactical_added=0, tactical_dropped=0)
             return {"needs_reflection": False}
 
-        # Parse response
-        new_mechanics, new_tactical = _parse_response(response_text)
+        if result is None:
+            logger.warning(
+                "frame=%s reflect parse failed after %d attempts; keeping existing mechanics/tactical",
+                frame_index,
+                attempts,
+            )
+            log_node(frame_index, "reflect", retry_attempts=attempts, parse_failed=True)
+            return {"needs_reflection": False}
 
-        # Compute diffs for logging
-        mechanics_changed = new_mechanics != prev_mechanics
+        new_mechanics, new_mechanics_summary, new_tactical, new_tactical_summary = result
+
+        # Cap lists
+        max_mechanics = services.config.max_mechanics
         max_tactical = services.config.max_tactical
 
-        # Cap tactical list
-        tactical_dropped = max(0, len(new_tactical) - max_tactical)
+        if len(new_mechanics) > max_mechanics:
+            new_mechanics = new_mechanics[-max_mechanics:]
         if len(new_tactical) > max_tactical:
-            new_tactical = new_tactical[:max_tactical]
+            new_tactical = new_tactical[-max_tactical:]
 
+        mechanics_changed = new_mechanics != prev_mechanics
         tactical_added = len([t for t in new_tactical if t not in prev_tactical])
+        tactical_dropped = max(0, len(prev_tactical) - len(new_tactical) + tactical_added)
 
         log_node(
             frame_index,
             "reflect",
+            mechanics_count=len(new_mechanics),
             mechanics_changed=mechanics_changed,
+            mechanics_summary_len=len(new_mechanics_summary),
+            tactical_count=len(new_tactical),
             tactical_added=tactical_added,
             tactical_dropped=tactical_dropped,
+            tactical_summary_len=len(new_tactical_summary),
+            retry_attempts=attempts,
         )
 
         return {
             "mechanics": new_mechanics,
+            "mechanics_summary": new_mechanics_summary,
             "tactical": new_tactical,
+            "tactical_summary": new_tactical_summary,
             "needs_reflection": False,
         }
 
