@@ -35,7 +35,7 @@ def _parse_response(text: str) -> tuple[str, list[str]]:
     tactical: list[str] = []
 
     # Split on MECHANICS: / TACTICAL: headers (case-insensitive)
-    parts = re.split(r"(?i)^(MECHANICS|TACTICAL)\s*:\s*$", text, flags=re.MULTILINE)
+    parts = re.split(r"(?i)^\*{0,2}\s*(MECHANICS|TACTICAL)\s*:\s*\*{0,2}$", text, flags=re.MULTILINE)
 
     # parts: [preamble, "MECHANICS", body, "TACTICAL", body]
     # Walk pairs of (label, body)

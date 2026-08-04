@@ -65,6 +65,7 @@ class LangGraphVisionAgent(Agent):
             "latest_frame": latest_frame,
             "available_actions": latest_frame.available_actions or [],
             "frame_index": self._frame_index,
+            "node_path": [],
         }
 
         start_time = time.time()

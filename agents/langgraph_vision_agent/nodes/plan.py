@@ -155,6 +155,7 @@ def make_plan_node(services: AgentServices):
                 update={
                     "uncertain_about": reason,
                     "plan": response_text,
+                    "needs_reflection": True,
                 },
             )
 
@@ -170,6 +171,7 @@ def make_plan_node(services: AgentServices):
                     update={
                         "uncertain_about": reason,
                         "plan": response_text,
+                        "needs_reflection": True,
                     },
                 )
             log_node(frame_index, "plan", action=action_id, uncertain=False, reason=stripped)
@@ -187,6 +189,7 @@ def make_plan_node(services: AgentServices):
             update={
                 "uncertain_about": reason,
                 "plan": response_text,
+                "needs_reflection": True,
             },
         )
 

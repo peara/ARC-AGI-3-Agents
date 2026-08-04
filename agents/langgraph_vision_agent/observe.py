@@ -19,7 +19,7 @@ def _is_empty_frame(frame: FrameData | None) -> bool:
     return False
 
 
-def render_observation(frame: FrameData) -> str | list[dict[str, Any]]:
+def render_observation(frame: FrameData, frame_index: int = 0) -> str | list[dict[str, Any]]:
     """Render a frame grid into a multimodal image block."""
     if _is_empty_frame(frame):
         raise ValueError("Vision is mandatory but frame is empty")
@@ -27,7 +27,6 @@ def render_observation(frame: FrameData) -> str | list[dict[str, Any]]:
     grid = frame.frame
     inner_grid = grid[0] if len(grid) == 1 else grid
 
-    frame_index = getattr(frame, "frame_index", "unknown")
     caption = f"Frame {frame_index}"
 
     img = grid_to_image(inner_grid)  # type: ignore[arg-type]
@@ -69,7 +68,7 @@ def make_observe_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
         is_first_frame = prev_grid is None
         grid = _unwrap_grid(frame.frame)
 
-        observation = render_observation(frame)
+        observation = render_observation(frame, frame_index=frame_index)
         grid_changed = False
         cells_changed = 0
 
