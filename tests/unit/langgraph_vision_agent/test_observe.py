@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import base64
+import io
+
 import pytest
 from arcengine import FrameData, GameState
+from PIL import Image
 
+from agents.langgraph_vision_agent.config import VisionAgentConfig
 from agents.langgraph_vision_agent.observe import (
     make_observe_node,
     render_observation,
@@ -229,3 +234,42 @@ class TestObserveNode:
         caption = text_blocks[0]["text"]
         assert "7" in caption
         assert "unknown" not in caption
+
+    def test_render_observation_uses_config_scale(
+        self, make_frame, mock_services
+    ):
+        """Config render_scale=8 flows through observe node to 512x512 image."""
+        config = VisionAgentConfig(render_scale=8)
+        services = mock_services(config=config)
+        observe = make_observe_node(services)
+        frame = make_frame()
+        state = {
+            "latest_frame": frame,
+            "frame_index": 0,
+            "history": [],
+        }
+        result = observe(state)
+        observation = result["observation"]
+        image_block = next(
+            (b for b in observation if b.get("type") == "image_url"), None
+        )
+        assert image_block is not None
+        url = image_block["image_url"]["url"]
+        b64_data = url.split("base64,", 1)[1]
+        decoded = base64.b64decode(b64_data)
+        image = Image.open(io.BytesIO(decoded))
+        assert image.size == (512, 512)
+
+    def test_render_observation_default_scale_is_8(self, make_frame):
+        """render_observation() default scale produces 512x512 images."""
+        frame = make_frame()
+        result = render_observation(frame, frame_index=0)
+        image_block = next(
+            (b for b in result if b.get("type") == "image_url"), None
+        )
+        assert image_block is not None
+        url = image_block["image_url"]["url"]
+        b64_data = url.split("base64,", 1)[1]
+        decoded = base64.b64decode(b64_data)
+        image = Image.open(io.BytesIO(decoded))
+        assert image.size == (512, 512)

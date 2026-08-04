@@ -44,8 +44,11 @@ def _build_prompt(state: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
         f"Available actions: {available_actions}\n"
         f"Recent actions tried: {recent_history}\n\n"
         "Pick an action you haven't tried recently that would help you "
-        "learn something new about how the game works. "
-        "Output: ACTION <action_id> because <reason>."
+        "learn something new about how the game works.\n\n"
+        "Output exactly:\n"
+        "  ACTION <action_id> because <reason>\n\n"
+        "Example:\n"
+        "  ACTION 2 because it moves the agent toward the goal.\n"
     )
 
     if isinstance(observation, list):

@@ -77,6 +77,15 @@ class LangGraphVisionAgent(Agent):
         if action is not None:
             self._state["last_action_id"] = action.value
 
+        # Inject reasoning into the ARC engine log
+        if action is not None and isinstance(action, GameAction) and action != GameAction.RESET:
+            action.reasoning = {
+                "plan": str(self._state.get("plan", ""))[:8000],
+                "action_id": action.value,
+                "expectation": str(self._state.get("expectation", ""))[:2000],
+                "needs_reflection": bool(self._state.get("needs_reflection", False)),
+            }
+
         log_frame(
             frame_index=self._frame_index,
             node_path=self._state.get("node_path", []),

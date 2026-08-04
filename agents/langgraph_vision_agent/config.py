@@ -20,6 +20,7 @@ class VisionAgentConfig:
     planner_max_tokens: int = 512
     reflector_max_tokens: int = 8192
     experimenter_max_tokens: int = 512
+    render_scale: int = 8
 
 
 def load_config(path: str | None = None) -> VisionAgentConfig:

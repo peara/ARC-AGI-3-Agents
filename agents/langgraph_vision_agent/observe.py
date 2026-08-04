@@ -19,7 +19,9 @@ def _is_empty_frame(frame: FrameData | None) -> bool:
     return False
 
 
-def render_observation(frame: FrameData, frame_index: int = 0) -> str | list[dict[str, Any]]:
+def render_observation(
+    frame: FrameData, frame_index: int = 0, render_scale: int = 8
+) -> str | list[dict[str, Any]]:
     """Render a frame grid into a multimodal image block."""
     if _is_empty_frame(frame):
         raise ValueError("Vision is mandatory but frame is empty")
@@ -29,7 +31,7 @@ def render_observation(frame: FrameData, frame_index: int = 0) -> str | list[dic
 
     caption = f"Frame {frame_index}"
 
-    img = grid_to_image(inner_grid)  # type: ignore[arg-type]
+    img = grid_to_image(inner_grid, scale=render_scale)  # type: ignore[arg-type]
     b64 = image_to_base64(img)
     image_block = make_image_block(b64)
     text_block = {"type": "text", "text": caption}
@@ -63,6 +65,7 @@ def make_observe_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
         frame: FrameData = state["latest_frame"]
         history: list[str] = list(state.get("history", []))
         prev_grid = state.get("prev_grid")
+        render_scale = services.config.render_scale
         prev_levels_completed = state.get("prev_levels_completed")
         prev_frame = state.get("prev_frame")
         expectation = state.get("expectation", "none")
@@ -71,12 +74,18 @@ def make_observe_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
         grid = _unwrap_grid(frame.frame)
 
         if prev_frame is not None:
-            prev_obs = render_observation(prev_frame, frame_index=frame_index - 1)
-            curr_obs = render_observation(frame, frame_index=frame_index)
+            prev_obs = render_observation(
+                prev_frame, frame_index=frame_index - 1, render_scale=render_scale
+            )
+            curr_obs = render_observation(
+                frame, frame_index=frame_index, render_scale=render_scale
+            )
             caption = f"Action taken: {state.get('last_action_id')}. You expected: {expectation}"
             observation = prev_obs + [{"type": "text", "text": caption}] + curr_obs
         else:
-            observation = render_observation(frame, frame_index=frame_index)
+            observation = render_observation(
+                frame, frame_index=frame_index, render_scale=render_scale
+            )
 
         grid_changed = False
         cells_changed = 0

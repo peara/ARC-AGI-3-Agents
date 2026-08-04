@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
+from unittest.mock import MagicMock
+
 import pytest
 
+from agents.langgraph_vision_agent.config import VisionAgentConfig
 from agents.langgraph_vision_agent.graph import build_workflow
 
 
@@ -44,3 +48,92 @@ class TestAgentNode:
         result2 = graph.invoke(state2)
         path2 = result2.get("node_path", [])
         assert len(path2) <= 5, f"node_path too long after frame 2: {path2}"
+
+    def test_agent_sets_action_reasoning(self, make_frame, mock_services):
+        """Bug 2 regression: action.reasoning must be set with correct keys."""
+        from arcengine import GameAction
+
+        from agents.langgraph_vision_agent.agent import LangGraphVisionAgent
+
+        services = mock_services(planner_return="ACTION 2 because probing")
+        agent = LangGraphVisionAgent.__new__(LangGraphVisionAgent)
+        agent._config = services.config
+        agent._services = services
+        agent._frame_index = 0
+        agent._state = None
+        agent.recorder = MagicMock()
+        agent.action_counter = 0
+        agent.MAX_ACTIONS = 60
+
+        mock_result = {
+            "action": GameAction.from_id(2),
+            "plan": "ACTION 2 because probing",
+            "expectation": "grid shifts right",
+            "needs_reflection": True,
+            "node_path": ["plan"],
+        }
+        agent._workflow = MagicMock()
+        agent._workflow.invoke.return_value = mock_result
+
+        frame = make_frame()
+        action = agent.choose_action([], frame)
+
+        assert isinstance(action.reasoning, dict)
+        assert "plan" in action.reasoning
+        assert "probing" in action.reasoning["plan"]
+        assert action.reasoning["action_id"] == 2
+        assert action.reasoning["expectation"] == "grid shifts right"
+        assert action.reasoning["needs_reflection"] is True
+
+    def test_agent_reasoning_not_set_on_reset_fallback(self, make_frame):
+        """Bug 3 regression: RESET singleton must not carry reasoning."""
+        from arcengine import FrameData, GameAction, GameState
+
+        from agents.langgraph_vision_agent.agent import LangGraphVisionAgent
+
+        agent = LangGraphVisionAgent.__new__(LangGraphVisionAgent)
+        agent._config = VisionAgentConfig()
+        agent._frame_index = 0
+
+        frame = FrameData(
+            frame=[[[0] * 64 for _ in range(64)]],
+            state=GameState.GAME_OVER,
+            available_actions=[1],
+            levels_completed=0,
+        )
+        action = agent.choose_action([], frame)
+        assert action == GameAction.RESET
+        assert getattr(action, "reasoning", None) is None or action.reasoning == {}
+
+    def test_agent_reasoning_under_16kb(self, make_frame, mock_services):
+        """Bug 4 regression: reasoning payload must stay under 16KB."""
+        from arcengine import GameAction
+
+        from agents.langgraph_vision_agent.agent import LangGraphVisionAgent
+
+        services = mock_services(planner_return="ACTION 1 because test")
+        agent = LangGraphVisionAgent.__new__(LangGraphVisionAgent)
+        agent._config = services.config
+        agent._services = services
+        agent._frame_index = 0
+        agent._state = None
+        agent.recorder = MagicMock()
+        agent.action_counter = 0
+        agent.MAX_ACTIONS = 60
+
+        long_plan = "x" * 20000
+        mock_result = {
+            "action": GameAction.from_id(1),
+            "plan": long_plan,
+            "expectation": "y" * 5000,
+            "needs_reflection": False,
+            "node_path": ["plan"],
+        }
+        agent._workflow = MagicMock()
+        agent._workflow.invoke.return_value = mock_result
+
+        frame = make_frame()
+        action = agent.choose_action([], frame)
+
+        reasoning_json = json.dumps(action.reasoning)
+        assert len(reasoning_json.encode("utf-8")) < 16384

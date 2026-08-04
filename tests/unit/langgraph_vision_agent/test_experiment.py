@@ -105,3 +105,26 @@ class TestExperimentNode:
         content = messages[0]["content"]
         assert isinstance(content, list)
         assert content[0] == state["observation"][0]
+
+    def test_experiment_prompt_contains_format_block(self):
+        state = {
+            "observation": "test grid",
+            "uncertain_about": "unknown movement",
+            "available_actions": [1, 2],
+            "history": [],
+        }
+        _, text_part = experiment_build_prompt(state)
+        assert "ACTION <action_id>" in text_part
+        assert "Example:" in text_part
+        assert "Output exactly:" in text_part
+
+    def test_experiment_prompt_does_not_contain_expect_reflect(self):
+        state = {
+            "observation": "test grid",
+            "uncertain_about": "unknown movement",
+            "available_actions": [1, 2],
+            "history": [],
+        }
+        _, text_part = experiment_build_prompt(state)
+        assert "EXPECT:" not in text_part
+        assert "REFLECT:" not in text_part
