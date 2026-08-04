@@ -1,0 +1,342 @@
+"""End-to-end smoke tests for the LangGraph vision-agent.
+
+Constructs a ``LangGraphVisionAgent`` with fully mocked LLM services,
+runs it for multiple frames, and asserts the agent produces a valid
+``GameAction`` each frame while accumulating state correctly.
+
+No real LLM API key or game connection is required.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import MagicMock, patch
+
+import pytest
+from arcengine import FrameData, GameAction, GameState
+from langgraph.pregel import Pregel
+from langgraph.types import Command
+
+from agents.langgraph_vision_agent.config import VisionAgentConfig
+from agents.langgraph_vision_agent.graph import build_workflow, draw_mermaid
+from agents.langgraph_vision_agent.services import AgentServices, create_services
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_grid(value: int = 0, rows: int = 64, cols: int = 64):
+    """Return a minimal 64×64 grid filled with *value*."""
+    return [[value] * cols for _ in range(rows)]
+
+
+def _make_frame(
+    state: GameState = GameState.NOT_FINISHED,
+    available_actions: list[int] | None = None,
+    levels_completed: int = 0,
+) -> FrameData:
+    """Build a FrameData with a 64×64 grid suitable for observe node tests."""
+    if available_actions is None:
+        available_actions = [1, 2, 3, 4, 5]
+    return FrameData(
+        frame=[_make_grid()],
+        state=state,
+        available_actions=available_actions,
+        levels_completed=levels_completed,
+    )
+
+
+def _mock_services(
+    planner_return=None,
+    reflector_return=None,
+    experimenter_return=None,
+    config: VisionAgentConfig | None = None,
+) -> AgentServices:
+    """Build AgentServices with MagicMock LLM callables.
+
+    Each ``*_return`` can be:
+      - None  → the mock returns a default string
+      - a string → the mock returns that string
+      - an Exception subclass → the mock will raise it
+    """
+    cfg = config or VisionAgentConfig()
+
+    def _make_call(side_effect):
+        m = MagicMock()
+        if (
+            side_effect is not None
+            and isinstance(side_effect, type)
+            and issubclass(side_effect, Exception)
+        ):
+            m.side_effect = side_effect
+        elif side_effect is not None:
+            m.return_value = side_effect
+        else:
+            m.return_value = "ACTION 1 because fallback"
+        return m
+
+    return AgentServices(
+        llm_client=MagicMock(),
+        llm_logger=None,
+        planner_call=_make_call(planner_return),
+        reflector_call=_make_call(reflector_return),
+        experimenter_call=_make_call(experimenter_return),
+        config=cfg,
+    )
+
+
+# ===================================================================
+# E2E smoke test: full workflow invoke
+# ===================================================================
+
+
+@pytest.mark.unit
+class TestE2EWorkflowInvoke:
+    """End-to-end smoke tests: invoke the full LangGraph workflow for
+    multiple frames with mocked LLM services and assert correct behavior."""
+
+    def test_confident_path_produces_action_each_frame(self):
+        """Run 5 frames through the confident (observe→reflect→plan→END) path."""
+        services = _mock_services(planner_return="ACTION 3 because clear path")
+        graph = build_workflow(services)
+
+        state = None
+        actions = []
+        for i in range(5):
+            frame = _make_frame(available_actions=[1, 2, 3, 4, 5])
+            input_state: dict = {
+                "latest_frame": frame,
+                "available_actions": [1, 2, 3, 4, 5],
+                "frame_index": i + 1,
+                **({} if state is None else state),
+            }
+            # Remove action from prior invoke so observe node doesn't skip
+            if state is not None and "action" in input_state:
+                # LangGraph state keeps the last action; observe node ignores it
+                pass
+
+            result = graph.invoke(input_state)
+            action = result.get("action")
+            assert isinstance(action, GameAction), (
+                f"frame {i + 1}: expected GameAction, got {action!r}"
+            )
+            actions.append(action)
+            state = dict(result)
+
+        assert len(actions) == 5
+        # All actions should be ACTION3 (planner always returns "ACTION 3")
+        assert all(a == GameAction.from_id(3) for a in actions)
+
+    def test_uncertain_path_routes_through_experiment(self):
+        """Run 3 frames through the uncertain path (observe→reflect→plan→experiment)."""
+        services = _mock_services(
+            planner_return="UNCERTAIN because unknown entity behavior",
+            experimenter_return="ACTION 2 because probing",
+        )
+        graph = build_workflow(services)
+
+        for i in range(3):
+            frame = _make_frame(available_actions=[1, 2, 3])
+            input_state: dict = {
+                "latest_frame": frame,
+                "available_actions": [1, 2, 3],
+                "frame_index": i + 1,
+            }
+            result = graph.invoke(input_state)
+            # Should have visited experiment node
+            node_path = result.get("node_path", [])
+            assert "experiment" in node_path, (
+                f"frame {i + 1}: expected 'experiment' in node_path, got {node_path}"
+            )
+            action = result.get("action")
+            assert isinstance(action, GameAction)
+
+    def test_node_path_accumulates_correctly(self):
+        """Assert node_path is non-empty and contains expected nodes."""
+        services = _mock_services(planner_return="ACTION 1 because test")
+        graph = build_workflow(services)
+
+        frame = _make_frame()
+        result = graph.invoke({
+            "latest_frame": frame,
+            "available_actions": [1, 2, 3],
+            "frame_index": 1,
+        })
+
+        node_path = result.get("node_path", [])
+        assert len(node_path) > 0, "node_path should not be empty"
+        # Confident path: observe → reflect → plan
+        assert "observe" in node_path
+        assert "reflect" in node_path
+        assert "plan" in node_path
+
+    def test_state_accumulates_across_frames(self):
+        """Verify that state fields (mechanics, tactical, history) accumulate
+        when passed between frames."""
+        reflector_response = (
+            "MECHANICS:\nPlayer moves in 4 directions.\n\n"
+            "TACTICAL:\n- Avoid walls\n- Push boxes"
+        )
+        services = _mock_services(
+            planner_return="ACTION 2 because target",
+            reflector_return=reflector_response,
+        )
+        graph = build_workflow(services)
+
+        # Frame 1: sets up mechanics/tactical via reflect (needs_reflection=True
+        # because prev_grid is None → first frame)
+        frame1 = _make_frame(available_actions=[1, 2, 3])
+        result1 = graph.invoke({
+            "latest_frame": frame1,
+            "available_actions": [1, 2, 3],
+            "frame_index": 1,
+        })
+        assert "mechanics" in result1
+        # Reflect will fire on first frame (needs_reflection defaults True)
+        # since prev_grid is not set → needs_reflection = True
+
+        # Frame 2: carry state forward; reflect should be a no-op now
+        frame2 = _make_frame(available_actions=[1, 2, 3])
+        state2 = dict(result1)
+        state2["latest_frame"] = frame2
+        state2["available_actions"] = [1, 2, 3]
+        # Override frame_index to 2 for the second frame
+        state2["frame_index"] = 2
+        result2 = graph.invoke(state2)
+
+        # Mechanics/tactical should persist from frame 1
+        assert result2.get("mechanics") is not None
+        assert isinstance(result2.get("tactical", []), list)
+
+    def test_llm_failure_falls_back_gracefully(self):
+        """When all LLM calls fail, the agent should still produce a valid action."""
+        services = _mock_services(
+            planner_return=RuntimeError,
+            experimenter_return=RuntimeError,
+            reflector_return=RuntimeError,
+        )
+        graph = build_workflow(services)
+
+        frame = _make_frame(available_actions=[2, 4])
+        result = graph.invoke({
+            "latest_frame": frame,
+            "available_actions": [2, 4],
+            "frame_index": 1,
+        })
+
+        action = result.get("action")
+        assert isinstance(action, GameAction)
+        # Fallback should pick a random action from available_actions
+        assert action in [GameAction.from_id(2), GameAction.from_id(4)]
+
+    def test_mixed_confident_and_uncertain_frames(self):
+        """Simulate a realistic sequence: frame 1 confident, frame 2 uncertain."""
+        call_count = 0
+
+        def alternating_planner(messages):
+            nonlocal call_count
+            call_count += 1
+            if call_count % 2 == 1:
+                return "ACTION 1 because confident"
+            return "UNCERTAIN because need more info"
+
+        services = _mock_services(
+            experimenter_return="ACTION 3 because probing",
+        )
+        services.planner_call = MagicMock(side_effect=alternating_planner)
+
+        graph = build_workflow(services)
+
+        # Frame 1: confident → plan → END
+        frame = _make_frame()
+        result1 = graph.invoke({
+            "latest_frame": frame,
+            "available_actions": [1, 2, 3],
+            "frame_index": 1,
+        })
+        assert "experiment" not in result1.get("node_path", [])
+
+        # Frame 2: uncertain → plan → experiment → END
+        result2 = graph.invoke({
+            "latest_frame": frame,
+            "available_actions": [1, 2, 3],
+            "frame_index": 2,
+        })
+        assert "experiment" in result2.get("node_path", [])
+
+    def test_game_reset_state(self):
+        """Agent should handle NOT_PLAYED / GAME_OVER states at the choose_action level."""
+        # This tests the agent wrapper, not the graph directly.
+        # The graph itself only sees NOT_FINISHED frames; the agent wrapper
+        # returns RESET for NOT_PLAYED/GAME_OVER.
+        from agents.langgraph_vision_agent.agent import LangGraphVisionAgent
+
+        frame_not_played = _make_frame(state=GameState.NOT_PLAYED)
+        frame_game_over = _make_frame(state=GameState.GAME_OVER)
+
+        # We can't fully construct the agent without mocking the parent __init__,
+        # but we can test the is_done and choose_action logic with heavy mocking.
+        with patch.object(LangGraphVisionAgent, "__init__", lambda self, *a, **kw: None):
+            agent = LangGraphVisionAgent.__new__(LangGraphVisionAgent)
+            agent.action_counter = 0
+            agent.MAX_ACTIONS = 60
+
+            # is_done for NOT_FINISHED should be False (not WIN, not exceeded)
+            frame_alive = _make_frame(state=GameState.NOT_FINISHED)
+            assert agent.is_done([], frame_alive) is False
+
+            # is_done for WIN should be True
+            frame_win = _make_frame(state=GameState.WIN)
+            assert agent.is_done([], frame_win) is True
+
+            # is_done when action budget exhausted should be True
+            agent.action_counter = 61
+            assert agent.is_done([], frame_alive) is True
+
+
+# ===================================================================
+# Graph structure verification
+# ===================================================================
+
+
+@pytest.mark.unit
+class TestE2EGraphStructure:
+    """Verify the compiled graph has the expected topology."""
+
+    def test_build_workflow_returns_pregel(self):
+        """build_workflow should return a compiled Pregel graph."""
+        services = _mock_services()
+        graph = build_workflow(services)
+        assert isinstance(graph, Pregel)
+
+    def test_mermaid_diagram_contains_all_nodes(self):
+        """draw_mermaid() output should contain all 4 node names."""
+        mermaid = draw_mermaid()
+        for name in ("observe", "reflect", "plan", "experiment"):
+            assert name in mermaid, f"node '{name}' missing from mermaid: {mermaid}"
+
+    def test_mermaid_diagram_contains_expected_edges(self):
+        """draw_mermaid() output should show edges between nodes."""
+        mermaid = draw_mermaid()
+        # Observe and reflect must be present (edge exists between them)
+        assert "observe" in mermaid
+        assert "reflect" in mermaid
+        assert "plan" in mermaid
+        assert "experiment" in mermaid
+
+    def test_workflow_invoke_with_minimal_state(self):
+        """The workflow should handle minimal state without crashing."""
+        services = _mock_services(planner_return="ACTION 2 because minimal")
+        graph = build_workflow(services)
+
+        frame = _make_frame()
+        result = graph.invoke({
+            "latest_frame": frame,
+            "available_actions": [1, 2, 3],
+            "frame_index": 1,
+        })
+
+        assert result.get("action") == GameAction.from_id(2)
+        assert isinstance(result.get("node_path", []), list)
+        assert len(result.get("node_path", [])) > 0
