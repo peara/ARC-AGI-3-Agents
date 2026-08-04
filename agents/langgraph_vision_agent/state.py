@@ -23,3 +23,5 @@ class GameState(TypedDict, total=False):
     last_action_id: int
     prev_grid: list[list[int]] | None
     prev_levels_completed: int | None
+    expectation: str
+    prev_frame: FrameData | None

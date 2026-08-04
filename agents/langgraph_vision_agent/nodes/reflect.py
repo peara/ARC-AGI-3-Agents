@@ -79,19 +79,26 @@ def make_reflect_node(services: AgentServices):
         prev_mechanics: str = state.get("mechanics", "")
         prev_tactical: list[str] = state.get("tactical", [])
         history: list[str] = state.get("history", [])
-        observation: str = state.get("observation", "")
+        observation = state.get("observation", "")
         last_action_result = history[-1] if history else "none"
+        expectation = state.get("expectation", "none")
 
-        prompt = (
+        text_part = (
             f"Previous mechanics: {prev_mechanics}\n"
             f"Previous tactical: {prev_tactical}\n"
             f"Last action result: {last_action_result}\n"
-            f"Current observation: {observation}\n\n"
-            "Update your understanding of how this game works. "
+            f"What you expected to happen: {expectation}\n\n"
+            "Compare what you expected with what actually happened in the frames above. "
+            "If your expectation was wrong, update your understanding. "
             "Output your updated mechanics and tactical observations."
         )
 
-        messages = [{"role": "user", "content": prompt}]
+        if isinstance(observation, list):
+            content_blocks = list(observation) + [{"type": "text", "text": text_part}]
+            messages = [{"role": "user", "content": content_blocks}]
+        else:
+            prompt = f"Observation: {observation}\n{text_part}"
+            messages = [{"role": "user", "content": prompt}]
 
         # Call LLM with graceful failure handling
         try:

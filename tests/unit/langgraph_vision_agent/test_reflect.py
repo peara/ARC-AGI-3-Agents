@@ -28,6 +28,76 @@ class TestReflectNode:
         result = reflect(state)
         assert result == {}
 
+    def test_reflect_builds_multimodal_messages(self, mock_services):
+        services = mock_services(
+            reflector_return="MECHANICS:\ntest\n\nTACTICAL:\n- item1"
+        )
+        reflect = make_reflect_node(services)
+        observation = [
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+            {"type": "text", "text": "Frame 5"},
+        ]
+        state = {
+            "frame_index": 1,
+            "needs_reflection": True,
+            "mechanics": "",
+            "tactical": [],
+            "history": [],
+            "observation": observation,
+            "expectation": "player moves up",
+        }
+        reflect(state)
+        call_args = services.reflector_call.call_args
+        messages = call_args[0][0]
+        assert len(messages) == 1
+        content = messages[0]["content"]
+        assert isinstance(content, list)
+        assert content[:2] == observation
+        prompt_block = content[-1]
+        assert prompt_block.get("type") == "text"
+        assert "What you expected to happen" in prompt_block["text"]
+        assert "player moves up" in prompt_block["text"]
+
+    def test_reflect_prompt_includes_expectation(self, mock_services):
+        services = mock_services(
+            reflector_return="MECHANICS:\ntest\n\nTACTICAL:\n- item1"
+        )
+        reflect = make_reflect_node(services)
+        state = {
+            "frame_index": 1,
+            "needs_reflection": True,
+            "mechanics": "",
+            "tactical": [],
+            "history": [],
+            "observation": "some text",
+            "expectation": "player moves up",
+        }
+        reflect(state)
+        call_args = services.reflector_call.call_args
+        messages = call_args[0][0]
+        content = messages[0]["content"]
+        assert "What you expected to happen: player moves up" in content
+
+    def test_reflect_text_observation_fallback(self, mock_services):
+        services = mock_services(
+            reflector_return="MECHANICS:\ntest\n\nTACTICAL:\n- item1"
+        )
+        reflect = make_reflect_node(services)
+        state = {
+            "frame_index": 1,
+            "needs_reflection": True,
+            "mechanics": "",
+            "tactical": [],
+            "history": [],
+            "observation": "a red grid",
+        }
+        reflect(state)
+        call_args = services.reflector_call.call_args
+        messages = call_args[0][0]
+        content = messages[0]["content"]
+        assert isinstance(content, str)
+        assert "Observation: a red grid" in content
+
     def test_reflect_updates_mechanics_and_tactical(self, mock_services):
         reflector_response = (
             "MECHANICS:\n"

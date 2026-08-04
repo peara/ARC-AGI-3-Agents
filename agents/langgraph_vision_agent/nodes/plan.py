@@ -52,10 +52,13 @@ def _build_prompt(state: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
         f"Current plan: {plan}\n"
         f"Recent history: {recent_history}\n"
         f"Available actions: {available_actions}\n\n"
-        "What action should I take? If confident, output: "
-        "ACTION <action_id> because <reason>. "
-        "If you need more information, output: "
-        "UNCERTAIN because <what you don't know>."
+        "What action should I take? "
+        "If confident, output:\n"
+        "  ACTION <action_id> because <reason>.\n"
+        "  EXPECT: <what you expect to happen next frame>\n"
+        "  REFLECT: yes or no\n\n"
+        "If you need more information, output:\n"
+        "  UNCERTAIN because <what you don't know>"
     )
 
     # If observation is already multimodal content blocks, use them directly
@@ -93,6 +96,28 @@ def _parse_uncertain_reason(response: str) -> str:
     if match:
         return match.group(1).strip()
     return response.strip()[:200]
+
+
+def _parse_expectation(response: str) -> str:
+    """Extract the expectation text from an ``EXPECT:`` line.
+
+    Returns an empty string if no EXPECT line is found.
+    """
+    match = re.search(r"(?i)^\s*EXPECT\s*:\s*(.+)", response, flags=re.MULTILINE)
+    if match:
+        return match.group(1).strip()
+    return ""
+
+
+def _parse_reflect_flag(response: str) -> bool:
+    """Extract the REFLECT flag from a ``REFLECT: yes/no`` line.
+
+    Returns ``True`` if ``REFLECT: yes``, ``False`` otherwise.
+    """
+    match = re.search(r"(?i)^\s*REFLECT\s*:\s*(yes|no)", response, flags=re.MULTILINE)
+    if match:
+        return match.group(1).strip().lower() == "yes"
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +166,8 @@ def make_plan_node(services: AgentServices):
                 "action": GameAction.from_id(random_action_id),
                 "plan": "LLM failed, random fallback",
                 "uncertain_about": None,
+                "expectation": "",
+                "needs_reflection": False,
             }
 
         # ---- Parse response ----
@@ -155,6 +182,7 @@ def make_plan_node(services: AgentServices):
                 update={
                     "uncertain_about": reason,
                     "plan": response_text,
+                    "expectation": "",
                     "needs_reflection": True,
                 },
             )
@@ -171,6 +199,7 @@ def make_plan_node(services: AgentServices):
                     update={
                         "uncertain_about": reason,
                         "plan": response_text,
+                        "expectation": "",
                         "needs_reflection": True,
                     },
                 )
@@ -179,6 +208,8 @@ def make_plan_node(services: AgentServices):
                 "action": GameAction.from_id(action_id),
                 "plan": response_text,
                 "uncertain_about": None,
+                "expectation": _parse_expectation(stripped),
+                "needs_reflection": _parse_reflect_flag(stripped),
             }
 
         # Malformed response (neither ACTION nor UNCERTAIN) → treat as uncertain
@@ -189,6 +220,7 @@ def make_plan_node(services: AgentServices):
             update={
                 "uncertain_about": reason,
                 "plan": response_text,
+                "expectation": "",
                 "needs_reflection": True,
             },
         )

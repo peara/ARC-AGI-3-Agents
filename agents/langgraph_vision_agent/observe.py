@@ -64,11 +64,20 @@ def make_observe_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
         history: list[str] = list(state.get("history", []))
         prev_grid = state.get("prev_grid")
         prev_levels_completed = state.get("prev_levels_completed")
+        prev_frame = state.get("prev_frame")
+        expectation = state.get("expectation", "none")
 
         is_first_frame = prev_grid is None
         grid = _unwrap_grid(frame.frame)
 
-        observation = render_observation(frame, frame_index=frame_index)
+        if prev_frame is not None:
+            prev_obs = render_observation(prev_frame, frame_index=frame_index - 1)
+            curr_obs = render_observation(frame, frame_index=frame_index)
+            caption = f"Action taken: {state.get('last_action_id')}. You expected: {expectation}"
+            observation = prev_obs + [{"type": "text", "text": caption}] + curr_obs
+        else:
+            observation = render_observation(frame, frame_index=frame_index)
+
         grid_changed = False
         cells_changed = 0
 
@@ -94,7 +103,9 @@ def make_observe_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
             state["prev_levels_completed"] = levels_completed
             level_changed = True
 
-        needs_reflection = bool(is_first_frame or level_changed)
+        observe_signal = bool(is_first_frame or level_changed)
+        plan_signal = state.get("needs_reflection", False)
+        needs_reflection = observe_signal or plan_signal
 
         log_node(
             frame_index,
@@ -110,6 +121,7 @@ def make_observe_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
             "prev_grid": [list(row) for row in grid],
             "prev_levels_completed": state["prev_levels_completed"],
             "needs_reflection": needs_reflection,
+            "prev_frame": frame,
             "frame_index": frame_index + 1,
         }
 

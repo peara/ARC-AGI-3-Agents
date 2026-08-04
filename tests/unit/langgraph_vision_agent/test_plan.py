@@ -9,6 +9,8 @@ from agents.langgraph_vision_agent.nodes.plan import (
 )
 from agents.langgraph_vision_agent.nodes.plan import (
     _parse_action_id,
+    _parse_expectation,
+    _parse_reflect_flag,
     _parse_uncertain_reason,
     make_plan_node,
 )
@@ -34,6 +36,8 @@ class TestPlanNode:
         assert isinstance(result, dict)
         assert result["action"] == GameAction.from_id(3)
         assert result["uncertain_about"] is None
+        assert "expectation" in result
+        assert "needs_reflection" in result
 
     def test_plan_returns_command_when_uncertain(self, mock_services):
         services = mock_services(planner_return="UNCERTAIN because unknown entity behavior")
@@ -51,6 +55,7 @@ class TestPlanNode:
         assert isinstance(result, Command)
         assert result.goto == "experiment"
         assert "unknown entity behavior" in result.update["uncertain_about"]
+        assert result.update.get("expectation") == ""
 
     def test_plan_falls_back_to_random_on_llm_failure(self, mock_services):
         services = mock_services(planner_return=RuntimeError)
@@ -173,7 +178,7 @@ class TestPlanNode:
         assert result.update.get("needs_reflection") is True
 
     def test_plan_llm_failure_no_needs_reflection(self, mock_services):
-        """Bug 2 guardrail: LLM failure returns dict without needs_reflection."""
+        """Bug 2 guardrail: LLM failure returns dict with needs_reflection=False."""
         services = mock_services(planner_return=RuntimeError)
         plan = make_plan_node(services)
         state = {
@@ -187,7 +192,47 @@ class TestPlanNode:
         }
         result = plan(state)
         assert isinstance(result, dict)
-        assert "needs_reflection" not in result
+        assert result["needs_reflection"] is False
+        assert result["expectation"] == ""
+
+    def test_parse_expectation(self):
+        response = "ACTION 2 because target is clear\nEXPECT: player moves up\nREFLECT: no"
+        assert _parse_expectation(response) == "player moves up"
+
+    def test_parse_expectation_missing(self):
+        response = "ACTION 2 because target is clear"
+        assert _parse_expectation(response) == ""
+
+    def test_parse_reflect_flag_yes(self):
+        response = "ACTION 2 because target is clear\nEXPECT: player moves up\nREFLECT: yes"
+        assert _parse_reflect_flag(response) is True
+
+    def test_parse_reflect_flag_no(self):
+        response = "ACTION 2 because target is clear\nEXPECT: player moves up\nREFLECT: no"
+        assert _parse_reflect_flag(response) is False
+
+    def test_parse_reflect_flag_missing(self):
+        response = "ACTION 2 because target is clear"
+        assert _parse_reflect_flag(response) is False
+
+    def test_plan_confident_returns_expectation(self, mock_services):
+        services = mock_services(
+            planner_return="ACTION 3 because target is clear\nEXPECT: player moves up\nREFLECT: yes"
+        )
+        plan = make_plan_node(services)
+        state = {
+            "frame_index": 1,
+            "observation": "text observation",
+            "mechanics": "move around",
+            "tactical": [],
+            "plan": "",
+            "history": [],
+            "available_actions": [1, 2, 3],
+        }
+        result = plan(state)
+        assert isinstance(result, dict)
+        assert result["expectation"] == "player moves up"
+        assert result["needs_reflection"] is True
 
 
 @pytest.mark.unit
@@ -226,3 +271,16 @@ class TestPlanPrompt:
         content = messages[0]["content"]
         assert isinstance(content, list)
         assert content[0] == state["observation"][0]
+
+    def test_build_prompt_includes_expect_reflect(self):
+        state = {
+            "observation": "a red grid",
+            "mechanics": "move",
+            "tactical": ["avoid walls"],
+            "plan": "go north",
+            "history": [],
+            "available_actions": [1, 2, 3],
+        }
+        messages, prompt_text = plan_build_prompt(state)
+        assert "EXPECT:" in prompt_text
+        assert "REFLECT" in prompt_text

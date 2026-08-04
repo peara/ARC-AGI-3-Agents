@@ -98,6 +98,95 @@ class TestObserveNode:
         result2 = observe(state2)
         assert result2["needs_reflection"] is True
 
+    def test_observe_renders_two_frames_when_prev_frame_exists(
+        self, make_frame, mock_services
+    ):
+        services = mock_services()
+        observe = make_observe_node(services)
+        prev_frame = make_frame()
+        curr_frame = make_frame()
+        state = {
+            "latest_frame": curr_frame,
+            "frame_index": 3,
+            "history": [],
+            "prev_grid": [[0] * 64 for _ in range(64)],
+            "prev_levels_completed": 0,
+            "prev_frame": prev_frame,
+            "last_action_id": 2,
+            "expectation": "player moves up",
+        }
+        result = observe(state)
+        observation = result["observation"]
+        assert len(observation) == 5
+        assert observation[0].get("type") == "image_url"
+        assert observation[1].get("type") == "text"
+        assert observation[2].get("type") == "text"
+        assert observation[3].get("type") == "image_url"
+        assert observation[4].get("type") == "text"
+        caption = observation[2]["text"]
+        assert "Action taken" in caption
+        assert "player moves up" in caption
+
+    def test_observe_combines_needs_reflection(
+        self, make_frame, make_grid, mock_services
+    ):
+        services = mock_services()
+        observe = make_observe_node(services)
+        prev_grid = make_grid(0)
+
+        frame = make_frame(levels_completed=2)
+        state = {
+            "latest_frame": frame,
+            "frame_index": 3,
+            "history": [],
+            "prev_grid": prev_grid,
+            "prev_levels_completed": 2,
+            "needs_reflection": True,
+        }
+        result = observe(state)
+        assert result["needs_reflection"] is True
+
+    def test_observe_caption_includes_expectation(
+        self, make_frame, mock_services
+    ):
+        services = mock_services()
+        observe = make_observe_node(services)
+        prev_frame = make_frame()
+        curr_frame = make_frame()
+        state = {
+            "latest_frame": curr_frame,
+            "frame_index": 4,
+            "history": [],
+            "prev_grid": [[0] * 64 for _ in range(64)],
+            "prev_levels_completed": 0,
+            "prev_frame": prev_frame,
+            "last_action_id": 3,
+            "expectation": "player moves right",
+        }
+        result = observe(state)
+        text_blocks = [
+            b for b in result["observation"] if isinstance(b, dict) and b.get("type") == "text"
+        ]
+        caption_block = next(
+            (b for b in text_blocks if "Action taken" in b["text"]), None
+        )
+        assert caption_block is not None
+        assert "player moves right" in caption_block["text"]
+
+    def test_observe_stores_prev_frame_in_return(
+        self, make_frame, mock_services
+    ):
+        services = mock_services()
+        observe = make_observe_node(services)
+        frame = make_frame()
+        state = {
+            "latest_frame": frame,
+            "frame_index": 0,
+            "history": [],
+        }
+        result = observe(state)
+        assert result["prev_frame"] is frame
+
     def test_observe_no_reflection_when_no_level_change(
         self, make_frame, make_grid, mock_services
     ):
