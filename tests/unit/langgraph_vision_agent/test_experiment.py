@@ -13,8 +13,10 @@ from agents.langgraph_vision_agent.nodes.experiment import (
 )
 from agents.langgraph_vision_agent.nodes.experiment import (
     _parse_action_reason,
+    _parse_experiment_response,
     make_experiment_node,
 )
+from agents.langgraph_vision_agent.prompts import EXPERIMENTER_SYSTEM_PROMPT
 
 
 @pytest.mark.unit
@@ -101,8 +103,10 @@ class TestExperimentNode:
             "history": ["frame 0: action=1, 5 cells changed"],
         }
         messages, _ = experiment_build_prompt(state)
-        assert len(messages) == 1
-        content = messages[0]["content"]
+        assert len(messages) == 2
+        assert messages[0]["role"] == "system"
+        assert messages[1]["role"] == "user"
+        content = messages[1]["content"]
         assert isinstance(content, list)
         assert content[0] == state["observation"][0]
 
@@ -128,3 +132,44 @@ class TestExperimentNode:
         _, text_part = experiment_build_prompt(state)
         assert "EXPECT:" not in text_part
         assert "REFLECT:" not in text_part
+
+    def test_experiment_has_system_prompt(self):
+        state = {
+            "observation": "test grid",
+            "uncertain_about": "unknown",
+            "available_actions": [1, 2],
+            "history": [],
+        }
+        messages, _ = experiment_build_prompt(state)
+        assert messages[0]["role"] == "system"
+        assert messages[0]["content"] == EXPERIMENTER_SYSTEM_PROMPT
+        assert messages[1]["role"] == "user"
+
+    def test_experiment_retries_on_malformed(self, mock_services):
+        call_count = 0
+
+        def side_effect(messages):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return "I don't know what to do"
+            return "ACTION 3 because testing"
+
+        services = mock_services(experimenter_return=None)
+        services.experimenter_call = side_effect
+        experiment = make_experiment_node(services)
+        state = {
+            "frame_index": 1,
+            "observation": "obs",
+            "uncertain_about": "unknown",
+            "available_actions": [1, 2, 3],
+            "history": [],
+        }
+        result = experiment(state)
+        assert result["action"] == GameAction.from_id(3)
+        assert result["last_action_id"] == 3
+        assert call_count == 2
+
+    def test_parse_experiment_response_delegates_to_parse_action_id(self):
+        assert _parse_experiment_response("ACTION 5 because probe") == 5
+        assert _parse_experiment_response("gibberish") is None

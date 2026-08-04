@@ -15,7 +15,8 @@ from typing import Any
 from arcengine import GameAction
 
 from ..logging import log_node
-from ..services import AgentServices
+from ..prompts import EXPERIMENTER_SYSTEM_PROMPT
+from ..services import AgentServices, call_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -51,15 +52,17 @@ def _build_prompt(state: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
         "  ACTION 2 because it moves the agent toward the goal.\n"
     )
 
+    system_message = {"role": "system", "content": EXPERIMENTER_SYSTEM_PROMPT}
+
     if isinstance(observation, list):
         content_blocks: list[dict[str, Any]] = list(observation) + [
             {"type": "text", "text": f"Observation: [image]\n{text_part}"},
         ]
-        messages = [{"role": "user", "content": content_blocks}]
+        messages = [system_message, {"role": "user", "content": content_blocks}]
         return messages, text_part
 
     prompt = f"Observation: {observation}\n{text_part}"
-    messages = [{"role": "user", "content": prompt}]
+    messages = [system_message, {"role": "user", "content": prompt}]
     return messages, prompt
 
 
@@ -89,6 +92,15 @@ def _parse_action_reason(response: str) -> str:
     return response.strip()[:200]
 
 
+def _parse_experiment_response(text: str) -> int | None:
+    """Parse an experiment response to extract the action ID.
+
+    Returns the action_id (int) on success, None on parse failure
+    so call_with_retry can nudge and retry.
+    """
+    return _parse_action_id(text)
+
+
 # ---------------------------------------------------------------------------
 # Node factory
 # ---------------------------------------------------------------------------
@@ -111,13 +123,18 @@ def make_experiment_node(services: AgentServices):
         if not available_actions:
             available_actions = [1]
 
-        # ---- Build prompt and call LLM ----
+        # ---- Build prompt and call LLM with retry ----
         messages, _ = _build_prompt(state)
 
         try:
-            response = services.experimenter_call(messages)
-            response_text = response if isinstance(response, str) else str(response)
+            result, raw, attempts = call_with_retry(
+                services.experimenter_call,
+                messages,
+                _parse_experiment_response,
+                nudge_prefix="Expected 'ACTION <action_id> because <reason>'",
+            )
         except Exception:
+            # LLM failure: fall back to random valid action
             action_id = random.choice(available_actions)
             logger.warning(
                 "frame=%s experiment LLM call failed; random fallback action=%s",
@@ -137,16 +154,14 @@ def make_experiment_node(services: AgentServices):
                 "uncertain_about": None,
             }
 
-        # ---- Parse response ----
-        stripped = response_text.strip()
-        action_id = _parse_action_id(stripped)
-
-        if action_id is None:
+        if result is None:
+            # All retries exhausted — random fallback
             action_id = random.choice(available_actions)
-            reason = f"malformed response: {stripped[:200]}"
+            reason = f"malformed response after {attempts} attempts: {raw[:200]}"
             logger.warning(
-                "frame=%s experiment malformed response; random fallback action=%s",
+                "frame=%s experiment parse failed after %d attempts; random fallback action=%s",
                 frame_index,
+                attempts,
                 action_id,
             )
             log_node(
@@ -155,6 +170,7 @@ def make_experiment_node(services: AgentServices):
                 action=action_id,
                 target="random_fallback",
                 reason=reason,
+                retry_attempts=attempts,
             )
             return {
                 "action": GameAction.from_id(action_id),
@@ -162,13 +178,16 @@ def make_experiment_node(services: AgentServices):
                 "uncertain_about": None,
             }
 
-        reason = _parse_action_reason(stripped)
+        # Parsed successfully
+        action_id = result
+        reason = _parse_action_reason(raw.strip())
         log_node(
             frame_index,
             "experiment",
             action=action_id,
             target=action_id,
             reason=reason,
+            retry_attempts=attempts,
         )
         return {
             "action": GameAction.from_id(action_id),
