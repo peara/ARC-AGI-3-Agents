@@ -1,14 +1,20 @@
-import pytest
 import base64
 import io
+
+import pytest
 from PIL import Image
+
 from vision import (
-    ARCADE_PALETTE, 
-    grid_to_image, 
-    image_to_base64, 
-    make_image_block, 
-    make_multimodal_user_message
+    ARCADE_PALETTE,
+    draw_boxes_on_grid,
+    draw_change_boxes,
+    find_changed_regions,
+    grid_to_image,
+    image_to_base64,
+    make_image_block,
+    make_multimodal_user_message,
 )
+
 
 def test_palette_has_16_colors():
     """ARCADE_PALETTE has exactly 16 entries, each a 4-tuple."""
@@ -100,9 +106,106 @@ def test_make_multimodal_user_message_render_failure():
     """Pass invalid grid (e.g., None) and verify it falls back to text-only (returns "hello")."""
     # Passing None was already tested in text_only, let's try something that fails during render
     # like a grid that isn't a list of lists but is provided as a grid.
-    # However, the spec asks to "pass invalid grid (e.g., None)". 
+    # However, the spec asks to "pass invalid grid (e.g., None)".
     # If grid is None, the function handles it explicitly.
-    # To test the "render failure" try/except, we need an object that passes the `if grid is None` 
+    # To test the "render failure" try/except, we need an object that passes the `if grid is None`
     # check but fails inside `grid_to_image`.
     result = make_multimodal_user_message("hello", "not a grid")
     assert result == "hello"
+
+
+def _empty_grid():
+    """Return a 64x64 grid filled with zeros."""
+    return [[0] * 64 for _ in range(64)]
+
+
+def test_find_changed_regions_single():
+    """A single changed cell produces one 1x1 region."""
+    prev = _empty_grid()
+    curr = _empty_grid()
+    curr[10][10] = 1
+    regions = find_changed_regions(prev, curr)
+    assert regions == [(10, 10, 10, 10)]
+
+
+def test_find_changed_regions_contiguous():
+    """Three touching cells are merged into one bounding box."""
+    prev = _empty_grid()
+    curr = _empty_grid()
+    curr[20][20] = 1
+    curr[20][21] = 1
+    curr[21][20] = 1
+    regions = find_changed_regions(prev, curr)
+    assert len(regions) == 1
+    assert regions[0] == (20, 21, 20, 21)
+
+
+def test_find_changed_regions_separate():
+    """Two disconnected changed areas produce two regions."""
+    prev = _empty_grid()
+    curr = _empty_grid()
+    curr[10][10] = 1
+    curr[10][11] = 1
+    curr[30][30] = 1
+    curr[30][31] = 1
+    regions = find_changed_regions(prev, curr)
+    assert len(regions) == 2
+
+
+def test_find_changed_regions_no_changes():
+    """Identical grids produce no changed regions."""
+    prev = _empty_grid()
+    assert find_changed_regions(prev, prev) == []
+
+
+def test_draw_change_boxes_dimensions():
+    """draw_change_boxes returns images scaled to the requested size."""
+    prev = _empty_grid()
+    curr = _empty_grid()
+    assert draw_change_boxes(prev, curr, scale=8).size == (512, 512)
+    assert draw_change_boxes(prev, curr, scale=4).size == (256, 256)
+
+
+def test_draw_change_boxes_no_red_on_identical():
+    """Identical grids yield an image with no red outline pixels."""
+    prev = _empty_grid()
+    img = draw_change_boxes(prev, prev, scale=8).convert("RGB")
+    assert all(pixel != (255, 0, 0) for pixel in img.getdata())
+
+
+def test_draw_change_boxes_red_at_changed():
+    """A changed cell at (10, 10) gets a red box near its scaled position."""
+    prev = _empty_grid()
+    curr = _empty_grid()
+    curr[10][10] = 1
+    img = draw_change_boxes(prev, curr, scale=8)
+    red = (255, 0, 0)
+    changed_row, changed_col = 10 * 8, 10 * 8
+    found = False
+    for r in range(max(0, changed_row - 16), min(img.height, changed_row + 17)):
+        for c in range(max(0, changed_col - 16), min(img.width, changed_col + 17)):
+            if img.getpixel((c, r)) == red:
+                found = True
+                break
+        if found:
+            break
+    assert found
+
+
+def test_draw_boxes_on_grid_produces_red():
+    """draw_boxes_on_grid renders red boxes at specified regions."""
+    grid = [[0] * 64 for _ in range(64)]
+    # One region at (10, 10, 10, 10)
+    img = draw_boxes_on_grid(grid, [(10, 10, 10, 10)], scale=8).convert("RGB")
+    px = img.load()
+    # Check red pixel near the region
+    found_red = False
+    for y in range(9 * 8, 11 * 8):
+        for x in range(9 * 8, 11 * 8):
+            r, g, b = px[x, y]
+            if r == 255 and g == 0 and b == 0:
+                found_red = True
+                break
+        if found_red:
+            break
+    assert found_red

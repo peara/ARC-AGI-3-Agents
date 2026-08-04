@@ -192,3 +192,91 @@ class TestReflectNode:
         mechanics, tactical = reflect_parse_response(text)
         assert "Plain header" in mechanics
         assert "Bold tactical" in tactical
+
+    def test_reflect_uses_redbox_when_prev_frame_available(self, mock_services, make_frame):
+        """When prev_frame and latest_frame are set, red-box images are sent."""
+        services = mock_services(
+            reflector_return="MECHANICS:\ntest\n\nTACTICAL:\n- item1"
+        )
+        reflect = make_reflect_node(services)
+        prev_frame = make_frame()
+        latest_frame = make_frame()
+        latest_frame.frame[0][10][10] = 1
+        state = {
+            "frame_index": 5,
+            "needs_reflection": True,
+            "mechanics": "",
+            "tactical": [],
+            "history": [],
+            "observation": "ignored text",
+            "expectation": "player moves up",
+            "prev_frame": prev_frame,
+            "latest_frame": latest_frame,
+        }
+        reflect(state)
+        call_args = services.reflector_call.call_args
+        messages = call_args[0][0]
+        assert len(messages) == 1
+        content = messages[0]["content"]
+        assert isinstance(content, list)
+        image_blocks = [b for b in content if b.get("type") == "image_url"]
+        text_blocks = [b for b in content if b.get("type") == "text"]
+        assert len(image_blocks) >= 2
+        assert any("RED BOXES" in b.get("text", "") for b in text_blocks)
+
+    def test_reflect_falls_back_when_no_prev_frame(self, mock_services):
+        """When prev_frame is None, the old observation path is used."""
+        services = mock_services(
+            reflector_return="MECHANICS:\ntest\n\nTACTICAL:\n- item1"
+        )
+        reflect = make_reflect_node(services)
+        observation = [
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+            {"type": "text", "text": "Frame 7"},
+        ]
+        state = {
+            "frame_index": 1,
+            "needs_reflection": True,
+            "mechanics": "",
+            "tactical": [],
+            "history": [],
+            "observation": observation,
+            "expectation": "player moves up",
+            "prev_frame": None,
+            "latest_frame": None,
+        }
+        reflect(state)
+        call_args = services.reflector_call.call_args
+        messages = call_args[0][0]
+        content = messages[0]["content"]
+        assert isinstance(content, list)
+        assert content[:2] == observation
+        assert all("RED BOXES" not in b.get("text", "") for b in content)
+
+    def test_reflect_prompt_explains_red_boxes(self, mock_services, make_frame):
+        """When both frames are available, the prompt explains the red boxes."""
+        services = mock_services(
+            reflector_return="MECHANICS:\ntest\n\nTACTICAL:\n- item1"
+        )
+        reflect = make_reflect_node(services)
+        prev_frame = make_frame()
+        latest_frame = make_frame()
+        latest_frame.frame[0][20][20] = 2
+        state = {
+            "frame_index": 3,
+            "needs_reflection": True,
+            "mechanics": "",
+            "tactical": [],
+            "history": [],
+            "observation": "text obs",
+            "expectation": "player moves left",
+            "prev_frame": prev_frame,
+            "latest_frame": latest_frame,
+        }
+        reflect(state)
+        call_args = services.reflector_call.call_args
+        messages = call_args[0][0]
+        content = messages[0]["content"]
+        text_content = " ".join(b.get("text", "") for b in content if b.get("type") == "text")
+        assert "RED BOXES" in text_content
+        assert "What moved" in text_content

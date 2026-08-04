@@ -10,6 +10,13 @@ import logging
 import re
 from typing import Any
 
+from vision.render import (
+    draw_boxes_on_grid,
+    find_changed_regions,
+    image_to_base64,
+    make_image_block,
+)
+
 from ..logging import log_node
 from ..services import AgentServices
 
@@ -93,7 +100,42 @@ def make_reflect_node(services: AgentServices):
             "Output your updated mechanics and tactical observations."
         )
 
-        if isinstance(observation, list):
+        # Red-box overlay: when prev_frame is available, re-render both frames
+        # with bounding boxes around changed regions
+        prev_frame = state.get("prev_frame")
+        latest_frame = state.get("latest_frame")
+
+        if prev_frame is not None and latest_frame is not None:
+            scale = services.config.render_scale
+            prev_grid = prev_frame.frame[0]  # unwrap batch dim
+            curr_grid = latest_frame.frame[0]
+            regions = find_changed_regions(prev_grid, curr_grid)
+            prev_boxed = draw_boxes_on_grid(prev_grid, regions, scale=scale)
+            curr_boxed = draw_boxes_on_grid(curr_grid, regions, scale=scale)
+            prev_b64 = image_to_base64(prev_boxed)
+            curr_b64 = image_to_base64(curr_boxed)
+            cells_changed = sum(
+                1 for r in range(64) for c in range(64)
+                if prev_grid[r][c] != curr_grid[r][c]
+            )
+            redbox_blocks = [
+                make_image_block(prev_b64),
+                {"type": "text", "text": f"Frame {frame_index - 1} (before action)"},
+                make_image_block(curr_b64),
+                {"type": "text", "text": f"Frame {frame_index} (after action)"},
+                {"type": "text", "text": (
+                    f"\n{cells_changed} cells changed between these two frames.\n"
+                    "RED BOXES are drawn around regions where pixels changed — "
+                    "the grid colors inside the boxes are original, only the outline is red.\n"
+                    "Focus on the objects inside the red boxes. What moved? In which direction?\n\n"
+                    "Output your updated mechanics and tactical observations."
+                )},
+            ]
+
+        if prev_frame is not None and latest_frame is not None:
+            # Red-box overlay path
+            messages = [{"role": "user", "content": redbox_blocks}]
+        elif isinstance(observation, list):
             content_blocks = list(observation) + [{"type": "text", "text": text_part}]
             messages = [{"role": "user", "content": content_blocks}]
         else:
