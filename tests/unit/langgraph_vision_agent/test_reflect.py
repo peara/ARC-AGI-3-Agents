@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import pytest
 
 from agents.langgraph_vision_agent.nodes.reflect import (
@@ -491,3 +493,220 @@ class TestReflectNode:
         # The test just ensures no exception; log_node is called internally
         result = reflect(state)
         assert result["needs_reflection"] is False
+
+    def test_reflect_curation_accumulates_across_frames(self, mock_services):
+        """Reflector curates mechanics list across frames: add, remove, add."""
+        response1 = (
+            "NEW_MECHANICS:\n"
+            "- Player moves in 4 directions.\n"
+            "- Walls block movement.\n\n"
+            "MECHANICS_SUMMARY: Player moves and walls block.\n\n"
+            "NEW_TACTICAL:\n"
+            "- Avoid walls\n\n"
+            "TACTICAL_SUMMARY: Avoid walls."
+        )
+        response2 = (
+            "NEW_MECHANICS:\n"
+            "- Walls block movement.\n"
+            "- Boxes can be pushed.\n\n"
+            "MECHANICS_SUMMARY: Walls block and boxes can be pushed.\n\n"
+            "NEW_TACTICAL:\n"
+            "- Avoid walls\n"
+            "- Push boxes toward targets\n\n"
+            "TACTICAL_SUMMARY: Avoid walls and push boxes."
+        )
+        response3 = (
+            "NEW_MECHANICS:\n"
+            "- Walls block movement.\n"
+            "- Boxes can be pushed.\n"
+            "- Targets light up when boxes placed.\n\n"
+            "MECHANICS_SUMMARY: Walls, boxes, and targets.\n\n"
+            "NEW_TACTICAL:\n"
+            "- Avoid walls\n"
+            "- Push boxes toward targets\n"
+            "- Watch for target indicators\n\n"
+            "TACTICAL_SUMMARY: Avoid walls, push boxes, watch targets."
+        )
+
+        call_count = 0
+        responses = [response1, response2, response3]
+
+        def mock_reflector(messages):
+            nonlocal call_count
+            result = responses[call_count]
+            call_count += 1
+            return result
+
+        services = mock_services(reflector_return="unused")
+        services.reflector_call = MagicMock(side_effect=mock_reflector)
+
+        reflect = make_reflect_node(services)
+
+        state1 = {
+            "frame_index": 1,
+            "needs_reflection": True,
+            "mechanics": [],
+            "tactical": [],
+            "mechanics_summary": "",
+            "tactical_summary": "",
+            "observation": "grid state",
+            "history": ["frame 0: action=1, 5 cells changed"],
+            "expectation": "player moves right",
+        }
+        result1 = reflect(state1)
+        assert result1["mechanics"] == ["Player moves in 4 directions.", "Walls block movement."]
+        assert result1["tactical"] == ["Avoid walls"]
+        assert "Player moves" in result1["mechanics_summary"]
+
+        state2 = {
+            "frame_index": 2,
+            "needs_reflection": True,
+            "mechanics": result1["mechanics"],
+            "tactical": result1["tactical"],
+            "mechanics_summary": result1["mechanics_summary"],
+            "tactical_summary": result1["tactical_summary"],
+            "observation": "grid state",
+            "history": ["frame 0: action=1, 5 cells changed", "frame 1: action=2, 3 cells changed"],
+            "expectation": "player moves up",
+        }
+        result2 = reflect(state2)
+        assert result2["mechanics"] == ["Walls block movement.", "Boxes can be pushed."]
+        assert len(result2["tactical"]) == 2
+
+        state3 = {
+            "frame_index": 3,
+            "needs_reflection": True,
+            "mechanics": result2["mechanics"],
+            "tactical": result2["tactical"],
+            "mechanics_summary": result2["mechanics_summary"],
+            "tactical_summary": result2["tactical_summary"],
+            "observation": "grid state",
+            "history": state2["history"] + ["frame 2: action=3, 2 cells changed"],
+            "expectation": "box moves left",
+        }
+        result3 = reflect(state3)
+        assert len(result3["mechanics"]) == 3
+        assert "Targets light up when boxes placed." in result3["mechanics"]
+
+    def test_reflect_curation_survives_llm_failure(self, mock_services):
+        """When LLM fails on frame 3, existing list + summary preserved."""
+        response1 = (
+            "NEW_MECHANICS:\n"
+            "- Player moves.\n\n"
+            "MECHANICS_SUMMARY: Player moves.\n\n"
+            "NEW_TACTICAL:\n"
+            "- Avoid walls\n\n"
+            "TACTICAL_SUMMARY: Avoid walls."
+        )
+        response2 = (
+            "NEW_MECHANICS:\n"
+            "- Player moves.\n"
+            "- Boxes pushable.\n\n"
+            "MECHANICS_SUMMARY: Player moves and boxes pushable.\n\n"
+            "NEW_TACTICAL:\n"
+            "- Avoid walls\n"
+            "- Push boxes\n\n"
+            "TACTICAL_SUMMARY: Avoid walls and push boxes."
+        )
+
+        call_count = 0
+
+        def mock_reflector(messages):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 2:
+                return [response1, response2][call_count - 1]
+            raise RuntimeError("LLM connection lost")
+
+        services = mock_services(reflector_return="unused")
+        services.reflector_call = MagicMock(side_effect=mock_reflector)
+
+        reflect = make_reflect_node(services)
+
+        state1 = {
+            "frame_index": 1,
+            "needs_reflection": True,
+            "mechanics": [],
+            "tactical": [],
+            "mechanics_summary": "",
+            "tactical_summary": "",
+            "observation": "grid",
+            "history": [],
+            "expectation": "none",
+        }
+        result1 = reflect(state1)
+        assert len(result1["mechanics"]) == 1
+
+        state2 = {
+            "frame_index": 2,
+            "needs_reflection": True,
+            "mechanics": result1["mechanics"],
+            "tactical": result1["tactical"],
+            "mechanics_summary": result1["mechanics_summary"],
+            "tactical_summary": result1["tactical_summary"],
+            "observation": "grid",
+            "history": ["frame 1: action=1"],
+            "expectation": "none",
+        }
+        result2 = reflect(state2)
+        assert len(result2["mechanics"]) == 2
+
+        state3 = {
+            "frame_index": 3,
+            "needs_reflection": True,
+            "mechanics": result2["mechanics"],
+            "tactical": result2["tactical"],
+            "mechanics_summary": result2["mechanics_summary"],
+            "tactical_summary": result2["tactical_summary"],
+            "observation": "grid",
+            "history": state2["history"] + ["frame 2: action=2"],
+            "expectation": "none",
+        }
+        result3 = reflect(state3)
+        assert result3 == {"needs_reflection": False}
+
+    def test_reflect_curation_with_redbox(self, mock_services, make_frame):
+        """When prev_frame is available, prompt includes current list AND red-box overlay,
+        and system prompt is messages[0]."""
+        response = (
+            "NEW_MECHANICS:\n"
+            "- Objects move in 4 directions.\n\n"
+            "MECHANICS_SUMMARY: Objects move in 4 directions.\n\n"
+            "NEW_TACTICAL:\n"
+            "- Watch for collisions\n\n"
+            "TACTICAL_SUMMARY: Watch for collisions."
+        )
+        services = mock_services(reflector_return=response)
+        reflect = make_reflect_node(services)
+
+        prev_frame = make_frame()
+        curr_frame = make_frame()
+        for r in range(64):
+            for c in range(64):
+                prev_frame.frame[0][r][c] = 0
+                curr_frame.frame[0][r][c] = 1
+
+        state = {
+            "frame_index": 5,
+            "needs_reflection": True,
+            "mechanics": ["Player moves right."],
+            "tactical": ["Avoid walls."],
+            "mechanics_summary": "Player moves right.",
+            "tactical_summary": "Avoid walls.",
+            "observation": "grid",
+            "history": ["frame 4: action=2, 10 cells changed"],
+            "expectation": "player moves left",
+            "prev_frame": prev_frame,
+            "latest_frame": curr_frame,
+        }
+        result = reflect(state)
+
+        assert result["mechanics"] == ["Objects move in 4 directions."]
+        assert "Objects move" in result["mechanics_summary"]
+
+        call_args = services.reflector_call.call_args
+        messages = call_args[0][0]
+        assert messages[0]["role"] == "system"
+        assert messages[1]["role"] == "user"
+        user_content = messages[1]["content"]
+        assert isinstance(user_content, list)

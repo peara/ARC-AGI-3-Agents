@@ -1,19 +1,16 @@
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import pytest
 from arcengine import GameAction
 from langgraph.types import Command
-from unittest.mock import MagicMock, call
 
 from agents.langgraph_vision_agent.nodes.plan import (
     _build_prompt as plan_build_prompt,
 )
 from agents.langgraph_vision_agent.nodes.plan import (
-    _parse_action_id,
-    _parse_expectation,
     _parse_planner_response,
-    _parse_reflect_flag,
-    _parse_uncertain_reason,
     make_plan_node,
 )
 from agents.langgraph_vision_agent.prompts import PLANNER_SYSTEM_PROMPT

@@ -148,6 +148,7 @@ class TestObserveNode:
 
     def test_observe_logs_needs_reflection(self, make_frame, mock_services, caplog):
         import logging
+
         from agents.langgraph_vision_agent.logging import node_logger
 
         frame = make_frame()
