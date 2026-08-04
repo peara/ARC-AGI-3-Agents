@@ -17,7 +17,8 @@ from arcengine import GameAction
 from langgraph.types import Command
 
 from ..logging import log_node
-from ..services import AgentServices
+from ..prompts import PLANNER_SYSTEM_PROMPT
+from ..services import AgentServices, call_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +39,8 @@ def _build_prompt(state: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
     """
 
     observation: Any = state.get("observation", "")
-    mechanics: list[str] = state.get("mechanics", [])
-    tactical: list[str] = state.get("tactical", [])
+    mechanics_summary: str = state.get("mechanics_summary", "")
+    tactical_summary: str = state.get("tactical_summary", "")
     plan: str = state.get("plan", "") or "none"
     history: list[str] = state.get("history", [])
     available_actions: list[int] = state.get("available_actions", [])
@@ -47,8 +48,8 @@ def _build_prompt(state: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
     recent_history = history[-5:] if history else []
 
     text_part = (
-        f"Game mechanics: {mechanics}\n"
-        f"Known tactical: {tactical}\n"
+        f"Game mechanics: {mechanics_summary}\n"
+        f"Known tactical: {tactical_summary}\n"
         f"Current plan: {plan}\n"
         f"Recent history: {recent_history}\n"
         f"Available actions: {available_actions}\n\n"
@@ -61,17 +62,19 @@ def _build_prompt(state: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
         "  UNCERTAIN because <what you don't know>"
     )
 
+    system_message = {"role": "system", "content": PLANNER_SYSTEM_PROMPT}
+
     # If observation is already multimodal content blocks, use them directly
     if isinstance(observation, list):
         content_blocks: list[dict[str, Any]] = list(observation) + [
             {"type": "text", "text": text_part},
         ]
-        messages = [{"role": "user", "content": content_blocks}]
+        messages = [system_message, {"role": "user", "content": content_blocks}]
         return messages, text_part
 
     # Plain-text observation
     prompt = f"Observation: {observation}\n{text_part}"
-    messages = [{"role": "user", "content": prompt}]
+    messages = [system_message, {"role": "user", "content": prompt}]
     return messages, prompt
 
 
@@ -120,6 +123,35 @@ def _parse_reflect_flag(response: str) -> bool:
     return False
 
 
+def _parse_planner_response(text: str) -> dict | None:
+    """Parse a planner response into a structured dict.
+
+    Returns None on parse failure so call_with_retry can nudge and retry.
+    """
+    stripped = text.strip()
+    if stripped.upper().startswith(_UNCERTAIN_PREFIX):
+        return {
+            "uncertain_about": _parse_uncertain_reason(stripped),
+            "plan": text,
+            "expectation": "",
+            "needs_reflection": True,
+        }
+    if stripped.upper().startswith(_ACTION_PREFIX):
+        action_id = _parse_action_id(stripped)
+        if action_id is not None:
+            return {
+                "action_id": action_id,
+                "expectation": _parse_expectation(stripped),
+                "needs_reflection": _parse_reflect_flag(stripped),
+                "plan": text,
+                "uncertain_about": None,
+            }
+        # ACTION with unparseable id — treat as parse failure for retry
+        return None
+    # Neither ACTION nor UNCERTAIN — parse failure
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Node factory
 # ---------------------------------------------------------------------------
@@ -138,12 +170,16 @@ def make_plan_node(services: AgentServices):
     def plan_node(state: dict[str, Any]) -> dict[str, Any] | Command:
         frame_index: int = state.get("frame_index", 0)
 
-        # ---- Build prompt and call LLM ----
+        # ---- Build prompt and call LLM with retry ----
         messages, _ = _build_prompt(state)
 
         try:
-            response = services.planner_call(messages)
-            response_text = response if isinstance(response, str) else str(response)
+            result, raw, attempts = call_with_retry(
+                services.planner_call,
+                messages,
+                _parse_planner_response,
+                nudge_prefix="Expected 'ACTION <id> because <reason>' or 'UNCERTAIN because <reason>'",
+            )
         except Exception:
             # LLM failure: fall back to random valid action
             available_actions: list[int] = state.get("available_actions", [1])
@@ -170,59 +206,62 @@ def make_plan_node(services: AgentServices):
                 "needs_reflection": False,
             }
 
-        # ---- Parse response ----
-        stripped = response_text.strip()
+        if result is None:
+            # All retries exhausted — random fallback
+            available_actions = state.get("available_actions", [1])
+            if not available_actions:
+                available_actions = [1]
+            random_action_id = random.choice(available_actions)
+            logger.warning(
+                "frame=%s plan parse failed after %d attempts; random fallback",
+                frame_index,
+                attempts,
+            )
+            log_node(
+                frame_index,
+                "plan",
+                action=random_action_id,
+                uncertain=True,
+                reason="parse failed, random fallback",
+                retry_attempts=attempts,
+            )
+            return {
+                "action": GameAction.from_id(random_action_id),
+                "plan": "parse failed, random fallback",
+                "uncertain_about": None,
+                "expectation": "",
+                "needs_reflection": False,
+            }
 
-        if stripped.upper().startswith(_UNCERTAIN_PREFIX):
-            # UNCERTAIN → route to experiment node
-            reason = _parse_uncertain_reason(stripped)
-            log_node(frame_index, "plan", uncertain=True, reason=reason)
+        # Parsed successfully — route based on result type
+        log_node(
+            frame_index,
+            "plan",
+            action=result.get("action_id"),
+            uncertain=result.get("uncertain_about") is not None,
+            reason=raw[:200],
+            retry_attempts=attempts,
+        )
+
+        if "action_id" in result:
+            # ACTION path — confident
+            return {
+                "action": GameAction.from_id(result["action_id"]),
+                "plan": result["plan"],
+                "uncertain_about": None,
+                "expectation": result["expectation"],
+                "needs_reflection": result["needs_reflection"],
+            }
+        else:
+            # UNCERTAIN path — route to experiment
             return Command(
                 goto="experiment",
                 update={
-                    "uncertain_about": reason,
-                    "plan": response_text,
+                    "uncertain_about": result["uncertain_about"],
+                    "plan": result["plan"],
                     "expectation": "",
                     "needs_reflection": True,
                 },
             )
-
-        if stripped.upper().startswith(_ACTION_PREFIX):
-            # ACTION → confident, return action directly
-            action_id = _parse_action_id(stripped)
-            if action_id is None:
-                # Could not parse the action_id — treat as malformed
-                reason = f"malformed response: {stripped[:200]}"
-                log_node(frame_index, "plan", uncertain=True, reason=reason)
-                return Command(
-                    goto="experiment",
-                    update={
-                        "uncertain_about": reason,
-                        "plan": response_text,
-                        "expectation": "",
-                        "needs_reflection": True,
-                    },
-                )
-            log_node(frame_index, "plan", action=action_id, uncertain=False, reason=stripped)
-            return {
-                "action": GameAction.from_id(action_id),
-                "plan": response_text,
-                "uncertain_about": None,
-                "expectation": _parse_expectation(stripped),
-                "needs_reflection": _parse_reflect_flag(stripped),
-            }
-
-        # Malformed response (neither ACTION nor UNCERTAIN) → treat as uncertain
-        reason = f"malformed response: {stripped[:200]}"
-        log_node(frame_index, "plan", uncertain=True, reason=reason)
-        return Command(
-            goto="experiment",
-            update={
-                "uncertain_about": reason,
-                "plan": response_text,
-                "expectation": "",
-                "needs_reflection": True,
-            },
-        )
 
     return plan_node
