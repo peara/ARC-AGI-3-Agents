@@ -144,7 +144,7 @@ class TestStatePassThrough:
             "latest_frame": frame,
             "available_actions": [1, 2, 3],
             "frame_index": 2,
-            "mechanics": "player can move in 4 directions",
+            "mechanics": ["player can move in 4 directions"],
             "tactical": ["avoid walls", "push boxes"],
             "prev_grid": make_grid(value=0),
             "prev_levels_completed": 0,
@@ -152,7 +152,7 @@ class TestStatePassThrough:
         result = graph.invoke(state)
         # Mechanics and tactical should survive through the graph
         # (reflect is a no-op when no level change, since prev_levels_completed matches)
-        assert result.get("mechanics") == "player can move in 4 directions"
+        assert result.get("mechanics") == ["player can move in 4 directions"]
         assert result.get("tactical") == ["avoid walls", "push boxes"]
 
 

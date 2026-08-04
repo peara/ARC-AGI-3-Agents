@@ -60,7 +60,7 @@ class TestLogging:
 
     def test_extract_state_for_recording(self):
         state = {
-            "mechanics": "player moves",
+            "mechanics": ["player moves"],
             "tactical": ["avoid walls"],
             "plan": "go north",
             "uncertain_about": None,
@@ -68,7 +68,7 @@ class TestLogging:
             "extra_field": "should_not_appear",
         }
         extracted = extract_state_for_recording(state)
-        assert extracted["mechanics"] == "player moves"
+        assert extracted["mechanics"] == ["player moves"]
         assert extracted["tactical"] == ["avoid walls"]
         assert extracted["plan"] == "go north"
         assert extracted["uncertain_about"] is None
@@ -77,7 +77,7 @@ class TestLogging:
 
     def test_extract_state_for_recording_defaults(self):
         extracted = extract_state_for_recording({})
-        assert extracted["mechanics"] == ""
+        assert extracted["mechanics"] == []
         assert extracted["tactical"] == []
         assert extracted["plan"] == ""
         assert extracted["uncertain_about"] is None

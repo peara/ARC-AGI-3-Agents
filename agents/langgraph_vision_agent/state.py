@@ -12,8 +12,10 @@ class GameState(TypedDict, total=False):
     available_actions: list[int]
     frame_index: int
     observation: str
-    mechanics: str
+    mechanics: list[str]
+    mechanics_summary: str
     tactical: list[str]
+    tactical_summary: str
     plan: str
     history: list[str]
     uncertain_about: str | None

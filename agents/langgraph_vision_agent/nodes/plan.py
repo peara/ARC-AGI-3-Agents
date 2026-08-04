@@ -38,7 +38,7 @@ def _build_prompt(state: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
     """
 
     observation: Any = state.get("observation", "")
-    mechanics: str = state.get("mechanics", "")
+    mechanics: list[str] = state.get("mechanics", [])
     tactical: list[str] = state.get("tactical", [])
     plan: str = state.get("plan", "") or "none"
     history: list[str] = state.get("history", [])

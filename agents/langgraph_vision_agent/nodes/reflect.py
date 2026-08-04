@@ -83,15 +83,16 @@ def make_reflect_node(services: AgentServices):
             return {}
 
         # Build prompt
-        prev_mechanics: str = state.get("mechanics", "")
+        prev_mechanics: list[str] = state.get("mechanics", [])
         prev_tactical: list[str] = state.get("tactical", [])
         history: list[str] = state.get("history", [])
         observation = state.get("observation", "")
         last_action_result = history[-1] if history else "none"
         expectation = state.get("expectation", "none")
 
+        mechanics_text = "\n".join(prev_mechanics) if isinstance(prev_mechanics, list) else str(prev_mechanics)
         text_part = (
-            f"Previous mechanics: {prev_mechanics}\n"
+            f"Previous mechanics:\n{mechanics_text}\n"
             f"Previous tactical: {prev_tactical}\n"
             f"Last action result: {last_action_result}\n"
             f"What you expected to happen: {expectation}\n\n"

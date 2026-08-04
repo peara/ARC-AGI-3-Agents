@@ -26,7 +26,7 @@ class TestPlanNode:
         state = {
             "frame_index": 1,
             "observation": "text observation",
-            "mechanics": "move around",
+            "mechanics": ["move around"],
             "tactical": [],
             "plan": "",
             "history": [],
@@ -45,7 +45,7 @@ class TestPlanNode:
         state = {
             "frame_index": 1,
             "observation": "obs",
-            "mechanics": "",
+            "mechanics": [],
             "tactical": [],
             "plan": "",
             "history": [],
@@ -63,7 +63,7 @@ class TestPlanNode:
         state = {
             "frame_index": 1,
             "observation": "obs",
-            "mechanics": "",
+            "mechanics": [],
             "tactical": [],
             "plan": "",
             "history": [],
@@ -80,7 +80,7 @@ class TestPlanNode:
         state = {
             "frame_index": 1,
             "observation": "obs",
-            "mechanics": "",
+            "mechanics": [],
             "tactical": [],
             "plan": "",
             "history": [],
@@ -98,7 +98,7 @@ class TestPlanNode:
         state = {
             "frame_index": 1,
             "observation": "obs",
-            "mechanics": "",
+            "mechanics": [],
             "tactical": [],
             "plan": "",
             "history": [],
@@ -133,7 +133,7 @@ class TestPlanNode:
         state = {
             "frame_index": 1,
             "observation": "obs",
-            "mechanics": "",
+            "mechanics": [],
             "tactical": [],
             "plan": "",
             "history": [],
@@ -150,7 +150,7 @@ class TestPlanNode:
         state = {
             "frame_index": 1,
             "observation": "obs",
-            "mechanics": "",
+            "mechanics": [],
             "tactical": [],
             "plan": "",
             "history": [],
@@ -167,7 +167,7 @@ class TestPlanNode:
         state = {
             "frame_index": 1,
             "observation": "obs",
-            "mechanics": "",
+            "mechanics": [],
             "tactical": [],
             "plan": "",
             "history": [],
@@ -184,7 +184,7 @@ class TestPlanNode:
         state = {
             "frame_index": 1,
             "observation": "obs",
-            "mechanics": "",
+            "mechanics": [],
             "tactical": [],
             "plan": "",
             "history": [],
@@ -223,7 +223,7 @@ class TestPlanNode:
         state = {
             "frame_index": 1,
             "observation": "text observation",
-            "mechanics": "move around",
+            "mechanics": ["move around"],
             "tactical": [],
             "plan": "",
             "history": [],
@@ -242,7 +242,7 @@ class TestPlanPrompt:
     def test_build_prompt_with_text_observation(self):
         state = {
             "observation": "a red grid",
-            "mechanics": "move",
+            "mechanics": ["move"],
             "tactical": ["avoid walls"],
             "plan": "go north",
             "history": ["frame 0: action=1, 5 cells changed"],
@@ -261,7 +261,7 @@ class TestPlanPrompt:
             "observation": [
                 {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
             ],
-            "mechanics": "move",
+            "mechanics": ["move"],
             "tactical": [],
             "plan": "",
             "history": [],
@@ -275,7 +275,7 @@ class TestPlanPrompt:
     def test_build_prompt_includes_expect_reflect(self):
         state = {
             "observation": "a red grid",
-            "mechanics": "move",
+            "mechanics": ["move"],
             "tactical": ["avoid walls"],
             "plan": "go north",
             "history": [],

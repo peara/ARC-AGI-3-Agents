@@ -15,6 +15,7 @@ class VisionAgentConfig:
     vision_enabled: bool = True
     max_history: int = 5
     max_tactical: int = 10
+    max_mechanics: int = 20
     max_actions: int = 60
     llm_thinking: bool = False
     planner_max_tokens: int = 512

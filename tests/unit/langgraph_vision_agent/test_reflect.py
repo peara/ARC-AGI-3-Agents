@@ -22,7 +22,7 @@ class TestReflectNode:
         state = {
             "frame_index": 1,
             "needs_reflection": False,
-            "mechanics": "player moves",
+            "mechanics": ["player moves"],
             "tactical": ["avoid walls"],
         }
         result = reflect(state)
@@ -40,7 +40,7 @@ class TestReflectNode:
         state = {
             "frame_index": 1,
             "needs_reflection": True,
-            "mechanics": "",
+            "mechanics": [],
             "tactical": [],
             "history": [],
             "observation": observation,
@@ -66,7 +66,7 @@ class TestReflectNode:
         state = {
             "frame_index": 1,
             "needs_reflection": True,
-            "mechanics": "",
+            "mechanics": [],
             "tactical": [],
             "history": [],
             "observation": "some text",
@@ -86,7 +86,7 @@ class TestReflectNode:
         state = {
             "frame_index": 1,
             "needs_reflection": True,
-            "mechanics": "",
+            "mechanics": [],
             "tactical": [],
             "history": [],
             "observation": "a red grid",
@@ -111,7 +111,7 @@ class TestReflectNode:
         state = {
             "frame_index": 1,
             "needs_reflection": True,
-            "mechanics": "",
+            "mechanics": [],
             "tactical": [],
             "history": [],
             "observation": "grid image",
@@ -129,7 +129,7 @@ class TestReflectNode:
         state = {
             "frame_index": 1,
             "needs_reflection": True,
-            "mechanics": "old mechanics",
+            "mechanics": ["old mechanics"],
             "tactical": ["old tactic"],
             "history": [],
             "observation": "obs",
@@ -167,7 +167,7 @@ class TestReflectNode:
         state = {
             "frame_index": 1,
             "needs_reflection": True,
-            "mechanics": "",
+            "mechanics": [],
             "tactical": [],
             "history": [],
             "observation": "obs",
@@ -205,7 +205,7 @@ class TestReflectNode:
         state = {
             "frame_index": 5,
             "needs_reflection": True,
-            "mechanics": "",
+            "mechanics": [],
             "tactical": [],
             "history": [],
             "observation": "ignored text",
@@ -237,7 +237,7 @@ class TestReflectNode:
         state = {
             "frame_index": 1,
             "needs_reflection": True,
-            "mechanics": "",
+            "mechanics": [],
             "tactical": [],
             "history": [],
             "observation": observation,
@@ -265,7 +265,7 @@ class TestReflectNode:
         state = {
             "frame_index": 3,
             "needs_reflection": True,
-            "mechanics": "",
+            "mechanics": [],
             "tactical": [],
             "history": [],
             "observation": "text obs",

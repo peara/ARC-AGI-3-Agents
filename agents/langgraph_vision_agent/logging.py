@@ -53,7 +53,7 @@ def extract_state_for_recording(state: dict[str, Any]) -> dict[str, Any]:
     avoid a hard dependency on the state schema while Task 1 is pending.
     """
     return {
-        "mechanics": state.get("mechanics", ""),
+        "mechanics": state.get("mechanics", []),
         "tactical": state.get("tactical", []),
         "plan": state.get("plan", ""),
         "uncertain_about": state.get("uncertain_about"),
