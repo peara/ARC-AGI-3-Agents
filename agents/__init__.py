@@ -3,6 +3,7 @@ from typing import Type, cast
 from dotenv import load_dotenv
 
 from .agent import Agent, Playback
+from .langgraph_vision_agent.agent import LangGraphVisionAgent
 from .llm_client import LLMCallError, LLMClient
 from .recorder import Recorder
 from .swarm import Swarm
@@ -26,6 +27,8 @@ AVAILABLE_AGENTS: dict[str, Type[Agent]] = {
     for cls in Agent.__subclasses__()
     if cls.__name__ not in ("Playback", "LlmCuriosity")
 }
+
+AVAILABLE_AGENTS["langgraphvision"] = cast(Type[Agent], LangGraphVisionAgent)
 
 # add all the recording files as valid agent names
 for rec in Recorder.list():
