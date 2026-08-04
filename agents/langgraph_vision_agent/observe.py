@@ -1,0 +1,117 @@
+"""Observation rendering and history writing for the LangGraph vision agent."""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from typing import Any, Callable
+
+from arcengine import FrameData
+
+from vision.render import grid_to_image, image_to_base64, make_image_block
+
+from .logging import log_node
+from .services import AgentServices
+
+
+def _is_empty_frame(frame: FrameData | None) -> bool:
+    if frame is None or not frame.frame:
+        return True
+    return False
+
+
+def render_observation(frame: FrameData) -> str | list[dict[str, Any]]:
+    """Render a frame grid into a multimodal image block."""
+    if _is_empty_frame(frame):
+        raise ValueError("Vision is mandatory but frame is empty")
+
+    grid = frame.frame
+    inner_grid = grid[0] if len(grid) == 1 else grid
+
+    frame_index = getattr(frame, "frame_index", "unknown")
+    caption = f"Frame {frame_index}"
+
+    img = grid_to_image(inner_grid)  # type: ignore[arg-type]
+    b64 = image_to_base64(img)
+    image_block = make_image_block(b64)
+    text_block = {"type": "text", "text": caption}
+    return [image_block, text_block]
+
+
+def _count_changed_cells(
+    grid_a: Sequence[Sequence[int]], grid_b: Sequence[Sequence[int]]
+) -> int:
+    changed = 0
+    for row_a, row_b in zip(grid_a, grid_b):
+        for cell_a, cell_b in zip(row_a, row_b):
+            if cell_a != cell_b:
+                changed += 1
+    return changed
+
+
+def _unwrap_grid(grid: Sequence[Sequence[int]] | Sequence[Sequence[Sequence[int]]]) -> Sequence[Sequence[int]]:
+    if len(grid) == 1:
+        first = grid[0]
+        if first and isinstance(first[0], Sequence):
+            return first  # type: ignore[return-value]
+    return grid  # type: ignore[return-value]
+
+
+def make_observe_node(services: AgentServices) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    """Return the LangGraph observe node function for the vision agent."""
+
+    def observe_node(state: dict[str, Any]) -> dict[str, Any]:
+        frame_index: int = state.get("frame_index", 0)
+        frame: FrameData = state["latest_frame"]
+        history: list[str] = list(state.get("history", []))
+        prev_grid = state.get("prev_grid")
+        prev_levels_completed = state.get("prev_levels_completed")
+
+        is_first_frame = prev_grid is None
+        grid = _unwrap_grid(frame.frame)
+
+        observation = render_observation(frame)
+        grid_changed = False
+        cells_changed = 0
+
+        if not is_first_frame and prev_grid is not None:
+            cells_changed = _count_changed_cells(prev_grid, grid)
+            grid_changed = cells_changed > 0
+
+            history_line = (
+                f"frame {frame_index - 1}: "
+                f"action={state.get('last_action_id')}, "
+                f"{cells_changed} cells changed"
+            )
+            history.append(history_line)
+            max_history = services.config.max_history
+            if len(history) > max_history:
+                history = history[-max_history:]
+
+        levels_completed = getattr(frame, "levels_completed", 0)
+        level_changed = False
+        if prev_levels_completed is None:
+            state["prev_levels_completed"] = levels_completed
+        elif prev_levels_completed != levels_completed:
+            state["prev_levels_completed"] = levels_completed
+            level_changed = True
+
+        needs_reflection = bool(is_first_frame or level_changed)
+
+        log_node(
+            frame_index,
+            "observe",
+            grid_changed=grid_changed,
+            cells_changed=cells_changed,
+            level_changed=level_changed,
+        )
+
+        return {
+            "observation": observation,
+            "history": history,
+            "prev_grid": [list(row) for row in grid],
+            "prev_levels_completed": state["prev_levels_completed"],
+            "needs_reflection": needs_reflection,
+            "frame_index": frame_index + 1,
+        }
+
+    return observe_node
