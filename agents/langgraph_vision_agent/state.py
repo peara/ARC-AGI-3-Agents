@@ -8,7 +8,6 @@ from arcengine import FrameData, GameAction
 class GameState(TypedDict, total=False):
     """State carried through the LangGraph vision-agent workflow."""
 
-    latest_frame: FrameData
     available_actions: list[int]
     frame_index: int
     observation: str
@@ -26,4 +25,4 @@ class GameState(TypedDict, total=False):
     prev_grid: list[list[int]] | None
     prev_levels_completed: int | None
     expectation: str
-    frames: list[FrameData]  # frame history (NOT including latest_frame; frames[-1] = previous frame)
+    frames: list[FrameData]  # frame history; frames[-1] = current frame, frames[-2] = previous frame (before last action)

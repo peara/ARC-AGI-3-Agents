@@ -62,8 +62,7 @@ class LangGraphVisionAgent(Agent):
 
         state_dict: LangGraphState = {
             **(self._state or {}),
-            "latest_frame": latest_frame,
-            "frames": frames,
+            "frames": [*frames, latest_frame],
             "available_actions": latest_frame.available_actions or [],
             "frame_index": self._frame_index,
             "node_path": [],

@@ -86,7 +86,7 @@ class TestConditionalRouting:
 
         frame = make_frame()
         state = {
-            "latest_frame": frame,
+            "frames": [frame],
             "available_actions": [1, 2, 3],
             "frame_index": 1,
         }
@@ -108,7 +108,7 @@ class TestConditionalRouting:
 
         frame = make_frame()
         state = {
-            "latest_frame": frame,
+            "frames": [frame],
             "available_actions": [1, 2, 3],
             "frame_index": 1,
         }
@@ -141,7 +141,7 @@ class TestStatePassThrough:
         # by providing prev_grid and prev_levels_completed matching current
 
         state = {
-            "latest_frame": frame,
+            "frames": [frame],
             "available_actions": [1, 2, 3],
             "frame_index": 2,
             "mechanics": ["player can move in 4 directions"],

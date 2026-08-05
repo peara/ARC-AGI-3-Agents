@@ -339,8 +339,7 @@ class TestReflectNode:
             "history": [],
             "observation": "ignored text",
             "expectation": "player moves up",
-            "frames": [dummy_frame, prev_frame],
-            "latest_frame": latest_frame,
+            "frames": [dummy_frame, prev_frame, latest_frame],
         }
         reflect(state)
         call_args = services.reflector_call.call_args
@@ -374,7 +373,6 @@ class TestReflectNode:
             "observation": observation,
             "expectation": "player moves up",
             "frames": [],
-            "latest_frame": None,
         }
         reflect(state)
         call_args = services.reflector_call.call_args
@@ -404,8 +402,7 @@ class TestReflectNode:
             "history": [],
             "observation": "text obs",
             "expectation": "player moves left",
-            "frames": [dummy_frame, prev_frame],
-            "latest_frame": latest_frame,
+            "frames": [dummy_frame, prev_frame, latest_frame],
         }
         reflect(state)
         call_args = services.reflector_call.call_args
@@ -695,8 +692,7 @@ class TestReflectNode:
             "observation": "grid",
             "history": ["frame 1: action=1, 5 cells changed"],
             "expectation": "player moves",
-            "frames": [frame1],        # frames[-1] = frame1 (previous), does NOT contain latest
-            "latest_frame": frame2,     # current frame, separate
+            "frames": [frame1, frame2],
         }
         result = reflect(state)
         assert "prev_frame" not in result
@@ -735,8 +731,7 @@ class TestReflectNode:
             "observation": "grid",
             "history": ["frame 4: action=2, 10 cells changed"],
             "expectation": "player moves left",
-            "frames": [dummy_frame, prev_frame],
-            "latest_frame": curr_frame,
+            "frames": [dummy_frame, prev_frame, curr_frame],
         }
         result = reflect(state)
 
@@ -771,8 +766,7 @@ class TestReflectNode:
             "tactical_summary": "",
             "history": [],
             "observation": "text",
-            "frames": [dummy_frame, prev_frame],
-            "latest_frame": latest_frame,
+            "frames": [dummy_frame, prev_frame, latest_frame],
         }
         result = reflect(state)
 
@@ -805,8 +799,7 @@ class TestReflectNode:
             "tactical_summary": "",
             "history": [],
             "observation": "text",
-            "frames": [dummy_frame, prev_frame],
-            "latest_frame": latest_frame,
+            "frames": [dummy_frame, prev_frame, latest_frame],
         }
         result = reflect(state)
         assert "mechanics" in result
@@ -853,8 +846,7 @@ class TestReflectNode:
             "tactical_summary": "",
             "history": [],
             "observation": "text",
-            "frames": [dummy_frame, prev_frame],
-            "latest_frame": latest_frame,
+            "frames": [dummy_frame, prev_frame, latest_frame],
         }
         result = reflect(state)
         # Reflector should still return mechanics despite save failure

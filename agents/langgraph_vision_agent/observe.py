@@ -62,13 +62,15 @@ def make_observe_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
 
     def observe_node(state: dict[str, Any]) -> dict[str, Any]:
         frame_index: int = state.get("frame_index", 0)
-        frame: FrameData = state["latest_frame"]
+        frames_list = state.get("frames", [])
+        if not frames_list:
+            raise ValueError("frames is empty — cannot observe")
+        frame: FrameData = frames_list[-1]
+        prev_frame = frames_list[-2] if len(frames_list) >= 3 else None
         history: list[str] = list(state.get("history", []))
         prev_grid = state.get("prev_grid")
         render_scale = services.config.render_scale
         prev_levels_completed = state.get("prev_levels_completed")
-        frames_list = state.get("frames", [])
-        prev_frame = frames_list[-1] if len(frames_list) >= 2 else None
         expectation = state.get("expectation", "none")
 
         is_first_frame = prev_grid is None

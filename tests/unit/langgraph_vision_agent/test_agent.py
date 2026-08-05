@@ -29,7 +29,7 @@ class TestAgentNode:
 
         # Frame 1
         state1 = {
-            "latest_frame": frame,
+            "frames": [frame],
             "available_actions": [1, 2, 3],
             "frame_index": 1,
         }
@@ -41,7 +41,7 @@ class TestAgentNode:
         # to [] while preserving other state from the previous result.
         state2 = {
             **{k: v for k, v in result1.items() if k != "node_path"},
-            "latest_frame": frame,
+            "frames": [frame],
             "available_actions": [1, 2, 3],
             "frame_index": 2,
             "node_path": [],
@@ -129,6 +129,7 @@ class TestAgentNode:
         agent.choose_action([dummy, frame1], frame2)
 
         assert "frames" in captured_state
-        assert captured_state["frames"][-1] is frame1
+        assert captured_state["frames"][-1] is frame2
+        assert captured_state["frames"][-2] is frame1
         assert captured_state["frames"][0] is dummy
-        assert not any(f is frame2 for f in captured_state["frames"])
+        assert "latest_frame" not in captured_state

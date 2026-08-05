@@ -145,8 +145,8 @@ def make_reflect_node(services: AgentServices):
         # Red-box overlay: when prev_frame is available, re-render both frames
         # with bounding boxes around changed regions
         frames_list = state.get("frames", [])
-        prev_frame = frames_list[-1] if len(frames_list) >= 2 else None
-        latest_frame = state.get("latest_frame")
+        latest_frame = frames_list[-1] if frames_list else None
+        prev_frame = frames_list[-2] if len(frames_list) >= 3 else None
 
         if prev_frame is not None and latest_frame is not None:
             scale = services.config.render_scale

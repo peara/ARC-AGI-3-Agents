@@ -18,7 +18,7 @@ class TestObserveNode:
         observe = make_observe_node(services)
         frame = make_frame()
         state = {
-            "latest_frame": frame,
+            "frames": [frame],
             "frame_index": 0,
             "history": [],
         }
@@ -45,8 +45,8 @@ class TestObserveNode:
         # First frame: no prev_grid → no history line
         frame = make_frame()
         state = {
-            "latest_frame": frame,
-            "frame_index": 1,
+            "frames": [frame],
+            "frame_index": 0,
             "history": [],
         }
         result = observe(state)
@@ -56,12 +56,14 @@ class TestObserveNode:
         # Second frame: prev_grid is set, should produce a history line
         frame2_wrapped = [[1] * 64 for _ in range(64)]
         state2 = {
-            "latest_frame": FrameData(
-                frame=[frame2_wrapped],
-                state=GameState.NOT_FINISHED,
-                available_actions=[1, 2, 3],
-                levels_completed=0,
-            ),
+            "frames": [
+                FrameData(
+                    frame=[frame2_wrapped],
+                    state=GameState.NOT_FINISHED,
+                    available_actions=[1, 2, 3],
+                    levels_completed=0,
+                )
+            ],
             "frame_index": 2,
             "history": [],
             "prev_grid": prev_grid,
@@ -79,7 +81,7 @@ class TestObserveNode:
         # First frame: prev_levels_completed is None → needs_reflection=True
         frame = make_frame(levels_completed=0)
         state = {
-            "latest_frame": frame,
+            "frames": [frame],
             "frame_index": 0,
             "history": [],
         }
@@ -89,7 +91,7 @@ class TestObserveNode:
         # Second frame: level changed from 0→1 → needs_reflection=True
         frame2 = make_frame(levels_completed=1)
         state2 = {
-            "latest_frame": frame2,
+            "frames": [frame2],
             "frame_index": 1,
             "history": [],
             "prev_grid": make_grid(0),
@@ -107,12 +109,11 @@ class TestObserveNode:
         prev_frame = make_frame()
         curr_frame = make_frame()
         state = {
-            "latest_frame": curr_frame,
+            "frames": [dummy_frame, prev_frame, curr_frame],
             "frame_index": 3,
             "history": [],
             "prev_grid": [[0] * 64 for _ in range(64)],
             "prev_levels_completed": 0,
-            "frames": [dummy_frame, prev_frame],
             "last_action_id": 2,
             "expectation": "player moves up",
         }
@@ -137,7 +138,7 @@ class TestObserveNode:
 
         frame = make_frame(levels_completed=2)
         state = {
-            "latest_frame": frame,
+            "frames": [frame],
             "frame_index": 3,
             "history": [],
             "prev_grid": prev_grid,
@@ -154,7 +155,7 @@ class TestObserveNode:
 
         frame = make_frame()
         state = {
-            "latest_frame": frame,
+            "frames": [frame],
             "frame_index": 0,
             "history": [],
         }
@@ -176,12 +177,11 @@ class TestObserveNode:
         prev_frame = make_frame()
         curr_frame = make_frame()
         state = {
-            "latest_frame": curr_frame,
+            "frames": [dummy_frame, prev_frame, curr_frame],
             "frame_index": 4,
             "history": [],
             "prev_grid": [[0] * 64 for _ in range(64)],
             "prev_levels_completed": 0,
-            "frames": [dummy_frame, prev_frame],
             "last_action_id": 3,
             "expectation": "player moves right",
         }
@@ -202,7 +202,7 @@ class TestObserveNode:
         observe = make_observe_node(services)
         frame = make_frame()
         state = {
-            "latest_frame": frame,
+            "frames": [frame],
             "frame_index": 0,
             "history": [],
         }
@@ -219,7 +219,7 @@ class TestObserveNode:
 
         frame = make_frame(levels_completed=2)
         state = {
-            "latest_frame": frame,
+            "frames": [frame],
             "frame_index": 3,
             "history": [],
             "prev_grid": prev_grid,
@@ -233,7 +233,7 @@ class TestObserveNode:
         observe = make_observe_node(services)
         frame = make_frame()
         state = {
-            "latest_frame": frame,
+            "frames": [frame],
             "frame_index": 5,
             "history": [],
         }

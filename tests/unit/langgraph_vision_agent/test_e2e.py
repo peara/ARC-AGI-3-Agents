@@ -38,7 +38,7 @@ class TestE2EWorkflowInvoke:
         for i in range(5):
             frame = make_frame(available_actions=[1, 2, 3, 4, 5])
             input_state: dict = {
-                "latest_frame": frame,
+                "frames": [frame],
                 "available_actions": [1, 2, 3, 4, 5],
                 "frame_index": i + 1,
                 **({} if state is None else state),
@@ -71,7 +71,7 @@ class TestE2EWorkflowInvoke:
         for i in range(3):
             frame = make_frame(available_actions=[1, 2, 3])
             input_state: dict = {
-                "latest_frame": frame,
+                "frames": [frame],
                 "available_actions": [1, 2, 3],
                 "frame_index": i + 1,
             }
@@ -91,7 +91,7 @@ class TestE2EWorkflowInvoke:
 
         frame = make_frame()
         result = graph.invoke({
-            "latest_frame": frame,
+            "frames": [frame],
             "available_actions": [1, 2, 3],
             "frame_index": 1,
         })
@@ -125,7 +125,7 @@ class TestE2EWorkflowInvoke:
         # because prev_grid is None → first frame)
         frame1 = make_frame(available_actions=[1, 2, 3])
         result1 = graph.invoke({
-            "latest_frame": frame1,
+            "frames": [frame1],
             "available_actions": [1, 2, 3],
             "frame_index": 1,
         })
@@ -136,7 +136,7 @@ class TestE2EWorkflowInvoke:
         # Frame 2: carry state forward; reflect should be a no-op now
         frame2 = make_frame(available_actions=[1, 2, 3])
         state2 = dict(result1)
-        state2["latest_frame"] = frame2
+        state2["frames"] = [frame2]
         state2["available_actions"] = [1, 2, 3]
         # Override frame_index to 2 for the second frame
         state2["frame_index"] = 2
@@ -157,7 +157,7 @@ class TestE2EWorkflowInvoke:
 
         frame = make_frame(available_actions=[2, 4])
         result = graph.invoke({
-            "latest_frame": frame,
+            "frames": [frame],
             "available_actions": [2, 4],
             "frame_index": 1,
         })
@@ -188,7 +188,7 @@ class TestE2EWorkflowInvoke:
         # Frame 1: confident → plan → END
         frame = make_frame()
         result1 = graph.invoke({
-            "latest_frame": frame,
+            "frames": [frame],
             "available_actions": [1, 2, 3],
             "frame_index": 1,
         })
@@ -196,7 +196,7 @@ class TestE2EWorkflowInvoke:
 
         # Frame 2: uncertain → plan → experiment → END
         result2 = graph.invoke({
-            "latest_frame": frame,
+            "frames": [frame],
             "available_actions": [1, 2, 3],
             "frame_index": 2,
         })
@@ -265,7 +265,7 @@ class TestE2EGraphStructure:
 
         frame = make_frame()
         result = graph.invoke({
-            "latest_frame": frame,
+            "frames": [frame],
             "available_actions": [1, 2, 3],
             "frame_index": 1,
         })
