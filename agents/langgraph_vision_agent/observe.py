@@ -131,7 +131,6 @@ def make_observe_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
             "prev_grid": [list(row) for row in grid],
             "prev_levels_completed": state["prev_levels_completed"],
             "needs_reflection": needs_reflection,
-            "prev_frame": frame,
             "frame_index": frame_index + 1,
         }
 

@@ -663,7 +663,8 @@ class TestReflectNode:
             "expectation": "none",
         }
         result3 = reflect(state3)
-        assert result3 == {"needs_reflection": False}
+        assert result3.get("needs_reflection") is False
+        assert "mechanics" not in result3
 
     def test_reflect_curation_with_redbox(self, mock_services, make_frame):
         """When prev_frame is available, prompt includes current list AND red-box overlay,

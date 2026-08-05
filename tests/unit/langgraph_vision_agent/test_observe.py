@@ -205,7 +205,7 @@ class TestObserveNode:
             "history": [],
         }
         result = observe(state)
-        assert result["prev_frame"] is frame
+        assert "prev_frame" not in result
 
     def test_observe_no_reflection_when_no_level_change(
         self, make_frame, make_grid, mock_services

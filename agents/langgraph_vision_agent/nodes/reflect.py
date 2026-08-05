@@ -108,10 +108,12 @@ def make_reflect_node(services: AgentServices):
 
     def reflect_node(state: dict[str, Any]) -> dict[str, Any]:
         frame_index: int = state.get("frame_index", 0)
+        latest_frame = state.get("latest_frame")
 
-        # No-op when reflection not requested
+        # No-op when reflection not requested — but still advance prev_frame
+        # so the next observe sees the correct previous frame.
         if not state.get("needs_reflection", False):
-            return {}
+            return {"prev_frame": latest_frame} if latest_frame is not None else {}
 
         # Build prompt
         prev_mechanics: list[str] = state.get("mechanics", [])
@@ -204,7 +206,7 @@ def make_reflect_node(services: AgentServices):
                 frame_index,
             )
             log_node(frame_index, "reflect", mechanics_changed=False, tactical_added=0, tactical_dropped=0)
-            return {"needs_reflection": False}
+            return {"needs_reflection": False, "prev_frame": latest_frame}
 
         if result is None:
             logger.warning(
@@ -213,7 +215,7 @@ def make_reflect_node(services: AgentServices):
                 attempts,
             )
             log_node(frame_index, "reflect", retry_attempts=attempts, parse_failed=True)
-            return {"needs_reflection": False}
+            return {"needs_reflection": False, "prev_frame": latest_frame}
 
         new_mechanics, new_mechanics_summary, new_tactical, new_tactical_summary = result
 
@@ -249,6 +251,7 @@ def make_reflect_node(services: AgentServices):
             "tactical": new_tactical,
             "tactical_summary": new_tactical_summary,
             "needs_reflection": False,
+            "prev_frame": latest_frame,
         }
 
     return reflect_node
