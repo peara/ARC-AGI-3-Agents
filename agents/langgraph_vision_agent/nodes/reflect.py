@@ -7,6 +7,7 @@ Uses call_with_retry with curated-list response format.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from typing import Any
 
@@ -178,6 +179,15 @@ def make_reflect_node(services: AgentServices):
                     "TACTICAL_SUMMARY: ..."
                 )},
             ]
+
+            # Save reflector images for visual debugging
+            if services.images_dir is not None:
+                try:
+                    os.makedirs(services.images_dir, exist_ok=True)
+                    prev_boxed.save(os.path.join(services.images_dir, f"frame-{frame_index}-reflector-prev.png"))
+                    curr_boxed.save(os.path.join(services.images_dir, f"frame-{frame_index}-reflector-curr.png"))
+                except Exception as e:
+                    logger.warning("frame=%s failed to save reflector images: %s", frame_index, e)
 
         system_message = {"role": "system", "content": REFLECTOR_SYSTEM_PROMPT}
 
