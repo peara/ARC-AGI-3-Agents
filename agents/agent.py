@@ -277,7 +277,22 @@ class Agent(ABC):
     def choose_action(
         self, frames: list[FrameData], latest_frame: FrameData
     ) -> GameAction:
-        """Choose which action the Agent should take, fill in any arguments, and return it."""
+        """Choose which action the Agent should take, fill in any arguments, and return it.
+
+        Args:
+            frames: Frame history. ``frames[-1]`` is the current game state
+                (the result of the previous action, appended by ``main()`` via
+                ``append_frame``). At iteration 0, ``frames`` is
+                ``[FrameData(levels_completed=0)]`` — an empty placeholder with
+                no grid; ``latest_frame`` is the initial observation.
+            latest_frame: Current observation from ``arc_env.observation_space``.
+                From iteration 1+, this is the same state as ``frames[-1]``.
+
+        Subclasses should treat ``frames[-1]`` as the current frame and
+        ``frames[-2]`` as the frame before the last action. ``latest_frame``
+        is provided for convenience but is redundant with ``frames[-1]``
+        except at iteration 0.
+        """
         raise NotImplementedError
 
 
