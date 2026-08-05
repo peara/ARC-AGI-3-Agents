@@ -75,6 +75,7 @@ def _mock_services(
     return AgentServices(
         llm_client=MagicMock(),
         llm_logger=None,
+        images_dir=None,
         planner_call=_make_call(planner_return),
         reflector_call=_make_call(reflector_return),
         experimenter_call=_make_call(experimenter_return),

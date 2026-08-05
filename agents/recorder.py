@@ -7,6 +7,7 @@ from typing import Any, Optional
 RECORDING_SUFFIX = ".recording.jsonl"
 LLM_LOG_SUFFIX = ".llm.jsonl"
 LOG_SUFFIX = ".logs.log"
+IMAGES_DIR_SUFFIX = ".images"
 
 
 def get_recordings_dir() -> str:
@@ -85,6 +86,17 @@ class Recorder:
         if self.filename.endswith(RECORDING_SUFFIX):
             return self.filename[: -len(RECORDING_SUFFIX)] + LOG_SUFFIX
         return self.filename + LOG_SUFFIX
+
+    def images_dir_path(self) -> str:
+        """Path to the sibling images directory for this recording.
+
+        Mirrors :meth:`llm_log_path` but for the per-recording ``.images``
+        directory used by the reflector for visual logging. Replaces the
+        ``.recording.jsonl`` suffix with ``.images``.
+        """
+        if self.filename.endswith(RECORDING_SUFFIX):
+            return self.filename[: -len(RECORDING_SUFFIX)] + IMAGES_DIR_SUFFIX
+        return self.filename + IMAGES_DIR_SUFFIX
 
     @classmethod
     def list(cls) -> list[str]:

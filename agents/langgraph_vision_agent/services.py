@@ -18,6 +18,7 @@ class AgentServices:
 
     llm_client: LLMClient
     llm_logger: LlmCallLogger | None
+    images_dir: str | None
     planner_call: Callable
     reflector_call: Callable
     experimenter_call: Callable
@@ -58,6 +59,8 @@ def create_services(
             frame_indexer=frame_indexer,
         )
 
+    images_dir = recorder.images_dir_path() if recorder is not None else None
+
     planner_call = _make_callable(
         llm_client,
         llm_logger,
@@ -83,6 +86,7 @@ def create_services(
     return AgentServices(
         llm_client=llm_client,
         llm_logger=llm_logger,
+        images_dir=images_dir,
         planner_call=planner_call,
         reflector_call=reflector_call,
         experimenter_call=experimenter_call,
