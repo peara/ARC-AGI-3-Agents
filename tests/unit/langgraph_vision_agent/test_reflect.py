@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from unittest.mock import MagicMock
 
 import pytest
@@ -748,3 +749,114 @@ class TestReflectNode:
         assert messages[1]["role"] == "user"
         user_content = messages[1]["content"]
         assert isinstance(user_content, list)
+
+    def test_reflect_saves_images_when_running(self, mock_services, make_frame, tmp_path):
+        """When images_dir is set and reflector runs, both PNG images are saved."""
+        services = mock_services(reflector_return=MINIMAL_RESPONSE)
+        images_dir = str(tmp_path / "images")
+        services.images_dir = images_dir
+        reflect = make_reflect_node(services)
+
+        dummy_frame = make_frame()
+        prev_frame = make_frame()
+        latest_frame = make_frame()
+        latest_frame.frame[0][10][10] = 1  # make grids different
+
+        state = {
+            "frame_index": 3,
+            "needs_reflection": True,
+            "mechanics": [],
+            "mechanics_summary": "",
+            "tactical": [],
+            "tactical_summary": "",
+            "history": [],
+            "observation": "text",
+            "frames": [dummy_frame, prev_frame],
+            "latest_frame": latest_frame,
+        }
+        result = reflect(state)
+
+        # Reflector should still return mechanics
+        assert "mechanics" in result
+        # Both images should exist
+        prev_path = os.path.join(images_dir, "frame-3-reflector-prev.png")
+        curr_path = os.path.join(images_dir, "frame-3-reflector-curr.png")
+        assert os.path.isfile(prev_path), f"Expected {prev_path} to exist"
+        assert os.path.isfile(curr_path), f"Expected {curr_path} to exist"
+
+    def test_reflect_does_not_save_when_images_dir_is_none(self, mock_services, make_frame, tmp_path):
+        """When images_dir is None, no images directory or files are created."""
+        services = mock_services(reflector_return=MINIMAL_RESPONSE)
+        # images_dir is None by default from mock_services
+        assert services.images_dir is None
+        reflect = make_reflect_node(services)
+
+        dummy_frame = make_frame()
+        prev_frame = make_frame()
+        latest_frame = make_frame()
+        latest_frame.frame[0][10][10] = 1
+
+        state = {
+            "frame_index": 3,
+            "needs_reflection": True,
+            "mechanics": [],
+            "mechanics_summary": "",
+            "tactical": [],
+            "tactical_summary": "",
+            "history": [],
+            "observation": "text",
+            "frames": [dummy_frame, prev_frame],
+            "latest_frame": latest_frame,
+        }
+        result = reflect(state)
+        assert "mechanics" in result
+        # No images directory should be created under tmp_path
+        images_dir = tmp_path / "images"
+        assert not images_dir.exists()
+
+    def test_reflect_does_not_save_on_noop(self, mock_services, tmp_path):
+        """No-op reflect (needs_reflection=False) does not save images."""
+        services = mock_services(reflector_return=MINIMAL_RESPONSE)
+        images_dir = str(tmp_path / "images")
+        services.images_dir = images_dir
+        reflect = make_reflect_node(services)
+
+        state = {
+            "frame_index": 1,
+            "needs_reflection": False,
+            "mechanics": ["old"],
+            "tactical": ["old tactic"],
+        }
+        result = reflect(state)
+        assert result == {}
+        # No images directory created
+        assert not os.path.exists(images_dir)
+
+    def test_reflect_continues_on_save_failure(self, mock_services, make_frame):
+        """Reflector returns mechanics even when image saving fails."""
+        services = mock_services(reflector_return=MINIMAL_RESPONSE)
+        # Set images_dir to an impossible path to force save failure
+        services.images_dir = "/nonexistent/path/that/cannot/be/created"
+        reflect = make_reflect_node(services)
+
+        dummy_frame = make_frame()
+        prev_frame = make_frame()
+        latest_frame = make_frame()
+        latest_frame.frame[0][10][10] = 1
+
+        state = {
+            "frame_index": 3,
+            "needs_reflection": True,
+            "mechanics": [],
+            "mechanics_summary": "",
+            "tactical": [],
+            "tactical_summary": "",
+            "history": [],
+            "observation": "text",
+            "frames": [dummy_frame, prev_frame],
+            "latest_frame": latest_frame,
+        }
+        result = reflect(state)
+        # Reflector should still return mechanics despite save failure
+        assert "mechanics" in result
+        assert result["needs_reflection"] is False

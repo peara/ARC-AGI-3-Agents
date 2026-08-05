@@ -301,3 +301,12 @@ class TestRecorderErrorHandling:
 
         events = recorder.get()
         assert len(events) == 5
+
+
+@pytest.mark.unit
+class TestRecorderImagesDir:
+    def test_images_dir_path_returns_directory_path(self, temp_recordings_dir):
+        recorder = Recorder(prefix="test-images")
+        path = recorder.images_dir_path()
+        assert path.endswith(".images")
+        assert RECORDING_SUFFIX not in path
