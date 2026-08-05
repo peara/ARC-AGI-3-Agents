@@ -107,10 +107,10 @@ class TestE2EWorkflowInvoke:
         """Verify that state fields (mechanics, tactical, history) accumulate
         when passed between frames."""
         reflector_response = (
-            "NEW_MECHANICS:\n"
+            "MECHANICS:\n"
             "- Player moves in 4 directions.\n\n"
             "MECHANICS_SUMMARY: Player moves in 4 directions.\n\n"
-            "NEW_TACTICAL:\n"
+            "TACTICAL:\n"
             "- Avoid walls\n"
             "- Push boxes\n\n"
             "TACTICAL_SUMMARY: Avoid walls and push boxes."

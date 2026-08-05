@@ -25,7 +25,7 @@ from ..services import AgentServices, call_with_retry
 logger = logging.getLogger(__name__)
 
 _SECTION_RE = re.compile(
-    r"(?:^|\n)(?:\*{0,2}\s*)?(NEW_MECHANICS|MECHANICS_SUMMARY|NEW_TACTICAL|TACTICAL_SUMMARY)\s*:\s*\*{0,2}",
+    r"(?:^|\n)(?:\*{0,2}\s*)?(MECHANICS|MECHANICS_SUMMARY|TACTICAL|TACTICAL_SUMMARY)\s*:\s*\*{0,2}",
     re.IGNORECASE,
 )
 
@@ -37,13 +37,13 @@ def _parse_response(
 
     Expected format::
 
-        NEW_MECHANICS:
+        MECHANICS:
         - mechanic 1
         - mechanic 2
 
         MECHANICS_SUMMARY: free text summary
 
-        NEW_TACTICAL:
+        TACTICAL:
         - tactical observation 1
         - tactical observation 2
 
@@ -54,8 +54,6 @@ def _parse_response(
     """
     parts = re.split(_SECTION_RE, text)
 
-    # parts: [preamble, "NEW_MECHANICS", body, "MECHANICS_SUMMARY", body,
-    #         "NEW_TACTICAL", body, "TACTICAL_SUMMARY", body]
     sections: dict[str, str] = {}
     i = 1  # skip preamble
     while i + 1 < len(parts):
@@ -64,13 +62,13 @@ def _parse_response(
         sections[label] = body
         i += 2
 
-    required = {"NEW_MECHANICS", "MECHANICS_SUMMARY", "NEW_TACTICAL", "TACTICAL_SUMMARY"}
+    required = {"MECHANICS", "MECHANICS_SUMMARY", "TACTICAL", "TACTICAL_SUMMARY"}
     if not required.issubset(sections):
         return None
 
-    mechanics_raw = sections.get("NEW_MECHANICS", "")
+    mechanics_raw = sections.get("MECHANICS", "")
     mechanics_summary = sections.get("MECHANICS_SUMMARY", "")
-    tactical_raw = sections.get("NEW_TACTICAL", "")
+    tactical_raw = sections.get("TACTICAL", "")
     tactical_summary = sections.get("TACTICAL_SUMMARY", "")
 
     if not mechanics_raw or not mechanics_summary or not tactical_raw or not tactical_summary:
@@ -128,18 +126,23 @@ def make_reflect_node(services: AgentServices):
         tactical_bullets = "\n".join(f"- {t}" for t in prev_tactical) if prev_tactical else "(none yet)"
 
         text_part = (
-            f"Current mechanics:\n{mechanics_bullets}\n\n"
-            f"Current mechanics summary: {mechanics_summary}\n\n"
-            f"Current tactical:\n{tactical_bullets}\n\n"
-            f"Current tactical summary: {tactical_summary}\n\n"
-            f"Last action result: {last_action_result}\n"
+            f"## Current mechanics (keep, modify, or drop — max 10)\n"
+            f"{mechanics_bullets}\n\n"
+            f"## Current mechanics summary\n{mechanics_summary}\n\n"
+            f"## Current tactical (keep, modify, or drop — max 5)\n"
+            f"{tactical_bullets}\n\n"
+            f"## Current tactical summary\n{tactical_summary}\n\n"
+            f"## This transition\n"
+            f"Action taken: {last_action_result}\n"
             f"What you expected to happen: {expectation}\n\n"
-            "Remove mechanics that are wrong or no longer relevant. Add new discoveries.\n"
-            "Output the curated list and a summary.\n\n"
-            "NEW_MECHANICS:\n- ...\n\n"
-            "MECHANICS_SUMMARY: ...\n\n"
-            "NEW_TACTICAL:\n- ...\n\n"
-            "TACTICAL_SUMMARY: ..."
+            f"## Your task\n"
+            f"Review the PREVIOUS and CURRENT frames above. "
+            f"Decide which existing mechanics to KEEP, which to DROP, and what NEW ones to ADD.\n"
+            f"Then do the same for tactical observations.\n\n"
+            f"MECHANICS:\n- ...\n\n"
+            f"MECHANICS_SUMMARY: ...\n\n"
+            f"TACTICAL:\n- ...\n\n"
+            f"TACTICAL_SUMMARY: ..."
         )
 
         # Red-box overlay: when prev_frame is available, re-render both frames
@@ -163,20 +166,31 @@ def make_reflect_node(services: AgentServices):
             )
             redbox_blocks = [
                 make_image_block(prev_b64),
-                {"type": "text", "text": f"Frame {frame_index - 1} (before action)"},
+                {"type": "text", "text": "PREVIOUS frame (before action)"},
                 make_image_block(curr_b64),
-                {"type": "text", "text": f"Frame {frame_index} (after action)"},
+                {"type": "text", "text": "CURRENT frame (after action)"},
                 {"type": "text", "text": (
                     f"\n{cells_changed} cells changed between these two frames.\n"
                     "RED BOXES are drawn around regions where pixels changed — "
                     "the grid colors inside the boxes are original, only the outline is red.\n"
                     "Focus on the objects inside the red boxes. What moved? In which direction?\n\n"
-                    "Remove mechanics that are wrong or no longer relevant. Add new discoveries.\n"
-                    "Output the curated list and a summary.\n\n"
-                    "NEW_MECHANICS:\n- ...\n\n"
-                    "MECHANICS_SUMMARY: ...\n\n"
-                    "NEW_TACTICAL:\n- ...\n\n"
-                    "TACTICAL_SUMMARY: ..."
+                    f"## Current mechanics (keep, modify, or drop — max 10)\n"
+                    f"{mechanics_bullets}\n\n"
+                    f"## Current mechanics summary\n{mechanics_summary}\n\n"
+                    f"## Current tactical (keep, modify, or drop — max 5)\n"
+                    f"{tactical_bullets}\n\n"
+                    f"## Current tactical summary\n{tactical_summary}\n\n"
+                    f"## This transition\n"
+                    f"Action taken: {last_action_result}\n"
+                    f"What you expected to happen: {expectation}\n\n"
+                    f"## Your task\n"
+                    f"Review the PREVIOUS and CURRENT frames above. "
+                    f"Decide which existing mechanics to KEEP, which to DROP, and what NEW ones to ADD.\n"
+                    f"Then do the same for tactical observations.\n\n"
+                    f"MECHANICS:\n- ...\n\n"
+                    f"MECHANICS_SUMMARY: ...\n\n"
+                    f"TACTICAL:\n- ...\n\n"
+                    f"TACTICAL_SUMMARY: ..."
                 )},
             ]
 
@@ -207,7 +221,7 @@ def make_reflect_node(services: AgentServices):
                 services.reflector_call,
                 messages,
                 _parse_response,
-                nudge_prefix="Expected NEW_MECHANICS:, MECHANICS_SUMMARY:, NEW_TACTICAL:, TACTICAL_SUMMARY: sections",
+                nudge_prefix="Expected MECHANICS:, MECHANICS_SUMMARY:, TACTICAL:, TACTICAL_SUMMARY: sections",
             )
         except Exception:
             logger.warning(

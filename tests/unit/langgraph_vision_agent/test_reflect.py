@@ -17,21 +17,21 @@ from agents.langgraph_vision_agent.nodes.reflect import (
 # -- Helpers --
 
 NEW_FORMAT_RESPONSE = (
-    "NEW_MECHANICS:\n"
+    "MECHANICS:\n"
     "- Player can move in 4 directions.\n"
     "- Boxes can be pushed.\n\n"
     "MECHANICS_SUMMARY: The game is a sokoban-style puzzle with movement and pushing.\n\n"
-    "NEW_TACTICAL:\n"
+    "TACTICAL:\n"
     "- Push boxes onto targets\n"
     "- Avoid dead ends\n\n"
     "TACTICAL_SUMMARY: Push boxes efficiently and avoid getting stuck."
 )
 
 MINIMAL_RESPONSE = (
-    "NEW_MECHANICS:\n"
+    "MECHANICS:\n"
     "- test mechanic\n\n"
     "MECHANICS_SUMMARY: test summary\n\n"
-    "NEW_TACTICAL:\n"
+    "TACTICAL:\n"
     "- item1\n\n"
     "TACTICAL_SUMMARY: tactical summary"
 )
@@ -59,7 +59,7 @@ class TestReflectNode:
         reflect = make_reflect_node(services)
         observation = [
             {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
-            {"type": "text", "text": "Frame 5"},
+            {            "type": "text", "text": "PREVIOUS frame (before action)"},
         ]
         state = {
             "frame_index": 1,
@@ -211,10 +211,10 @@ class TestReflectNode:
     def test_parse_response_missing_section_returns_none(self):
         """If any section is missing, _parse_response returns None."""
         text = (
-            "NEW_MECHANICS:\n"
+            "MECHANICS:\n"
             "- mechanic\n\n"
             "MECHANICS_SUMMARY: summary\n\n"
-            "NEW_TACTICAL:\n"
+            "TACTICAL:\n"
             "- tactical\n"
             # Missing TACTICAL_SUMMARY
         )
@@ -223,10 +223,10 @@ class TestReflectNode:
     def test_parse_response_empty_section_returns_none(self):
         """If any section is empty, _parse_response returns None."""
         text = (
-            "NEW_MECHANICS:\n"
+            "MECHANICS:\n"
             "- mechanic\n\n"
             "MECHANICS_SUMMARY: summary\n\n"
-            "NEW_TACTICAL:\n"
+            "TACTICAL:\n"
             # Empty tactical list
             "\n\n"
             "TACTICAL_SUMMARY: summary"
@@ -240,9 +240,9 @@ class TestReflectNode:
     def test_reflect_caps_tactical_list(self, mock_services):
         long_tactical = "\n".join(f"- item{i}" for i in range(20))
         reflector_response = (
-            f"NEW_MECHANICS:\n- mechanic1\n\n"
+            f"MECHANICS:\n- mechanic1\n\n"
             f"MECHANICS_SUMMARY: summary\n\n"
-            f"NEW_TACTICAL:\n{long_tactical}\n\n"
+            f"TACTICAL:\n{long_tactical}\n\n"
             f"TACTICAL_SUMMARY: tactical summary"
         )
         services = mock_services(reflector_return=reflector_response)
@@ -264,9 +264,9 @@ class TestReflectNode:
     def test_reflect_caps_mechanics_list(self, mock_services):
         long_mechanics = "\n".join(f"- mechanic{i}" for i in range(30))
         reflector_response = (
-            f"NEW_MECHANICS:\n{long_mechanics}\n\n"
+            f"MECHANICS:\n{long_mechanics}\n\n"
             f"MECHANICS_SUMMARY: summary\n\n"
-            f"NEW_TACTICAL:\n- tactical1\n\n"
+            f"TACTICAL:\n- tactical1\n\n"
             f"TACTICAL_SUMMARY: tactical summary"
         )
         services = mock_services(reflector_return=reflector_response)
@@ -290,10 +290,10 @@ class TestReflectNode:
     def test_parse_response_markdown_bold_headers(self):
         """Bug 4 regression: **New_Mechanics:** and **New_Tactical:** headers are parsed."""
         text = (
-            "**NEW_MECHANICS:**\n"
+            "**MECHANICS:**\n"
             "- Player moves in 4 directions.\n\n"
             "**MECHANICS_SUMMARY:** Movement puzzle.\n\n"
-            "**NEW_TACTICAL:**\n"
+            "**TACTICAL:**\n"
             "- Push boxes\n"
             "- Avoid walls\n\n"
             "**TACTICAL_SUMMARY:** Push efficiently."
@@ -308,10 +308,10 @@ class TestReflectNode:
     def test_parse_response_mixed_bold_and_plain_headers(self):
         """Bug 4 regression: mixed bold/plain headers still parse correctly."""
         text = (
-            "NEW_MECHANICS:\n"
+            "MECHANICS:\n"
             "- Plain header mechanic.\n\n"
             "MECHANICS_SUMMARY: Plain summary.\n\n"
-            "**NEW_TACTICAL:**\n"
+            "**TACTICAL:**\n"
             "- Bold tactical\n\n"
             "**TACTICAL_SUMMARY:** Bold summary."
         )
@@ -360,7 +360,7 @@ class TestReflectNode:
         reflect = make_reflect_node(services)
         observation = [
             {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
-            {"type": "text", "text": "Frame 7"},
+            {"type": "text", "text": "CURRENT frame (after action)"},
         ]
         state = {
             "frame_index": 1,
@@ -498,31 +498,31 @@ class TestReflectNode:
     def test_reflect_curation_accumulates_across_frames(self, mock_services):
         """Reflector curates mechanics list across frames: add, remove, add."""
         response1 = (
-            "NEW_MECHANICS:\n"
+            "MECHANICS:\n"
             "- Player moves in 4 directions.\n"
             "- Walls block movement.\n\n"
             "MECHANICS_SUMMARY: Player moves and walls block.\n\n"
-            "NEW_TACTICAL:\n"
+            "TACTICAL:\n"
             "- Avoid walls\n\n"
             "TACTICAL_SUMMARY: Avoid walls."
         )
         response2 = (
-            "NEW_MECHANICS:\n"
+            "MECHANICS:\n"
             "- Walls block movement.\n"
             "- Boxes can be pushed.\n\n"
             "MECHANICS_SUMMARY: Walls block and boxes can be pushed.\n\n"
-            "NEW_TACTICAL:\n"
+            "TACTICAL:\n"
             "- Avoid walls\n"
             "- Push boxes toward targets\n\n"
             "TACTICAL_SUMMARY: Avoid walls and push boxes."
         )
         response3 = (
-            "NEW_MECHANICS:\n"
+            "MECHANICS:\n"
             "- Walls block movement.\n"
             "- Boxes can be pushed.\n"
             "- Targets light up when boxes placed.\n\n"
             "MECHANICS_SUMMARY: Walls, boxes, and targets.\n\n"
-            "NEW_TACTICAL:\n"
+            "TACTICAL:\n"
             "- Avoid walls\n"
             "- Push boxes toward targets\n"
             "- Watch for target indicators\n\n"
@@ -592,19 +592,19 @@ class TestReflectNode:
     def test_reflect_curation_survives_llm_failure(self, mock_services):
         """When LLM fails on frame 3, existing list + summary preserved."""
         response1 = (
-            "NEW_MECHANICS:\n"
+            "MECHANICS:\n"
             "- Player moves.\n\n"
             "MECHANICS_SUMMARY: Player moves.\n\n"
-            "NEW_TACTICAL:\n"
+            "TACTICAL:\n"
             "- Avoid walls\n\n"
             "TACTICAL_SUMMARY: Avoid walls."
         )
         response2 = (
-            "NEW_MECHANICS:\n"
+            "MECHANICS:\n"
             "- Player moves.\n"
             "- Boxes pushable.\n\n"
             "MECHANICS_SUMMARY: Player moves and boxes pushable.\n\n"
-            "NEW_TACTICAL:\n"
+            "TACTICAL:\n"
             "- Avoid walls\n"
             "- Push boxes\n\n"
             "TACTICAL_SUMMARY: Avoid walls and push boxes."
@@ -671,10 +671,10 @@ class TestReflectNode:
     def test_reflect_success_does_not_return_prev_frame(self, mock_services, make_frame):
         """Reflector success path must not return prev_frame — agent.py owns frames."""
         response = (
-            "NEW_MECHANICS:\n"
+            "MECHANICS:\n"
             "- Player moves.\n\n"
             "MECHANICS_SUMMARY: Player moves.\n\n"
-            "NEW_TACTICAL:\n"
+            "TACTICAL:\n"
             "- Avoid walls\n\n"
             "TACTICAL_SUMMARY: Avoid walls."
         )
@@ -703,10 +703,10 @@ class TestReflectNode:
         """When frames[-1] is available, prompt includes current list AND red-box overlay,
         and system prompt is messages[0]."""
         response = (
-            "NEW_MECHANICS:\n"
+            "MECHANICS:\n"
             "- Objects move in 4 directions.\n\n"
             "MECHANICS_SUMMARY: Objects move in 4 directions.\n\n"
-            "NEW_TACTICAL:\n"
+            "TACTICAL:\n"
             "- Watch for collisions\n\n"
             "TACTICAL_SUMMARY: Watch for collisions."
         )
