@@ -51,6 +51,7 @@ class TestReflectNode:
         }
         result = reflect(state)
         assert result == {}
+        assert "prev_frame" not in result
 
     def test_reflect_builds_multimodal_messages(self, mock_services):
         services = mock_services(reflector_return=MINIMAL_RESPONSE)
@@ -323,6 +324,7 @@ class TestReflectNode:
         """When prev_frame and latest_frame are set, red-box images are sent."""
         services = mock_services(reflector_return=MINIMAL_RESPONSE)
         reflect = make_reflect_node(services)
+        dummy_frame = make_frame()
         prev_frame = make_frame()
         latest_frame = make_frame()
         latest_frame.frame[0][10][10] = 1
@@ -336,7 +338,7 @@ class TestReflectNode:
             "history": [],
             "observation": "ignored text",
             "expectation": "player moves up",
-            "prev_frame": prev_frame,
+            "frames": [dummy_frame, prev_frame],
             "latest_frame": latest_frame,
         }
         reflect(state)
@@ -370,7 +372,7 @@ class TestReflectNode:
             "history": [],
             "observation": observation,
             "expectation": "player moves up",
-            "prev_frame": None,
+            "frames": [],
             "latest_frame": None,
         }
         reflect(state)
@@ -387,6 +389,7 @@ class TestReflectNode:
         """When both frames are available, the prompt explains the red boxes."""
         services = mock_services(reflector_return=MINIMAL_RESPONSE)
         reflect = make_reflect_node(services)
+        dummy_frame = make_frame()
         prev_frame = make_frame()
         latest_frame = make_frame()
         latest_frame.frame[0][20][20] = 2
@@ -400,7 +403,7 @@ class TestReflectNode:
             "history": [],
             "observation": "text obs",
             "expectation": "player moves left",
-            "prev_frame": prev_frame,
+            "frames": [dummy_frame, prev_frame],
             "latest_frame": latest_frame,
         }
         reflect(state)
@@ -665,9 +668,42 @@ class TestReflectNode:
         result3 = reflect(state3)
         assert result3.get("needs_reflection") is False
         assert "mechanics" not in result3
+        assert "prev_frame" not in result3
+
+    def test_reflect_success_does_not_return_prev_frame(self, mock_services, make_frame):
+        """Reflector success path must not return prev_frame — agent.py owns frames."""
+        response = (
+            "NEW_MECHANICS:\n"
+            "- Player moves.\n\n"
+            "MECHANICS_SUMMARY: Player moves.\n\n"
+            "NEW_TACTICAL:\n"
+            "- Avoid walls\n\n"
+            "TACTICAL_SUMMARY: Avoid walls."
+        )
+        services = mock_services(reflector_return=response)
+        reflect = make_reflect_node(services)
+        frame1 = make_frame()
+        frame2 = make_frame()
+        state = {
+            "frame_index": 2,
+            "needs_reflection": True,
+            "mechanics": [],
+            "tactical": [],
+            "mechanics_summary": "",
+            "tactical_summary": "",
+            "observation": "grid",
+            "history": ["frame 1: action=1, 5 cells changed"],
+            "expectation": "player moves",
+            "frames": [frame1],        # frames[-1] = frame1 (previous), does NOT contain latest
+            "latest_frame": frame2,     # current frame, separate
+        }
+        result = reflect(state)
+        assert "prev_frame" not in result
+        assert "frames" not in result
+        assert result["mechanics"] == ["Player moves."]
 
     def test_reflect_curation_with_redbox(self, mock_services, make_frame):
-        """When prev_frame is available, prompt includes current list AND red-box overlay,
+        """When frames[-1] is available, prompt includes current list AND red-box overlay,
         and system prompt is messages[0]."""
         response = (
             "NEW_MECHANICS:\n"
@@ -680,6 +716,7 @@ class TestReflectNode:
         services = mock_services(reflector_return=response)
         reflect = make_reflect_node(services)
 
+        dummy_frame = make_frame()
         prev_frame = make_frame()
         curr_frame = make_frame()
         for r in range(64):
@@ -697,7 +734,7 @@ class TestReflectNode:
             "observation": "grid",
             "history": ["frame 4: action=2, 10 cells changed"],
             "expectation": "player moves left",
-            "prev_frame": prev_frame,
+            "frames": [dummy_frame, prev_frame],
             "latest_frame": curr_frame,
         }
         result = reflect(state)

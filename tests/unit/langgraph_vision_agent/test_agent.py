@@ -3,7 +3,9 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
+from arcengine import GameAction
 
+from agents.langgraph_vision_agent.agent import LangGraphVisionAgent
 from agents.langgraph_vision_agent.config import VisionAgentConfig
 from agents.langgraph_vision_agent.graph import build_workflow
 
@@ -50,10 +52,6 @@ class TestAgentNode:
 
     def test_agent_sets_action_reasoning(self, make_frame, mock_services):
         """Bug 2 regression: action.reasoning must be set with correct keys."""
-        from arcengine import GameAction
-
-        from agents.langgraph_vision_agent.agent import LangGraphVisionAgent
-
         services = mock_services(planner_return="ACTION 2 because probing")
         agent = LangGraphVisionAgent.__new__(LangGraphVisionAgent)
         agent._config = services.config
@@ -86,9 +84,7 @@ class TestAgentNode:
 
     def test_agent_reasoning_not_set_on_reset_fallback(self, make_frame):
         """Bug 3 regression: RESET singleton must not carry reasoning."""
-        from arcengine import FrameData, GameAction, GameState
-
-        from agents.langgraph_vision_agent.agent import LangGraphVisionAgent
+        from arcengine import FrameData, GameState
 
         agent = LangGraphVisionAgent.__new__(LangGraphVisionAgent)
         agent._config = VisionAgentConfig()
@@ -103,3 +99,36 @@ class TestAgentNode:
         action = agent.choose_action([], frame)
         assert action == GameAction.RESET
         assert getattr(action, "reasoning", None) is None or action.reasoning == {}
+
+    def test_agent_sets_frames_in_state(self, make_frame, mock_services):
+        """agent.py:choose_action passes frames straight through (NOT containing latest_frame)."""
+        from arcengine import GameState
+
+        services = mock_services()
+        agent = LangGraphVisionAgent.__new__(LangGraphVisionAgent)
+        agent._services = services
+        agent._config = services.config
+        agent._frame_index = 0
+        agent._state = None
+        agent.MAX_ACTIONS = 60
+        agent.action_counter = 0
+
+        captured_state = {}
+        mock_workflow = MagicMock()
+        mock_workflow.invoke = MagicMock(side_effect=lambda sd: (
+            captured_state.update(sd),
+            {"action": GameAction.from_id(1), "node_path": ["observe", "reflect", "plan"]},
+        )[1])
+        agent._workflow = mock_workflow
+
+        dummy = make_frame()
+        frame1 = make_frame(available_actions=[1, 2, 3])
+        frame2 = make_frame(available_actions=[1, 2, 3])
+        frame2.state = GameState.NOT_FINISHED
+
+        agent.choose_action([dummy, frame1], frame2)
+
+        assert "frames" in captured_state
+        assert captured_state["frames"][-1] is frame1
+        assert captured_state["frames"][0] is dummy
+        assert not any(f is frame2 for f in captured_state["frames"])

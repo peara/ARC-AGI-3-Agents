@@ -26,4 +26,4 @@ class GameState(TypedDict, total=False):
     prev_grid: list[list[int]] | None
     prev_levels_completed: int | None
     expectation: str
-    prev_frame: FrameData | None
+    frames: list[FrameData]  # frame history (NOT including latest_frame; frames[-1] = previous frame)

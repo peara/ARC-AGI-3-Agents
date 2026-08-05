@@ -67,7 +67,8 @@ def make_observe_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
         prev_grid = state.get("prev_grid")
         render_scale = services.config.render_scale
         prev_levels_completed = state.get("prev_levels_completed")
-        prev_frame = state.get("prev_frame")
+        frames_list = state.get("frames", [])
+        prev_frame = frames_list[-1] if len(frames_list) >= 2 else None
         expectation = state.get("expectation", "none")
 
         is_first_frame = prev_grid is None

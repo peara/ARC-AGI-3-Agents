@@ -103,6 +103,7 @@ class TestObserveNode:
     ):
         services = mock_services()
         observe = make_observe_node(services)
+        dummy_frame = make_frame()
         prev_frame = make_frame()
         curr_frame = make_frame()
         state = {
@@ -111,7 +112,7 @@ class TestObserveNode:
             "history": [],
             "prev_grid": [[0] * 64 for _ in range(64)],
             "prev_levels_completed": 0,
-            "prev_frame": prev_frame,
+            "frames": [dummy_frame, prev_frame],
             "last_action_id": 2,
             "expectation": "player moves up",
         }
@@ -171,6 +172,7 @@ class TestObserveNode:
     ):
         services = mock_services()
         observe = make_observe_node(services)
+        dummy_frame = make_frame()
         prev_frame = make_frame()
         curr_frame = make_frame()
         state = {
@@ -179,7 +181,7 @@ class TestObserveNode:
             "history": [],
             "prev_grid": [[0] * 64 for _ in range(64)],
             "prev_levels_completed": 0,
-            "prev_frame": prev_frame,
+            "frames": [dummy_frame, prev_frame],
             "last_action_id": 3,
             "expectation": "player moves right",
         }
@@ -206,6 +208,7 @@ class TestObserveNode:
         }
         result = observe(state)
         assert "prev_frame" not in result
+        assert "frames" not in result
 
     def test_observe_no_reflection_when_no_level_change(
         self, make_frame, make_grid, mock_services
