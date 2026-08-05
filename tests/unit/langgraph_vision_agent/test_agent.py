@@ -126,10 +126,39 @@ class TestAgentNode:
         frame2 = make_frame(available_actions=[1, 2, 3])
         frame2.state = GameState.NOT_FINISHED
 
-        agent.choose_action([dummy, frame1], frame2)
+        agent.choose_action([dummy, frame1, frame2], frame2)
 
         assert "frames" in captured_state
-        assert captured_state["frames"][-1] is frame2
-        assert captured_state["frames"][-2] is frame1
-        assert captured_state["frames"][0] is dummy
+        assert captured_state["frames"] == [dummy, frame1, frame2]
+        assert "latest_frame" not in captured_state
+
+    def test_agent_appends_latest_frame_on_empty_placeholder(self, make_frame, mock_services):
+        """agent.py:choose_action appends latest_frame when frames[-1] is the empty placeholder."""
+        from arcengine import FrameData, GameState
+
+        services = mock_services()
+        agent = LangGraphVisionAgent.__new__(LangGraphVisionAgent)
+        agent._services = services
+        agent._config = services.config
+        agent._frame_index = 0
+        agent._state = None
+        agent.MAX_ACTIONS = 60
+        agent.action_counter = 0
+
+        captured_state = {}
+        mock_workflow = MagicMock()
+        mock_workflow.invoke = MagicMock(side_effect=lambda sd: (
+            captured_state.update(sd),
+            {"action": GameAction.from_id(1), "node_path": ["observe", "reflect", "plan"]},
+        )[1])
+        agent._workflow = mock_workflow
+
+        empty_placeholder = FrameData(levels_completed=0)
+        current = make_frame(available_actions=[1, 2, 3])
+        current.state = GameState.NOT_FINISHED
+
+        agent.choose_action([empty_placeholder], current)
+
+        assert "frames" in captured_state
+        assert captured_state["frames"] == [empty_placeholder, current]
         assert "latest_frame" not in captured_state

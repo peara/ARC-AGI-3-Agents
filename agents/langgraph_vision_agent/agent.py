@@ -60,9 +60,17 @@ class LangGraphVisionAgent(Agent):
 
         self._frame_index += 1
 
+        # self.frames[-1] is the current observation from iteration 1+ (the
+        # base class appends the result of each action via append_frame).
+        # Only at iteration 0 is frames[-1] the empty placeholder (no grid),
+        # so we append latest_frame to give observe/reflect a real current frame.
+        current_frames = frames
+        if not frames or not getattr(frames[-1], "frame", None):
+            current_frames = [*frames, latest_frame]
+
         state_dict: LangGraphState = {
             **(self._state or {}),
-            "frames": [*frames, latest_frame],
+            "frames": current_frames,
             "available_actions": latest_frame.available_actions or [],
             "frame_index": self._frame_index,
             "node_path": [],
