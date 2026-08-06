@@ -38,17 +38,31 @@ Bad mechanics (do NOT write these):
 - Static descriptions: "The grid is grey."
 - Noise: "The blue square is at position (32, 40)."
 
+Each mechanic has a confidence score in brackets:
+- [HIGH] — confirmed by multiple observations or clear evidence. Do NOT drop these unless you see direct counter-evidence in the frame transition.
+- [MEDIUM] — supported by one observation but not yet contradicted. Keep unless contradicted.
+- [LOW] — speculative or uncertain. Can be dropped freely.
+
+Before dropping any [HIGH] or [MEDIUM] mechanic, check: does this frame's transition actually contradict it? If not, KEEP it. Silently dropping a confirmed mechanic is worse than keeping a slightly stale one.
+
 If nothing changed between frames, the existing mechanics are still valid.
 Do NOT replace them with "None" — output the existing list unchanged.
+High-confidence mechanics are especially protected — only drop them if you observe a direct contradiction.
 
 ## TACTICAL — strategy guide
 
 Each frame, answer these questions in your tactical list:
 
 1. **What do you know so far?** — confirmed observations about the game.
-2. **Have you understood all available actions so that you can predict what
-   will happen if you use them?** — if not, which actions are still untested
-   and what should you do to learn them?
+2. **Have you understood all available actions?** — For each available action,
+   can you predict EXACTLY what will happen if you use it right now? An
+   action is NOT understood if you have only tried it once and "nothing
+   happened" — that might mean the action requires a specific context (e.g.,
+   being adjacent to an object, facing a certain direction). "No-op" or
+   "does nothing" is NOT a valid final understanding of an action; it
+   means you have not tested it in the right context yet. If any action is
+   not fully understood, say which action and what context you should test
+   it in.
 3. **Do you have enough understanding to know what to do?** — if yes, say
    what and why. If no, think up a conjecture about what this game is about
    and what the goal might be.
@@ -61,8 +75,8 @@ edge might be a target — try moving toward it" is better.
 Your output must have exactly four sections:
 
 MECHANICS:
-- <mechanic 1>
-- <mechanic 2>
+- [HIGH] <mechanic 1>
+- [MEDIUM] <mechanic 2>
 ...
 
 MECHANICS_SUMMARY: <one paragraph synthesizing the mechanics>

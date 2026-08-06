@@ -18,8 +18,8 @@ from agents.langgraph_vision_agent.nodes.reflect import (
 
 NEW_FORMAT_RESPONSE = (
     "MECHANICS:\n"
-    "- Player can move in 4 directions.\n"
-    "- Boxes can be pushed.\n\n"
+    "- [HIGH] Player can move in 4 directions.\n"
+    "- [MEDIUM] Boxes can be pushed.\n\n"
     "MECHANICS_SUMMARY: The game is a sokoban-style puzzle with movement and pushing.\n\n"
     "TACTICAL:\n"
     "- Push boxes onto targets\n"
@@ -29,7 +29,7 @@ NEW_FORMAT_RESPONSE = (
 
 MINIMAL_RESPONSE = (
     "MECHANICS:\n"
-    "- test mechanic\n\n"
+    "- [HIGH] test mechanic\n\n"
     "MECHANICS_SUMMARY: test summary\n\n"
     "TACTICAL:\n"
     "- item1\n\n"
@@ -243,8 +243,8 @@ class TestReflectNode:
         }
         result = reflect(state)
         assert isinstance(result["mechanics"], list)
-        assert "Player can move in 4 directions." in result["mechanics"]
-        assert "Boxes can be pushed." in result["mechanics"]
+        assert "[HIGH] Player can move in 4 directions." in result["mechanics"]
+        assert "[MEDIUM] Boxes can be pushed." in result["mechanics"]
         assert isinstance(result["mechanics_summary"], str)
         assert "sokoban" in result["mechanics_summary"]
         assert "Push boxes onto targets" in result["tactical"]
@@ -296,8 +296,8 @@ class TestReflectNode:
         result = reflect_parse_response(NEW_FORMAT_RESPONSE)
         assert result is not None
         mechanics_list, mechanics_summary, tactical_list, tactical_summary = result
-        assert "Player can move in 4 directions." in mechanics_list
-        assert "Boxes can be pushed." in mechanics_list
+        assert "[HIGH] Player can move in 4 directions." in mechanics_list
+        assert "[MEDIUM] Boxes can be pushed." in mechanics_list
         assert "sokoban" in mechanics_summary
         assert "Push boxes onto targets" in tactical_list
         assert "Avoid dead ends" in tactical_list
@@ -307,7 +307,7 @@ class TestReflectNode:
         """If any section is missing, _parse_response returns None."""
         text = (
             "MECHANICS:\n"
-            "- mechanic\n\n"
+            "- [MEDIUM] mechanic\n\n"
             "MECHANICS_SUMMARY: summary\n\n"
             "TACTICAL:\n"
             "- tactical\n"
@@ -319,7 +319,7 @@ class TestReflectNode:
         """If any section is empty, _parse_response returns None."""
         text = (
             "MECHANICS:\n"
-            "- mechanic\n\n"
+            "- [LOW] mechanic\n\n"
             "MECHANICS_SUMMARY: summary\n\n"
             "TACTICAL:\n"
             # Empty tactical list
@@ -335,7 +335,7 @@ class TestReflectNode:
     def test_reflect_caps_tactical_list(self, mock_services):
         long_tactical = "\n".join(f"- item{i}" for i in range(20))
         reflector_response = (
-            f"MECHANICS:\n- mechanic1\n\n"
+            f"MECHANICS:\n- [HIGH] mechanic1\n\n"
             f"MECHANICS_SUMMARY: summary\n\n"
             f"TACTICAL:\n{long_tactical}\n\n"
             f"TACTICAL_SUMMARY: tactical summary"
@@ -357,7 +357,7 @@ class TestReflectNode:
         assert len(result["tactical"]) <= 5
 
     def test_reflect_caps_mechanics_list(self, mock_services):
-        long_mechanics = "\n".join(f"- mechanic{i}" for i in range(30))
+        long_mechanics = "\n".join(f"- [HIGH] mechanic{i}" for i in range(30))
         reflector_response = (
             f"MECHANICS:\n{long_mechanics}\n\n"
             f"MECHANICS_SUMMARY: summary\n\n"
@@ -386,7 +386,7 @@ class TestReflectNode:
         """Bug 4 regression: **New_Mechanics:** and **New_Tactical:** headers are parsed."""
         text = (
             "**MECHANICS:**\n"
-            "- Player moves in 4 directions.\n\n"
+            "- [HIGH] Player moves in 4 directions.\n\n"
             "**MECHANICS_SUMMARY:** Movement puzzle.\n\n"
             "**TACTICAL:**\n"
             "- Push boxes\n"
@@ -404,7 +404,7 @@ class TestReflectNode:
         """Bug 4 regression: mixed bold/plain headers still parse correctly."""
         text = (
             "MECHANICS:\n"
-            "- Plain header mechanic.\n\n"
+            "- [MEDIUM] Plain header mechanic.\n\n"
             "MECHANICS_SUMMARY: Plain summary.\n\n"
             "**TACTICAL:**\n"
             "- Bold tactical\n\n"
@@ -594,8 +594,8 @@ class TestReflectNode:
         """Reflector curates mechanics list across frames: add, remove, add."""
         response1 = (
             "MECHANICS:\n"
-            "- Player moves in 4 directions.\n"
-            "- Walls block movement.\n\n"
+            "- [HIGH] Player moves in 4 directions.\n"
+            "- [HIGH] Walls block movement.\n\n"
             "MECHANICS_SUMMARY: Player moves and walls block.\n\n"
             "TACTICAL:\n"
             "- Avoid walls\n\n"
@@ -603,8 +603,8 @@ class TestReflectNode:
         )
         response2 = (
             "MECHANICS:\n"
-            "- Walls block movement.\n"
-            "- Boxes can be pushed.\n\n"
+            "- [HIGH] Walls block movement.\n"
+            "- [MEDIUM] Boxes can be pushed.\n\n"
             "MECHANICS_SUMMARY: Walls block and boxes can be pushed.\n\n"
             "TACTICAL:\n"
             "- Avoid walls\n"
@@ -613,9 +613,9 @@ class TestReflectNode:
         )
         response3 = (
             "MECHANICS:\n"
-            "- Walls block movement.\n"
-            "- Boxes can be pushed.\n"
-            "- Targets light up when boxes placed.\n\n"
+            "- [HIGH] Walls block movement.\n"
+            "- [MEDIUM] Boxes can be pushed.\n"
+            "- [LOW] Targets light up when boxes placed.\n\n"
             "MECHANICS_SUMMARY: Walls, boxes, and targets.\n\n"
             "TACTICAL:\n"
             "- Avoid walls\n"
@@ -650,7 +650,7 @@ class TestReflectNode:
             "expectation": "player moves right",
         }
         result1 = reflect(state1)
-        assert result1["mechanics"] == ["Player moves in 4 directions.", "Walls block movement."]
+        assert result1["mechanics"] == ["[HIGH] Player moves in 4 directions.", "[HIGH] Walls block movement."]
         assert result1["tactical"] == ["Avoid walls"]
         assert "Player moves" in result1["mechanics_summary"]
 
@@ -666,7 +666,7 @@ class TestReflectNode:
             "expectation": "player moves up",
         }
         result2 = reflect(state2)
-        assert result2["mechanics"] == ["Walls block movement.", "Boxes can be pushed."]
+        assert result2["mechanics"] == ["[HIGH] Walls block movement.", "[MEDIUM] Boxes can be pushed."]
         assert len(result2["tactical"]) == 2
 
         state3 = {
@@ -682,13 +682,13 @@ class TestReflectNode:
         }
         result3 = reflect(state3)
         assert len(result3["mechanics"]) == 3
-        assert "Targets light up when boxes placed." in result3["mechanics"]
+        assert "[LOW] Targets light up when boxes placed." in result3["mechanics"]
 
     def test_reflect_curation_survives_llm_failure(self, mock_services):
         """When LLM fails on frame 3, existing list + summary preserved."""
         response1 = (
             "MECHANICS:\n"
-            "- Player moves.\n\n"
+            "- [HIGH] Player moves.\n\n"
             "MECHANICS_SUMMARY: Player moves.\n\n"
             "TACTICAL:\n"
             "- Avoid walls\n\n"
@@ -696,8 +696,8 @@ class TestReflectNode:
         )
         response2 = (
             "MECHANICS:\n"
-            "- Player moves.\n"
-            "- Boxes pushable.\n\n"
+            "- [HIGH] Player moves.\n"
+            "- [MEDIUM] Boxes pushable.\n\n"
             "MECHANICS_SUMMARY: Player moves and boxes pushable.\n\n"
             "TACTICAL:\n"
             "- Avoid walls\n"
@@ -767,7 +767,7 @@ class TestReflectNode:
         """Reflector success path must not return prev_frame — agent.py owns frames."""
         response = (
             "MECHANICS:\n"
-            "- Player moves.\n\n"
+            "- [HIGH] Player moves.\n\n"
             "MECHANICS_SUMMARY: Player moves.\n\n"
             "TACTICAL:\n"
             "- Avoid walls\n\n"
@@ -792,14 +792,14 @@ class TestReflectNode:
         result = reflect(state)
         assert "prev_frame" not in result
         assert "frames" not in result
-        assert result["mechanics"] == ["Player moves."]
+        assert result["mechanics"] == ["[HIGH] Player moves."]
 
     def test_reflect_curation_with_redbox(self, mock_services, make_frame):
         """When frames[-1] is available, prompt includes current list AND red-box overlay,
         and system prompt is messages[0]."""
         response = (
             "MECHANICS:\n"
-            "- Objects move in 4 directions.\n\n"
+            "- [HIGH] Objects move in 4 directions.\n\n"
             "MECHANICS_SUMMARY: Objects move in 4 directions.\n\n"
             "TACTICAL:\n"
             "- Watch for collisions\n\n"
@@ -830,7 +830,7 @@ class TestReflectNode:
         }
         result = reflect(state)
 
-        assert result["mechanics"] == ["Objects move in 4 directions."]
+        assert result["mechanics"] == ["[HIGH] Objects move in 4 directions."]
         assert "Objects move" in result["mechanics_summary"]
 
         call_args = services.reflector_call.call_args
@@ -947,3 +947,77 @@ class TestReflectNode:
         # Reflector should still return mechanics despite save failure
         assert "mechanics" in result
         assert result["needs_reflection"] is False
+
+    def test_parse_response_retains_confidence_tags(self):
+        """Confidence tags [HIGH]/[MEDIUM]/[LOW] are retained on mechanics for round-trip."""
+        text = (
+            "MECHANICS:\n"
+            "- [HIGH] mechanic a\n"
+            "- [MEDIUM] mechanic b\n"
+            "- [LOW] mechanic c\n\n"
+            "MECHANICS_SUMMARY: summary\n\n"
+            "TACTICAL:\n"
+            "- item\n\n"
+            "TACTICAL_SUMMARY: summary"
+        )
+        result = reflect_parse_response(text)
+        assert result is not None
+        mechanics_list = result[0]
+        assert mechanics_list == ["[HIGH] mechanic a", "[MEDIUM] mechanic b", "[LOW] mechanic c"]
+
+    def test_parse_response_retains_confidence_tags_case_insensitive(self):
+        """Confidence tags are retained case-insensitively."""
+        text = (
+            "MECHANICS:\n"
+            "- [high] mechanic a\n"
+            "- [Medium] mechanic b\n\n"
+            "MECHANICS_SUMMARY: summary\n\n"
+            "TACTICAL:\n"
+            "- item\n\n"
+            "TACTICAL_SUMMARY: summary"
+        )
+        result = reflect_parse_response(text)
+        assert result is not None
+        mechanics_list = result[0]
+        assert mechanics_list == ["[high] mechanic a", "[Medium] mechanic b"]
+
+    def test_reflect_prompt_includes_verification_instruction(self, mock_services):
+        """Both text and redbox paths include the verification instruction."""
+        services = mock_services(reflector_return=MINIMAL_RESPONSE)
+        reflect = make_reflect_node(services)
+
+        # Text-only path
+        state = {
+            "frame_index": 1,
+            "needs_reflection": True,
+            "mechanics": [],
+            "mechanics_summary": "",
+            "tactical": [],
+            "tactical_summary": "",
+            "history": [],
+            "observation": "some text",
+        }
+        reflect(state)
+        messages = services.reflector_call.call_args[0][0]
+        user_content = messages[1]["content"]
+        assert "Before dropping any [HIGH] or [MEDIUM] mechanic" in user_content
+
+    def test_reflect_prompt_includes_no_op_rejection(self, mock_services):
+        """System prompt rejects 'No-op' as a valid final understanding."""
+        services = mock_services(reflector_return=MINIMAL_RESPONSE)
+        reflect = make_reflect_node(services)
+        state = {
+            "frame_index": 1,
+            "needs_reflection": True,
+            "mechanics": [],
+            "mechanics_summary": "",
+            "tactical": [],
+            "tactical_summary": "",
+            "history": [],
+            "observation": "some text",
+        }
+        reflect(state)
+        messages = services.reflector_call.call_args[0][0]
+        system_content = messages[0]["content"]
+        assert "No-op" in system_content
+        assert "NOT a valid final understanding" in system_content

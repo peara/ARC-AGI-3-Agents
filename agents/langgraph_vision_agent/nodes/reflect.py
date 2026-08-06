@@ -85,6 +85,9 @@ def _parse_response(
         elif line:
             mechanics_list.append(line)
 
+    # Confidence tags are kept on mechanics items for round-trip to the
+    # next frame's prompt. The planner only sees mechanics_summary.
+
     # Parse bullet items from tactical section
     tactical_list: list[str] = []
     for line in tactical_raw.splitlines():
@@ -140,6 +143,8 @@ def make_reflect_node(services: AgentServices):
             f"## Your task\n"
             f"Review the PREVIOUS and CURRENT frames above. "
             f"Decide which existing mechanics to KEEP, which to DROP, and what NEW ones to ADD.\n"
+            f"Before dropping any [HIGH] or [MEDIUM] mechanic, verify it against this "
+            f"frame's transition — only drop if you see direct counter-evidence.\n"
             f"Then update tactical: answer the four questions from your system prompt. "
             f"If you don't know the goal yet, you MUST include at least one conjecture "
             f"about what the goal might be.\n\n"
@@ -191,6 +196,8 @@ def make_reflect_node(services: AgentServices):
                     f"## Your task\n"
                     f"Review the PREVIOUS and CURRENT frames above. "
                     f"Decide which existing mechanics to KEEP, which to DROP, and what NEW ones to ADD.\n"
+                    f"Before dropping any [HIGH] or [MEDIUM] mechanic, verify it against this "
+                    f"frame's transition — only drop if you see direct counter-evidence.\n"
                     f"Then update tactical: answer the four questions from your system prompt. "
                     f"If you don't know the goal yet, you MUST include at least one conjecture "
                     f"about what the goal might be.\n\n"
