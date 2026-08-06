@@ -22,7 +22,7 @@ from agents.llm_client import LLMClient
 from effects.dormancy import apply_dormancy, reactivate_dormant
 from effects.engine_step_result import EngineStepResult, run_engine_step
 from effects.transition_history import TransitionHistory
-from entity import EntityBuilder
+from optitrack.builder import OptiEntityBuilder
 from grouping import CombinedEngine
 from perception.entities import LifecycleState
 from perception.session import RESET_ACTION, PerceptionSession, SceneSnapshot
@@ -67,7 +67,7 @@ class LlmCuriosity(Agent):
         seed = int(time.time() * 1_000_000) + hash(self.game_id) % 1_000_000
         random.seed(seed)
 
-        # entity_builder=None: the agent owns its own EntityBuilder with
+        # entity_builder=None: the agent owns its own OptiEntityBuilder with
         # CombinedEngine (line 119). The session's default EntityBuilder would
         # run a second, classical-only update each frame — uncoordinated with
         # the LLM-approved compound layer. See docs/reports/llm-curiosity-agent.md.
@@ -138,7 +138,8 @@ class LlmCuriosity(Agent):
                 self._mechanics_notepad = None
             _combined_engine = CombinedEngine(llm_call=self.llm_call, vision=self._vision_enabled, image_scale=self._grouping_image_scale, minimal_members=self._grouping_minimal_members)
 
-        self._entity_builder = EntityBuilder(combined_engine=_combined_engine)
+        self._entity_builder = OptiEntityBuilder(combined_engine=_combined_engine)
+        log.info("entity_builder=%s", type(self._entity_builder).__name__)
 
         # Rule proposer (wraps llm_call with cooldown; NULL_RULE_PROPOSER on eval path — no network)
         self._rule_proposer: RuleProposerFn = make_rule_proposer(self.llm_call)
