@@ -7,9 +7,13 @@ each frame so we can compare prompt variants without running a live game.
 Usage:
     uv run python scripts/experiment_planner_prompt.py RECORDING.jsonl [--frames 1,2,3,...] [--system-prompt TEXT]
 
+WARNING: The local LLM processes one multimodal request at a time and each
+call can take 60-120+ seconds. Always test ONE frame per run when using a
+local LLM. Do not batch multiple frames — wait for each to finish first.
+
 Examples:
-    # Test with default production prompt
-    uv run python scripts/experiment_planner_prompt.py recordings/wa30.*.recording.jsonl
+    # Test with default production prompt (one frame)
+    uv run python scripts/experiment_planner_prompt.py recordings/wa30.*.recording.jsonl --frames 25
 
     # Test specific frames with a custom system prompt
     uv run python scripts/experiment_planner_prompt.py recordings/wa30.*.recording.jsonl \
@@ -59,17 +63,18 @@ V2_SYSTEM_PROMPT = """\
 You are the planner for a 2D grid-based puzzle game. The game is played on a
 64×64 grid of color indices (0–15). You see the current frame as an image.
 
-Your job is to pick the next action to help solve the level.
+Your job is to pick ONE action that moves toward the goal set by your analyst.
+You do NOT set the goal — that is the analyst's job. You decide how to execute
+it one action at a time.
 
 You are given:
 - Game mechanics: a summary of what the game IS and the confirmed rules.
-  This describes the scene, the objects, and what each action does.
-- Known tactical: the current strategy and what should be done next.
-  This is written by your analyst after observing frame transitions.
-  Follow this guidance unless you have a strong reason not to.
+- Known tactical: the analyst's current goal and what should be done next.
+  This is your directive. Pick the action that best advances this goal.
+  Do not substitute your own agenda.
 - Recent history: what actions were taken in the last few frames.
   If you see the same action repeated many times, ask yourself whether
-  you are making progress or just repeating.
+  you are making progress toward the goal or just repeating.
 - Available actions: the action IDs you can choose from.
 
 Pick the next action. If you are confident about the next move, output:

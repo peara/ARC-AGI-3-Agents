@@ -73,6 +73,14 @@ Enable grid image input to the LLM planner (multimodal):
 LLM_VISION=true uv run main.py --agent=llmcuriosityv2 --game=<game_id>
 ```
 
+### Local LLM constraint
+
+The local LLM (LM Studio, gemma-4-31b) processes one multimodal request at a
+time and each call can take 60-120+ seconds. **Never test multiple frames in
+parallel or batch.** When using the experiment scripts, test ONE frame per
+run (`--frames 25`, not `--frames 25,27,45`). Wait for each to finish before
+starting the next.
+
 ## Recording format
 
 The `*.recording.jsonl` and `*.llm.jsonl` files have non-obvious timing

@@ -8,6 +8,10 @@ across all frames so we can see if it accumulates knowledge correctly.
 Usage:
     uv run python scripts/experiment_reflector_prompt.py RECORDING.jsonl [--frames 1,2,3,...]
 
+WARNING: The local LLM processes one multimodal request at a time and each
+call can take 60-120+ seconds. Always test ONE frame per run when using a
+local LLM. Do not batch multiple frames — wait for each to finish first.
+
 Requirements:
     - LLM_BASE_URL, LLM_MODEL env vars set (same as the agent)
     - The recording file with .recording.jsonl extension
