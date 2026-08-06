@@ -133,6 +133,101 @@ class TestReflectNode:
         assert isinstance(content, str)
         assert "Observation: a red grid" in content
 
+    def test_reflect_includes_available_actions_text_path(self, mock_services):
+        """Text-only path includes available_actions in the user prompt."""
+        services = mock_services(reflector_return=MINIMAL_RESPONSE)
+        reflect = make_reflect_node(services)
+        state = {
+            "frame_index": 1,
+            "needs_reflection": True,
+            "mechanics": [],
+            "mechanics_summary": "",
+            "tactical": [],
+            "tactical_summary": "",
+            "history": [],
+            "observation": "some text",
+            "available_actions": [1, 2, 3],
+        }
+        reflect(state)
+        messages = services.reflector_call.call_args[0][0]
+        content = messages[1]["content"]
+        assert "Available actions: [1, 2, 3]" in content
+
+    def test_reflect_includes_available_actions_redbox(self, mock_services, make_frame):
+        """Red-box image path includes available_actions in text blocks."""
+        services = mock_services(reflector_return=MINIMAL_RESPONSE)
+        reflect = make_reflect_node(services)
+        dummy_frame = make_frame()
+        prev_frame = make_frame()
+        latest_frame = make_frame()
+        latest_frame.frame[0][10][10] = 1
+        state = {
+            "frame_index": 5,
+            "needs_reflection": True,
+            "mechanics": [],
+            "mechanics_summary": "",
+            "tactical": [],
+            "tactical_summary": "",
+            "history": [],
+            "observation": "ignored text",
+            "available_actions": [1, 2, 3],
+            "frames": [dummy_frame, prev_frame, latest_frame],
+        }
+        reflect(state)
+        messages = services.reflector_call.call_args[0][0]
+        content = messages[1]["content"]
+        assert isinstance(content, list)
+        text_blocks = [b.get("text", "") for b in content if b.get("type") == "text"]
+        assert any("Available actions: [1, 2, 3]" in t for t in text_blocks)
+
+    def test_reflect_includes_available_actions_multimodal(self, mock_services):
+        """Multimodal observation path includes available_actions in final text block."""
+        services = mock_services(reflector_return=MINIMAL_RESPONSE)
+        reflect = make_reflect_node(services)
+        observation = [
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+            {"type": "text", "text": "CURRENT frame"},
+        ]
+        state = {
+            "frame_index": 1,
+            "needs_reflection": True,
+            "mechanics": [],
+            "mechanics_summary": "",
+            "tactical": [],
+            "tactical_summary": "",
+            "history": [],
+            "observation": observation,
+            "available_actions": [1, 2, 3],
+            "frames": [],
+        }
+        reflect(state)
+        messages = services.reflector_call.call_args[0][0]
+        content = messages[1]["content"]
+        assert isinstance(content, list)
+        assert content[-1].get("type") == "text"
+        assert "Available actions: [1, 2, 3]" in content[-1]["text"]
+
+    def test_reflect_empty_available_actions(self, mock_services):
+        """Empty available_actions renders as empty list in user prompt."""
+        services = mock_services(reflector_return=MINIMAL_RESPONSE)
+        reflect = make_reflect_node(services)
+        state = {
+            "frame_index": 1,
+            "needs_reflection": True,
+            "mechanics": [],
+            "mechanics_summary": "",
+            "tactical": [],
+            "tactical_summary": "",
+            "history": [],
+            "observation": "text",
+            "available_actions": [],
+        }
+        reflect(state)
+        messages = services.reflector_call.call_args[0][0]
+        content = messages[1]["content"]
+        assert "Available actions:" in content
+        assert "Available actions: []" in content
+
     def test_reflect_updates_mechanics_and_tactical(self, mock_services):
         services = mock_services(reflector_return=NEW_FORMAT_RESPONSE)
         reflect = make_reflect_node(services)

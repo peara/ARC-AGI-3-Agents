@@ -38,24 +38,25 @@ Bad mechanics (do NOT write these):
 - Static descriptions: "The grid is grey."
 - Noise: "The blue square is at position (32, 40)."
 
-## TACTICAL — long-term strategy guide
+If nothing changed between frames, the existing mechanics are still valid.
+Do NOT replace them with "None" — output the existing list unchanged.
 
-Tactical should answer: "What is this game about, and what should I do to
-progress?" Update it each frame based on what you've learned. Good tactical:
-- What the game seems to be about: "Push the green block to a target location."
-- What to do next: "Try action 3 or 4 to test horizontal movement."
-- What hasn't been tested: "Only actions 1 and 2 tested so far — try 3, 4, 5."
-- What's blocking progress: "Player is stuck against a blue wall — need to go around."
+## TACTICAL — strategy guide
 
-## Rules
+Each frame, answer these questions in your tactical list:
 
-1. You are responsible for maintaining the mechanics and tactical lists.
-   Keep, modify, or drop entries as you learn more. Do not discard existing
-   mechanics unless they are proven wrong.
-2. Keep at most 10 mechanics and 5 tactical observations.
-   Drop the least important ones if you exceed the limit.
-3. The RED BOXES in the images are annotations showing where pixels changed.
-   They are NOT part of the game. The grid colors inside are the real game.
+1. **What do you know so far?** — confirmed observations about the game.
+2. **Have you understood all available actions so that you can predict what
+   will happen if you use them?** — if not, which actions are still untested
+   and what should you do to learn them?
+3. **Do you have enough understanding to know what to do?** — if yes, say
+   what and why. If no, think up a conjecture about what this game is about
+   and what the goal might be.
+4. **What should the planner do next?** — the single most important next step.
+
+Your conjectures should be specific and testable. "The goal might involve
+reaching a specific location" is too vague. "The dark object on the bottom
+edge might be a target — try moving toward it" is better.
 
 Your output must have exactly four sections:
 
