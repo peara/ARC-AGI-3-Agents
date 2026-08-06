@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from optitrack.optimizer import Atom, Cells, Track
+from optitrack.optimizer import Atom, Track
 
 # ---------------------------------------------------------------------------
 #  Cost weights

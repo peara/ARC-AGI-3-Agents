@@ -38,17 +38,18 @@ from entity.builder import ColorConfig
 from entity.logical_registry import LogicalRegistry
 from entity.roles import assign_roles
 from grouping.proposal import GroupProposal
+from optitrack.atoms import extract_atoms
+from optitrack.merges import MergeProposal, detect_merges, optitrack_to_group_proposal
+from optitrack.optimizer import OptiTracker
+from optitrack.optimizer import Track as OptiTrack
 from perception.entities import (
     Entity,
     EntityCatalog,
     LifecycleState,
 )
 from perception.orientation import detect_rotation
-from perception.registry import ObjectRegistry, Observation, Track as PerceptionTrack
-
-from optitrack.atoms import extract_atoms
-from optitrack.merges import MergeProposal, detect_merges, optitrack_to_group_proposal
-from optitrack.optimizer import OptiTracker, Track as OptiTrack
+from perception.registry import ObjectRegistry, Observation
+from perception.registry import Track as PerceptionTrack
 
 log = logging.getLogger(__name__)
 

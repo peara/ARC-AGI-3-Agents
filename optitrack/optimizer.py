@@ -156,7 +156,10 @@ def _placeholder_death_cost(track: Track) -> float:
 
 # Try to use the real cost module if available (Task 2 will create it).
 try:
-    from optitrack.cost import compute_match_cost, compute_death_cost  # type: ignore[import-untyped]
+    from optitrack.cost import (  # type: ignore[import-untyped]
+        compute_death_cost,
+        compute_match_cost,
+    )
 
     _match_cost = compute_match_cost
     _death_cost = compute_death_cost

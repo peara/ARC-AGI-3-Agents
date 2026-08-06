@@ -7,7 +7,6 @@ import numpy as np
 
 from optitrack.optimizer import Atom, Cells
 
-
 BACKGROUND_COLOR = 1
 
 
