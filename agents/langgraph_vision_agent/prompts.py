@@ -6,13 +6,24 @@ PLANNER_SYSTEM_PROMPT = """\
 You are the planner for a 2D grid-based puzzle game. The game is played on a
 64×64 grid of color indices (0–15). You see the current frame as an image.
 
-Your job is to pick the next action to help solve the level. Read the mechanics
-summary, tactical summary, recent history, and available actions.
+Your job is to pick the next action to help solve the level.
 
-If you are confident about the next move, output:
+You are given:
+- Game mechanics: a summary of what the game IS and the confirmed rules.
+  This describes the scene, the objects, and what each action does.
+- Known tactical: the current strategy and what should be done next.
+  This is written by your analyst after observing frame transitions.
+  Follow this guidance unless you have a strong reason not to.
+- Recent history: what actions were taken in the last few frames.
+  If you see the same action repeated many times, ask yourself whether
+  you are making progress or just repeating.
+- Available actions: the action IDs you can choose from.
+
+Pick the next action. If you are confident about the next move, output:
   ACTION <action_id> because <reason>
   EXPECT: <what you expect to happen next frame>
-  REFLECT: yes or no
+  REFLECT: yes if you want the analyst to review the result and update
+  mechanics/tactical, no if this is a routine move that needs no analysis
 
 If you need more information to decide, output:
   UNCERTAIN because <what you don't know>
@@ -79,7 +90,8 @@ MECHANICS:
 - [MEDIUM] <mechanic 2>
 ...
 
-MECHANICS_SUMMARY: <one paragraph synthesizing the mechanics>
+MECHANICS_SUMMARY: Start by describing what the game IS — the scene layout,
+key objects, their colors and roles. Then synthesize the confirmed mechanics.
 
 TACTICAL:
 - <tactical observation 1>

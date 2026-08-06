@@ -17,20 +17,16 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
-import sys
 from typing import Any
 
+from agents.llm_client import LLMClient
 from vision.render import (
     draw_boxes_on_grid,
     find_changed_regions,
     image_to_base64,
     make_image_block,
 )
-
-from agents.llm_client import LLMClient
-
 
 # ---------------------------------------------------------------------------
 # Prompt
@@ -108,11 +104,16 @@ def load_recording(path: str) -> list[dict]:
                 grid = d["data"]["frame"]
                 while isinstance(grid, list) and len(grid) == 1 and isinstance(grid[0], list):
                     grid = grid[0]
+                lg = d["data"].get("scene_state", {}).get("langgraph_state", {})
                 frames.append({
                     "action_id": ai.get("id", 0),
                     "grid": grid,
                     "reasoning": (ai.get("reasoning") or {}).get("plan", ""),
                     "expectation": (ai.get("reasoning") or {}).get("expectation", ""),
+                    "mechanics": lg.get("mechanics", []),
+                    "tactical": lg.get("tactical", []),
+                    "mechanics_summary": lg.get("mechanics_summary", ""),
+                    "tactical_summary": lg.get("tactical_summary", ""),
                 })
     return frames
 
@@ -132,6 +133,7 @@ def build_prompt(
     expectation: str,
     action_id: int,
     scale: int = 8,
+    system_prompt: str = "",
 ) -> list[dict[str, Any]]:
     regions = find_changed_regions(prev_grid, curr_grid)
     prev_boxed = draw_boxes_on_grid(prev_grid, regions, scale=scale)
@@ -178,7 +180,7 @@ def build_prompt(
     ]
 
     return [
-        {"role": "system", "content": REFLECTOR_SYSTEM},
+        {"role": "system", "content": system_prompt or REFLECTOR_SYSTEM},
         {"role": "user", "content": blocks},
     ]
 
@@ -245,11 +247,15 @@ def run_experiment(
     frame_indices: set[int],
     llm: LLMClient,
     max_tokens: int = 8192,
+    system_prompt: str = "",
 ) -> None:
     frames = load_recording(recording_path)
     print(f"Loaded {len(frames)} frames from {recording_path}")
     print(f"Testing frames: {sorted(frame_indices)}")
     print(f"LLM: {llm.model} at {llm.base_url}")
+    sp = system_prompt or REFLECTOR_SYSTEM
+    print(f"System prompt ({len(sp)} chars):")
+    print(f"  {sp}")
     print()
 
     state = {"mechanics": [], "tactical": [], "ms": "", "ts": "", "history": []}
@@ -269,11 +275,21 @@ def run_experiment(
         state["history"] = state["history"][-5:]
 
         if i not in frame_indices:
+            rec_frame = frames[i]
+            state["mechanics"] = rec_frame["mechanics"]
+            state["tactical"] = rec_frame["tactical"]
+            state["ms"] = rec_frame["mechanics_summary"]
+            state["ts"] = rec_frame["tactical_summary"]
             continue
 
         print(f"{'='*80}")
         print(f"FRAME {i} | action={action_id} | {cells_changed} cells changed")
         print(f"{'='*80}")
+        print(f"  Input mechanics ({len(state['mechanics'])}):")
+        for m in state["mechanics"]:
+            print(f"    - {m}")
+        print(f"  Input mechanics summary: {state['ms']}")
+        print(f"  Input tactical summary:  {state['ts']}")
 
         messages = build_prompt(
             prev_grid, curr_grid,
@@ -284,6 +300,7 @@ def run_experiment(
             history=state["history"],
             expectation=expectation,
             action_id=action_id,
+            system_prompt=system_prompt,
         )
 
         try:
@@ -298,18 +315,18 @@ def run_experiment(
             state["mechanics"], state["ms"], state["tactical"], state["ts"] = parsed
 
         print(f"\nResponse ({len(raw)} chars):")
-        print(raw[:3000])
+        print(raw)
 
         if parsed:
             print(f"\n--- MECHANICS ({len(parsed[0])}) ---")
             for m in parsed[0]:
                 print(f"  - {m}")
-            print(f"\n--- MECHANICS SUMMARY ---")
+            print("\n--- MECHANICS SUMMARY ---")
             print(f"  {parsed[1]}")
             print(f"\n--- TACTICAL ({len(parsed[2])}) ---")
             for t in parsed[2]:
                 print(f"  - {t}")
-            print(f"\n--- TACTICAL SUMMARY ---")
+            print("\n--- TACTICAL SUMMARY ---")
             print(f"  {parsed[3]}")
         else:
             print("\nPARSE FAILED")
@@ -325,12 +342,30 @@ def main() -> None:
         default="3,5,7,10,12,17,22,26,29,30",
         help="Comma-separated frame indices to test",
     )
+    parser.add_argument(
+        "--system-prompt",
+        default=None,
+        help="Custom system prompt text (default: built-in REFLECTOR_SYSTEM)",
+    )
+    parser.add_argument(
+        "--system-prompt-file",
+        default=None,
+        help="Load system prompt from a file",
+    )
     parser.add_argument("--max-tokens", type=int, default=8192)
     args = parser.parse_args()
 
+    if args.system_prompt_file:
+        with open(args.system_prompt_file) as f:
+            system_prompt = f.read().strip()
+    elif args.system_prompt:
+        system_prompt = args.system_prompt
+    else:
+        system_prompt = REFLECTOR_SYSTEM
+
     frame_indices = set(int(x) for x in args.frames.split(","))
     llm = LLMClient()
-    run_experiment(args.recording, frame_indices, llm, args.max_tokens)
+    run_experiment(args.recording, frame_indices, llm, args.max_tokens, system_prompt)
 
 
 if __name__ == "__main__":
