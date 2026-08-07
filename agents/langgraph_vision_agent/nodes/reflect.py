@@ -146,9 +146,41 @@ def make_reflect_node(services: AgentServices):
             f"TACTICAL_SUMMARY: ..."
         )
 
+        has_image_obs = isinstance(observation, list) and any(
+            b.get("type") == "image_url" for b in observation if isinstance(b, dict)
+        )
+
+        if has_image_obs:
+            redbox_blocks = list(observation) + [{"type": "text", "text": (
+                f"## Current mechanics (keep, modify, or drop — max 10)\n"
+                f"{mechanics_bullets}\n\n"
+                f"## Current mechanics summary\n{mechanics_summary}\n\n"
+                f"## Current tactical (keep, modify, or drop — max 5)\n"
+                f"{tactical_bullets}\n\n"
+                f"## Current tactical summary\n{tactical_summary}\n\n"
+                f"## This transition\n"
+                f"Action taken: {last_action_result}\n"
+                f"Available actions: {available_actions}\n"
+                f"What you expected to happen: {expectation}\n\n"
+                f"## Your task\n"
+                f"Review the PREVIOUS and CURRENT frames above. "
+                f"Decide which existing mechanics to KEEP, which to DROP, and what NEW ones to ADD.\n"
+                f"Before dropping any [HIGH] or [MEDIUM] mechanic, verify it against this "
+                f"frame's transition — only drop if you see direct counter-evidence.\n"
+                f"Then update tactical: answer the four questions from your system prompt. "
+                f"If you don't know the goal yet, you MUST include at least one conjecture "
+                f"about what the goal might be.\n\n"
+                f"MECHANICS:\n- ...\n\n"
+                f"MECHANICS_SUMMARY: ...\n\n"
+                f"TACTICAL:\n- ...\n\n"
+                f"TACTICAL_SUMMARY: ..."
+            )}]
+
         system_message = {"role": "system", "content": REFLECTOR_SYSTEM_PROMPT}
 
-        if isinstance(observation, list):
+        if has_image_obs:
+            messages = [system_message, {"role": "user", "content": redbox_blocks}]
+        elif isinstance(observation, list):
             content_blocks = list(observation) + [{"type": "text", "text": text_part}]
             messages = [system_message, {"role": "user", "content": content_blocks}]
         else:
