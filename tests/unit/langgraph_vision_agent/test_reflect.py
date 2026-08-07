@@ -153,14 +153,17 @@ class TestReflectNode:
         content = messages[1]["content"]
         assert "Available actions: [1, 2, 3]" in content
 
-    def test_reflect_includes_available_actions_redbox(self, mock_services, make_frame):
-        """Red-box image path includes available_actions in text blocks."""
+    def test_reflect_includes_available_actions_redbox(self, mock_services):
+        """Image observation path includes available_actions in text block."""
         services = mock_services(reflector_return=MINIMAL_RESPONSE)
         reflect = make_reflect_node(services)
-        dummy_frame = make_frame()
-        prev_frame = make_frame()
-        latest_frame = make_frame()
-        latest_frame.frame[0][10][10] = 1
+        observation = [
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+            {"type": "text", "text": "Frame 4"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,def"}},
+            {"type": "text", "text": "Frame 5"},
+            {"type": "text", "text": "Action taken: 1. You expected: none"},
+        ]
         state = {
             "frame_index": 5,
             "needs_reflection": True,
@@ -169,9 +172,9 @@ class TestReflectNode:
             "tactical": [],
             "tactical_summary": "",
             "history": [],
-            "observation": "ignored text",
+            "observation": observation,
             "available_actions": [1, 2, 3],
-            "frames": [dummy_frame, prev_frame, latest_frame],
+            "frames": [],
         }
         reflect(state)
         messages = services.reflector_call.call_args[0][0]
@@ -417,13 +420,16 @@ class TestReflectNode:
         assert "Bold tactical" in tactical_list[0]
 
     def test_reflect_uses_redbox_when_prev_frame_available(self, mock_services, make_frame):
-        """When prev_frame and latest_frame are set, red-box images are sent."""
+        """When observation has image blocks, they are passed through to the LLM."""
         services = mock_services(reflector_return=MINIMAL_RESPONSE)
         reflect = make_reflect_node(services)
-        dummy_frame = make_frame()
-        prev_frame = make_frame()
-        latest_frame = make_frame()
-        latest_frame.frame[0][10][10] = 1
+        observation = [
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+            {"type": "text", "text": "Frame 4"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,def"}},
+            {"type": "text", "text": "Frame 5"},
+            {"type": "text", "text": "Action taken: 1. You expected: player moves up"},
+        ]
         state = {
             "frame_index": 5,
             "needs_reflection": True,
@@ -432,22 +438,19 @@ class TestReflectNode:
             "tactical": [],
             "tactical_summary": "",
             "history": [],
-            "observation": "ignored text",
+            "observation": observation,
             "expectation": "player moves up",
-            "frames": [dummy_frame, prev_frame, latest_frame],
+            "frames": [],
         }
         reflect(state)
         call_args = services.reflector_call.call_args
         messages = call_args[0][0]
-        # System prompt + user with redbox content
         assert messages[0]["role"] == "system"
         assert messages[1]["role"] == "user"
         content = messages[1]["content"]
         assert isinstance(content, list)
         image_blocks = [b for b in content if b.get("type") == "image_url"]
-        text_blocks = [b for b in content if b.get("type") == "text"]
         assert len(image_blocks) >= 2
-        assert any("RED BOXES" in b.get("text", "") for b in text_blocks)
 
     def test_reflect_falls_back_when_no_prev_frame(self, mock_services):
         """When prev_frame is None, the old observation path is used."""
@@ -479,14 +482,17 @@ class TestReflectNode:
         assert content[:2] == observation
         assert all("RED BOXES" not in b.get("text", "") for b in content)
 
-    def test_reflect_prompt_explains_red_boxes(self, mock_services, make_frame):
-        """When both frames are available, the prompt explains the red boxes."""
+    def test_reflect_prompt_explains_red_boxes(self, mock_services):
+        """When observation has images, the prompt includes mechanics task text."""
         services = mock_services(reflector_return=MINIMAL_RESPONSE)
         reflect = make_reflect_node(services)
-        dummy_frame = make_frame()
-        prev_frame = make_frame()
-        latest_frame = make_frame()
-        latest_frame.frame[0][20][20] = 2
+        observation = [
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+            {"type": "text", "text": "Frame 2"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,def"}},
+            {"type": "text", "text": "Frame 3"},
+            {"type": "text", "text": "Action taken: 3. You expected: player moves left"},
+        ]
         state = {
             "frame_index": 3,
             "needs_reflection": True,
@@ -495,17 +501,16 @@ class TestReflectNode:
             "tactical": [],
             "tactical_summary": "",
             "history": [],
-            "observation": "text obs",
+            "observation": observation,
             "expectation": "player moves left",
-            "frames": [dummy_frame, prev_frame, latest_frame],
+            "frames": [],
         }
         reflect(state)
         call_args = services.reflector_call.call_args
         messages = call_args[0][0]
         content = messages[1]["content"]
         text_content = " ".join(b.get("text", "") for b in content if b.get("type") == "text")
-        assert "RED BOXES" in text_content
-        assert "What moved" in text_content
+        assert "mechanics" in text_content.lower()
 
     def test_reflect_includes_system_prompt(self, mock_services):
         """System prompt is prepended to all messages."""
@@ -794,9 +799,8 @@ class TestReflectNode:
         assert "frames" not in result
         assert result["mechanics"] == ["[HIGH] Player moves."]
 
-    def test_reflect_curation_with_redbox(self, mock_services, make_frame):
-        """When frames[-1] is available, prompt includes current list AND red-box overlay,
-        and system prompt is messages[0]."""
+    def test_reflect_curation_with_redbox(self, mock_services):
+        """When observation has images, prompt includes current list and images."""
         response = (
             "MECHANICS:\n"
             "- [HIGH] Objects move in 4 directions.\n\n"
@@ -808,14 +812,13 @@ class TestReflectNode:
         services = mock_services(reflector_return=response)
         reflect = make_reflect_node(services)
 
-        dummy_frame = make_frame()
-        prev_frame = make_frame()
-        curr_frame = make_frame()
-        for r in range(64):
-            for c in range(64):
-                prev_frame.frame[0][r][c] = 0
-                curr_frame.frame[0][r][c] = 1
-
+        observation = [
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+            {"type": "text", "text": "Frame 4"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,def"}},
+            {"type": "text", "text": "Frame 5"},
+            {"type": "text", "text": "Action taken: 2. You expected: player moves left"},
+        ]
         state = {
             "frame_index": 5,
             "needs_reflection": True,
@@ -823,10 +826,10 @@ class TestReflectNode:
             "tactical": ["Avoid walls."],
             "mechanics_summary": "Player moves right.",
             "tactical_summary": "Avoid walls.",
-            "observation": "grid",
-            "history": ["frame 4: action=2, 10 cells changed"],
+            "observation": observation,
+            "history": ["frame 4: action=2"],
             "expectation": "player moves left",
-            "frames": [dummy_frame, prev_frame, curr_frame],
+            "frames": [],
         }
         result = reflect(state)
 
@@ -839,39 +842,6 @@ class TestReflectNode:
         assert messages[1]["role"] == "user"
         user_content = messages[1]["content"]
         assert isinstance(user_content, list)
-
-    def test_reflect_saves_images_when_running(self, mock_services, make_frame, tmp_path):
-        """When images_dir is set and reflector runs, both PNG images are saved."""
-        services = mock_services(reflector_return=MINIMAL_RESPONSE)
-        images_dir = str(tmp_path / "images")
-        services.images_dir = images_dir
-        reflect = make_reflect_node(services)
-
-        dummy_frame = make_frame()
-        prev_frame = make_frame()
-        latest_frame = make_frame()
-        latest_frame.frame[0][10][10] = 1  # make grids different
-
-        state = {
-            "frame_index": 3,
-            "needs_reflection": True,
-            "mechanics": [],
-            "mechanics_summary": "",
-            "tactical": [],
-            "tactical_summary": "",
-            "history": [],
-            "observation": "text",
-            "frames": [dummy_frame, prev_frame, latest_frame],
-        }
-        result = reflect(state)
-
-        # Reflector should still return mechanics
-        assert "mechanics" in result
-        # Both images should exist
-        prev_path = os.path.join(images_dir, "frame-3-reflector-prev.png")
-        curr_path = os.path.join(images_dir, "frame-3-reflector-curr.png")
-        assert os.path.isfile(prev_path), f"Expected {prev_path} to exist"
-        assert os.path.isfile(curr_path), f"Expected {curr_path} to exist"
 
     def test_reflect_does_not_save_when_images_dir_is_none(self, mock_services, make_frame, tmp_path):
         """When images_dir is None, no images directory or files are created."""

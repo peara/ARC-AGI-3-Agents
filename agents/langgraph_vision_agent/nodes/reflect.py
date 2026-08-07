@@ -7,16 +7,8 @@ Uses call_with_retry with curated-list response format.
 from __future__ import annotations
 
 import logging
-import os
 import re
 from typing import Any
-
-from vision.render import (
-    draw_boxes_on_grid,
-    find_changed_regions,
-    image_to_base64,
-    make_image_block,
-)
 
 from ..logging import log_node
 from ..prompts import REFLECTOR_SYSTEM_PROMPT
@@ -154,75 +146,9 @@ def make_reflect_node(services: AgentServices):
             f"TACTICAL_SUMMARY: ..."
         )
 
-        # Red-box overlay: when prev_frame is available, re-render both frames
-        # with bounding boxes around changed regions
-        frames_list = state.get("frames", [])
-        latest_frame = frames_list[-1] if frames_list else None
-        prev_frame = frames_list[-2] if len(frames_list) >= 3 else None
-
-        if prev_frame is not None and latest_frame is not None:
-            scale = services.config.render_scale
-            prev_grid = prev_frame.frame[0]  # unwrap batch dim
-            curr_grid = latest_frame.frame[0]
-            regions = find_changed_regions(prev_grid, curr_grid)
-            prev_boxed = draw_boxes_on_grid(prev_grid, regions, scale=scale)
-            curr_boxed = draw_boxes_on_grid(curr_grid, regions, scale=scale)
-            prev_b64 = image_to_base64(prev_boxed)
-            curr_b64 = image_to_base64(curr_boxed)
-            cells_changed = sum(
-                1 for r in range(64) for c in range(64)
-                if prev_grid[r][c] != curr_grid[r][c]
-            )
-            redbox_blocks = [
-                make_image_block(prev_b64),
-                {"type": "text", "text": "PREVIOUS frame (before action)"},
-                make_image_block(curr_b64),
-                {"type": "text", "text": "CURRENT frame (after action)"},
-                {"type": "text", "text": (
-                    f"\n{cells_changed} cells changed between these two frames.\n"
-                    "RED BOXES are drawn around regions where pixels changed — "
-                    "the grid colors inside the boxes are original, only the outline is red.\n"
-                    "Focus on the objects inside the red boxes. What moved? In which direction?\n\n"
-                    f"## Current mechanics (keep, modify, or drop — max 10)\n"
-                    f"{mechanics_bullets}\n\n"
-                    f"## Current mechanics summary\n{mechanics_summary}\n\n"
-                    f"## Current tactical (keep, modify, or drop — max 5)\n"
-                    f"{tactical_bullets}\n\n"
-                    f"## Current tactical summary\n{tactical_summary}\n\n"
-                    f"## This transition\n"
-                    f"Action taken: {last_action_result}\n"
-                    f"Available actions: {available_actions}\n"
-                    f"What you expected to happen: {expectation}\n\n"
-                    f"## Your task\n"
-                    f"Review the PREVIOUS and CURRENT frames above. "
-                    f"Decide which existing mechanics to KEEP, which to DROP, and what NEW ones to ADD.\n"
-                    f"Before dropping any [HIGH] or [MEDIUM] mechanic, verify it against this "
-                    f"frame's transition — only drop if you see direct counter-evidence.\n"
-                    f"Then update tactical: answer the four questions from your system prompt. "
-                    f"If you don't know the goal yet, you MUST include at least one conjecture "
-                    f"about what the goal might be.\n\n"
-                    f"MECHANICS:\n- ...\n\n"
-                    f"MECHANICS_SUMMARY: ...\n\n"
-                    f"TACTICAL:\n- ...\n\n"
-                    f"TACTICAL_SUMMARY: ..."
-                )},
-            ]
-
-            # Save reflector images for visual debugging
-            if services.images_dir is not None:
-                try:
-                    os.makedirs(services.images_dir, exist_ok=True)
-                    prev_boxed.save(os.path.join(services.images_dir, f"frame-{frame_index}-reflector-prev.png"))
-                    curr_boxed.save(os.path.join(services.images_dir, f"frame-{frame_index}-reflector-curr.png"))
-                except Exception as e:
-                    logger.warning("frame=%s failed to save reflector images: %s", frame_index, e)
-
         system_message = {"role": "system", "content": REFLECTOR_SYSTEM_PROMPT}
 
-        if prev_frame is not None and latest_frame is not None:
-            # Red-box overlay path
-            messages = [system_message, {"role": "user", "content": redbox_blocks}]
-        elif isinstance(observation, list):
+        if isinstance(observation, list):
             content_blocks = list(observation) + [{"type": "text", "text": text_part}]
             messages = [system_message, {"role": "user", "content": content_blocks}]
         else:

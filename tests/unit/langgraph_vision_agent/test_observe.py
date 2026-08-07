@@ -122,10 +122,10 @@ class TestObserveNode:
         assert len(observation) == 5
         assert observation[0].get("type") == "image_url"
         assert observation[1].get("type") == "text"
-        assert observation[2].get("type") == "text"
-        assert observation[3].get("type") == "image_url"
+        assert observation[2].get("type") == "image_url"
+        assert observation[3].get("type") == "text"
         assert observation[4].get("type") == "text"
-        caption = observation[2]["text"]
+        caption = observation[4]["text"]
         assert "Action taken" in caption
         assert "player moves up" in caption
 

@@ -7,7 +7,13 @@ from typing import Any, Callable
 
 from arcengine import FrameData
 
-from vision.render import grid_to_image, image_to_base64, make_image_block
+from vision.render import (
+    draw_boxes_on_grid,
+    find_changed_regions,
+    grid_to_image,
+    image_to_base64,
+    make_image_block,
+)
 
 from .logging import log_node
 from .services import AgentServices
@@ -77,14 +83,21 @@ def make_observe_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
         grid = _unwrap_grid(frame.frame)
 
         if prev_frame is not None:
-            prev_obs = render_observation(
-                prev_frame, frame_index=frame_index - 1, render_scale=render_scale
-            )
-            curr_obs = render_observation(
-                frame, frame_index=frame_index, render_scale=render_scale
-            )
+            prev_grid = prev_frame.frame[0] if len(prev_frame.frame) == 1 else prev_frame.frame
+            curr_grid = frame.frame[0] if len(frame.frame) == 1 else frame.frame
+            regions = find_changed_regions(prev_grid, curr_grid)
+            prev_boxed = draw_boxes_on_grid(prev_grid, regions, scale=render_scale)
+            curr_boxed = draw_boxes_on_grid(curr_grid, regions, scale=render_scale)
+            prev_b64 = image_to_base64(prev_boxed)
+            curr_b64 = image_to_base64(curr_boxed)
             caption = f"Action taken: {state.get('last_action_id')}. You expected: {expectation}"
-            observation = prev_obs + [{"type": "text", "text": caption}] + curr_obs
+            observation = [
+                make_image_block(prev_b64),
+                {"type": "text", "text": f"Frame {frame_index - 1}"},
+                make_image_block(curr_b64),
+                {"type": "text", "text": f"Frame {frame_index}"},
+                {"type": "text", "text": caption},
+            ]
         else:
             observation = render_observation(
                 frame, frame_index=frame_index, render_scale=render_scale
