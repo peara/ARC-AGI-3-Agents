@@ -16,6 +16,13 @@ from typing import Any
 from arcengine import GameAction
 from langgraph.types import Command
 
+from vision.render import (
+    draw_boxes_on_grid,
+    find_changed_regions,
+    image_to_base64,
+    make_image_block,
+)
+
 from ..logging import log_node
 from ..prompts import PLANNER_SYSTEM_PROMPT
 from ..services import AgentServices, call_with_retry
@@ -33,23 +40,35 @@ _UNCERTAIN_PREFIX = "UNCERTAIN"
 def _build_prompt(state: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
     """Build the planner prompt and return ``(messages, prompt_text)``.
 
-    If ``state['observation']`` contains image data (a list of content
-    dicts), it is embedded directly as multimodal content blocks.
-    Otherwise the observation text is inlined in the text prompt.
+    When ``state['frames']`` has at least 2 frames, renders both the previous
+    and current frame with red-box overlays around changed regions (same as
+    the reflector). Otherwise falls back to the observation blocks or text.
     """
 
-    observation: Any = state.get("observation", "")
     mechanics_summary: str = state.get("mechanics_summary", "")
     tactical_summary: str = state.get("tactical_summary", "")
     plan: str = state.get("plan", "") or "none"
     history: list[str] = state.get("history", [])
     available_actions: list[int] = state.get("available_actions", [])
+    expectation: str = state.get("expectation", "")
+    last_action_id = state.get("last_action_id", "")
 
     recent_history = history[-5:] if history else []
+
+    last_action_line = ""
+    if last_action_id:
+        last_action_line = (
+            f"Last action: {last_action_id}\n"
+            f"You expected: {expectation}\n"
+        )
 
     text_part = (
         f"Game mechanics: {mechanics_summary}\n"
         f"Known tactical: {tactical_summary}\n"
+    )
+    if last_action_line:
+        text_part += last_action_line
+    text_part += (
         f"Current plan: {plan}\n"
         f"Recent history: {recent_history}\n"
         f"Available actions: {available_actions}\n\n"
@@ -64,15 +83,35 @@ def _build_prompt(state: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
 
     system_message = {"role": "system", "content": PLANNER_SYSTEM_PROMPT}
 
-    # If observation is already multimodal content blocks, use them directly
-    if isinstance(observation, list):
-        content_blocks: list[dict[str, Any]] = list(observation) + [
+    frames_list = state.get("frames", [])
+    if len(frames_list) >= 3:
+        prev_frame = frames_list[-2]
+        curr_frame = frames_list[-1]
+        prev_grid = prev_frame.frame[0]
+        curr_grid = curr_frame.frame[0]
+        regions = find_changed_regions(prev_grid, curr_grid)
+        prev_boxed = draw_boxes_on_grid(prev_grid, regions, scale=8)
+        curr_boxed = draw_boxes_on_grid(curr_grid, regions, scale=8)
+        prev_b64 = image_to_base64(prev_boxed)
+        curr_b64 = image_to_base64(curr_boxed)
+        content_blocks: list[dict[str, Any]] = [
+            make_image_block(prev_b64),
+            {"type": "text", "text": "PREVIOUS frame (before action)"},
+            make_image_block(curr_b64),
+            {"type": "text", "text": "CURRENT frame (after action)"},
             {"type": "text", "text": text_part},
         ]
         messages = [system_message, {"role": "user", "content": content_blocks}]
         return messages, text_part
 
-    # Plain-text observation
+    observation: Any = state.get("observation", "")
+    if isinstance(observation, list):
+        content_blocks = list(observation) + [
+            {"type": "text", "text": text_part},
+        ]
+        messages = [system_message, {"role": "user", "content": content_blocks}]
+        return messages, text_part
+
     prompt = f"Observation: {observation}\n{text_part}"
     messages = [system_message, {"role": "user", "content": prompt}]
     return messages, prompt

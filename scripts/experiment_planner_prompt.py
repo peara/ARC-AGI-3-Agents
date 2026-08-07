@@ -37,7 +37,13 @@ import re
 from typing import Any
 
 from agents.llm_client import LLMClient
-from vision.render import image_to_base64, make_image_block
+from vision.render import (
+    draw_boxes_on_grid,
+    find_changed_regions,
+    grid_to_image,
+    image_to_base64,
+    make_image_block,
+)
 
 # ---------------------------------------------------------------------------
 # Default: production system prompt (copied from prompts.py for standalone use)
@@ -75,6 +81,38 @@ You are given:
 - Recent history: what actions were taken in the last few frames.
   If you see the same action repeated many times, ask yourself whether
   you are making progress toward the goal or just repeating.
+- Available actions: the action IDs you can choose from.
+
+Pick the next action. If you are confident about the next move, output:
+  ACTION <action_id> because <reason>
+  EXPECT: <what you expect to happen next frame>
+  REFLECT: yes if you want the analyst to review the result and update
+  mechanics/tactical, no if this is a routine move that needs no analysis
+
+If you need more information to decide, output:
+  UNCERTAIN because <what you don't know>
+"""
+
+V3_SYSTEM_PROMPT = """\
+You are the planner for a 2D grid-based puzzle game. The game is played on a
+64×64 grid of color indices (0–15). You see the current frame as an image.
+
+Your job is to pick ONE action that moves toward the goal set by your analyst.
+You do NOT set the goal — that is the analyst's job. You decide how to execute
+it one action at a time.
+
+You are given:
+- Game mechanics: a summary of what the game IS and the confirmed rules.
+- Known tactical: the analyst's current goal and what should be done next.
+  This is your directive. Pick the action that best advances this goal.
+  Do not substitute your own agenda.
+- Last action: what you did last frame and what you expected. Two images are
+  shown: the previous frame and the current frame, with red boxes around the
+  cells that changed. Check if the red boxes match your expectation. If they
+  don't, you are blocked or your understanding is wrong. Set REFLECT to yes.
+- Recent history: what actions were taken in the last few frames.
+  If you see the same action repeated many times with no progress, you are
+  stuck. Set REFLECT to yes.
 - Available actions: the action IDs you can choose from.
 
 Pick the next action. If you are confident about the next move, output:
@@ -151,12 +189,9 @@ def build_prompt(
     prev_frame: dict | None,
     history: list[str],
     system_prompt: str,
+    include_last_result: bool = False,
 ) -> list[dict[str, Any]]:
-    """Build the planner messages for a single frame.
-
-    Mirrors the production _build_prompt in plan.py, but uses the
-    provided system_prompt instead of the production PLANNER_SYSTEM_PROMPT.
-    """
+    """Build the planner messages for a single frame."""
 
     mechanics_summary = frame["mechanics_summary"]
     tactical_summary = frame["tactical_summary"]
@@ -165,9 +200,25 @@ def build_prompt(
 
     recent_history = history[-5:] if history else []
 
+    last_result_line = ""
+    if include_last_result and prev_frame is not None:
+        prev_expectation = prev_frame.get("expectation", "")
+        prev_action = prev_frame.get("action_id", "?")
+        last_result_line = (
+            f"Last action: {prev_action}\n"
+            f"You expected: {prev_expectation}\n"
+            f"Compare the PREVIOUS and CURRENT frames above. Did your expectation "
+            f"come true? If not, you are blocked or your understanding is wrong. "
+            f"Set REFLECT to yes so the analyst can re-evaluate.\n"
+        )
+
     text_part = (
         f"Game mechanics: {mechanics_summary}\n"
         f"Known tactical: {tactical_summary}\n"
+    )
+    if last_result_line:
+        text_part += last_result_line
+    text_part += (
         f"Current plan: {plan}\n"
         f"Recent history: {recent_history}\n"
         f"Available actions: {available_actions}\n\n"
@@ -182,6 +233,25 @@ def build_prompt(
 
     system_message = {"role": "system", "content": system_prompt}
 
+    if include_last_result and prev_frame is not None:
+        import numpy as np
+
+        prev_grid = prev_frame["grid"]
+        curr_grid = frame["grid"]
+        regions = find_changed_regions(prev_grid, curr_grid)
+        prev_boxed = draw_boxes_on_grid(prev_grid, regions, scale=8)
+        curr_boxed = draw_boxes_on_grid(curr_grid, regions, scale=8)
+        prev_b64 = image_to_base64(prev_boxed)
+        curr_b64 = image_to_base64(curr_boxed)
+        blocks = [
+            make_image_block(prev_b64),
+            {"type": "text", "text": f"PREVIOUS frame (before action {prev_frame['action_id']})"},
+            make_image_block(curr_b64),
+            {"type": "text", "text": "CURRENT frame (after action)"},
+            {"type": "text", "text": text_part},
+        ]
+        return [system_message, {"role": "user", "content": blocks}]
+
     # If the recording has multimodal observation blocks, use them
     observation = frame.get("observation")
     if isinstance(observation, list) and observation:
@@ -193,8 +263,6 @@ def build_prompt(
     # Fallback: render the grid as an image
     grid = frame["grid"]
     import numpy as np
-
-    from vision.render import grid_to_image
 
     img = grid_to_image(np.array(grid))
     b64 = image_to_base64(img)
@@ -240,6 +308,7 @@ def run_experiment(
     llm: LLMClient,
     system_prompt: str,
     max_tokens: int = 4096,
+    include_last_result: bool = False,
 ) -> None:
     frames = load_recording(recording_path)
     print(f"Loaded {len(frames)} frames from {recording_path}")
@@ -256,15 +325,7 @@ def run_experiment(
         prev_frame = frames[i - 1] if i > 0 else None
         action_id = frame["action_id"]
 
-        # Build history line (same as production)
-        if prev_frame is not None:
-            cells_changed = sum(
-                1 for r in range(64) for c in range(64)
-                if prev_frame["grid"][r][c] != frame["grid"][r][c]
-            )
-        else:
-            cells_changed = 0
-        history.append(f"frame {i}: action={action_id}, {cells_changed} cells changed")
+        history.append(f"frame {i}: action={action_id}")
         history = history[-5:]
 
         if i not in frame_indices:
@@ -278,7 +339,7 @@ def run_experiment(
         print(f"  Available actions: {frame['available_actions']}")
         print(f"  Recent history:    {history[-3:]}")
 
-        messages = build_prompt(frame, prev_frame, history, system_prompt)
+        messages = build_prompt(frame, prev_frame, history, system_prompt, include_last_result)
 
         try:
             resp = llm.chat(messages, max_tokens=max_tokens)
@@ -321,8 +382,8 @@ def main() -> None:
     parser.add_argument(
         "--prompt-version",
         default="v1",
-        choices=["v1", "v2"],
-        help="Which built-in prompt to use (v1=production, v2=with explanations)",
+        choices=["v1", "v2", "v3"],
+        help="v1=production, v2=with explanations, v3=with last-action result feedback",
     )
     parser.add_argument(
         "--system-prompt",
@@ -343,12 +404,16 @@ def main() -> None:
         system_prompt = args.system_prompt
     elif args.prompt_version == "v2":
         system_prompt = V2_SYSTEM_PROMPT
+    elif args.prompt_version == "v3":
+        system_prompt = V3_SYSTEM_PROMPT
     else:
         system_prompt = DEFAULT_SYSTEM_PROMPT
 
+    include_last_result = args.prompt_version == "v3"
+
     frame_indices = set(int(x) for x in args.frames.split(","))
     llm = LLMClient()
-    run_experiment(args.recording, frame_indices, llm, system_prompt, args.max_tokens)
+    run_experiment(args.recording, frame_indices, llm, system_prompt, args.max_tokens, include_last_result)
 
 
 if __name__ == "__main__":

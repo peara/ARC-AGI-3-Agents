@@ -99,8 +99,7 @@ def make_observe_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
 
             history_line = (
                 f"frame {frame_index - 1}: "
-                f"action={state.get('last_action_id')}, "
-                f"{cells_changed} cells changed"
+                f"action={state.get('last_action_id')}"
             )
             history.append(history_line)
             max_history = services.config.max_history

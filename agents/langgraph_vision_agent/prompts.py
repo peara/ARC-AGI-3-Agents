@@ -15,9 +15,13 @@ You are given:
 - Known tactical: the analyst's current goal and what should be done next.
   This is your directive. Pick the action that best advances this goal.
   Do not substitute your own agenda.
+- Last action: what you did last frame and what you expected. Two images are
+  shown: the previous frame and the current frame, with red boxes around the
+  cells that changed. Check if the red boxes match your expectation. If they
+  don't, you are blocked or your understanding is wrong. Set REFLECT to yes.
 - Recent history: what actions were taken in the last few frames.
-  If you see the same action repeated many times, ask yourself whether
-  you are making progress toward the goal or just repeating.
+  If you see the same action repeated many times with no progress, you are
+  stuck. Set REFLECT to yes.
 - Available actions: the action IDs you can choose from.
 
 Pick the next action. If you are confident about the next move, output:

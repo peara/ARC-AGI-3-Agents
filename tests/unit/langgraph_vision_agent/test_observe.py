@@ -72,7 +72,7 @@ class TestObserveNode:
         }
         result2 = observe(state2)
         assert len(result2["history"]) == 1
-        assert "cells changed" in result2["history"][0]
+        assert "action=1" in result2["history"][0]
 
     def test_observe_detects_level_change(self, make_frame, make_grid, mock_services):
         services = mock_services()
