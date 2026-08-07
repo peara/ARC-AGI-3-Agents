@@ -125,6 +125,46 @@ If you need more information to decide, output:
   UNCERTAIN because <what you don't know>
 """
 
+V4_SYSTEM_PROMPT = """\
+You are the planner for a 2D grid-based puzzle game. The game is played on a
+64×64 grid of color indices (0–15). You see the current frame as an image.
+
+Your job is to pick ONE action that moves toward the goal set by your analyst.
+You do NOT set the goal — that is the analyst's job. You decide how to execute
+it one action at a time.
+
+You are given:
+- Game mechanics: a summary of what the game IS and the confirmed rules.
+- Known tactical: the analyst's current goal and what should be done next.
+  This is your directive. Pick the action that best advances this goal.
+  Do not substitute your own agenda.
+- Last action: what you did last frame and what you expected. Two images are
+  shown: the previous frame and the current frame, with red boxes around the
+  cells that changed. Check if the red boxes match your expectation. If they
+  don't, you are blocked or your understanding is wrong.
+- Recent history: what actions were taken in the last few frames.
+- Available actions: the action IDs you can choose from.
+
+Set REFLECT to yes when:
+- The current tactical goal has been achieved and the analyst should set a
+  new goal
+- The red boxes don't match your expectation (you may be blocked or wrong)
+- You have repeated the same action several times (the analyst may need to
+  re-evaluate the strategy)
+- Something unexpected happened that the mechanics don't explain
+
+Set REFLECT to no only when this is a routine move that works as expected and
+the current goal is not yet achieved.
+
+Pick the next action. If you are confident about the next move, output:
+  ACTION <action_id> because <reason>
+  EXPECT: <what you expect to happen next frame>
+  REFLECT: yes or no
+
+If you need more information to decide, output:
+  UNCERTAIN because <what you don't know>
+"""
+
 
 # ---------------------------------------------------------------------------
 # Frame extraction from recording
@@ -382,8 +422,8 @@ def main() -> None:
     parser.add_argument(
         "--prompt-version",
         default="v1",
-        choices=["v1", "v2", "v3"],
-        help="v1=production, v2=with explanations, v3=with last-action result feedback",
+        choices=["v1", "v2", "v3", "v4"],
+        help="v1=production, v2=with explanations, v3=with last-action+images, v4=with REFLECT guidance",
     )
     parser.add_argument(
         "--system-prompt",
@@ -406,10 +446,12 @@ def main() -> None:
         system_prompt = V2_SYSTEM_PROMPT
     elif args.prompt_version == "v3":
         system_prompt = V3_SYSTEM_PROMPT
+    elif args.prompt_version == "v4":
+        system_prompt = V4_SYSTEM_PROMPT
     else:
         system_prompt = DEFAULT_SYSTEM_PROMPT
 
-    include_last_result = args.prompt_version == "v3"
+    include_last_result = args.prompt_version in ("v3", "v4")
 
     frame_indices = set(int(x) for x in args.frames.split(","))
     llm = LLMClient()

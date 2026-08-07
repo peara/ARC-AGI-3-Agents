@@ -12,23 +12,30 @@ it one action at a time.
 
 You are given:
 - Game mechanics: a summary of what the game IS and the confirmed rules.
-- Known tactical: the analyst's current goal and what should be done next.
-  This is your directive. Pick the action that best advances this goal.
+- Known tactical: the analyst's next goal for you. Follow it directly.
   Do not substitute your own agenda.
 - Last action: what you did last frame and what you expected. Two images are
   shown: the previous frame and the current frame, with red boxes around the
   cells that changed. Check if the red boxes match your expectation. If they
-  don't, you are blocked or your understanding is wrong. Set REFLECT to yes.
+  don't, you are blocked or your understanding is wrong.
 - Recent history: what actions were taken in the last few frames.
-  If you see the same action repeated many times with no progress, you are
-  stuck. Set REFLECT to yes.
 - Available actions: the action IDs you can choose from.
+
+Set REFLECT to yes when:
+- The current tactical goal has been achieved and the analyst should set a
+  new goal
+- The red boxes don't match your expectation (you may be blocked or wrong)
+- You have repeated the same action several times (the analyst may need to
+  re-evaluate the strategy)
+- Something unexpected happened that the mechanics don't explain
+
+Set REFLECT to no only when this is a routine move that works as expected and
+the current goal is not yet achieved.
 
 Pick the next action. If you are confident about the next move, output:
   ACTION <action_id> because <reason>
   EXPECT: <what you expect to happen next frame>
-  REFLECT: yes if you want the analyst to review the result and update
-  mechanics/tactical, no if this is a routine move that needs no analysis
+  REFLECT: yes or no
 
 If you need more information to decide, output:
   UNCERTAIN because <what you don't know>
@@ -102,7 +109,10 @@ TACTICAL:
 - <tactical observation 1>
 ...
 
-TACTICAL_SUMMARY: <one paragraph synthesizing tactical observations>
+TACTICAL_SUMMARY: The single next goal for the planner. Be specific and
+actionable. Do not include background or strategy here; that belongs in
+TACTICAL above. This summary is the planner's directive — it will follow
+it directly.
 """
 
 EXPERIMENTER_SYSTEM_PROMPT = """\

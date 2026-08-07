@@ -256,12 +256,31 @@ def make_plan_node(services: AgentServices):
 
         if "action_id" in result:
             # ACTION path — confident
+            needs_reflection = result["needs_reflection"]
+
+            history: list[str] = state.get("history", [])
+            action_id = result["action_id"]
+            consecutive = 0
+            for h in reversed(history):
+                if f"action={action_id}" in h:
+                    consecutive += 1
+                else:
+                    break
+            if consecutive >= 5:
+                needs_reflection = True
+                logger.info(
+                    "frame=%s action=%s repeated %d times; forcing reflection",
+                    frame_index,
+                    action_id,
+                    consecutive,
+                )
+
             return {
                 "action": GameAction.from_id(result["action_id"]),
                 "plan": result["plan"],
                 "uncertain_about": None,
                 "expectation": result["expectation"],
-                "needs_reflection": result["needs_reflection"],
+                "needs_reflection": needs_reflection,
             }
         else:
             # UNCERTAIN path — route to experiment
