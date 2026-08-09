@@ -22,6 +22,9 @@ class VisionAgentConfig:
     reflector_max_tokens: int = 8192
     experimenter_max_tokens: int = 512
     render_scale: int = 8
+    use_planner_v2: bool = False
+    planner_v2_max_tool_calls: int = 3
+    planner_v2_sandbox_timeout: float = 10.0
 
 
 def load_config(path: str | None = None) -> VisionAgentConfig:
@@ -34,7 +37,10 @@ def load_config(path: str | None = None) -> VisionAgentConfig:
     """
     config_path = path or os.environ.get("LANGGRAPH_VISION_CONFIG")
     if not config_path:
-        return VisionAgentConfig()
-
-    data: dict[str, Any] = yaml.safe_load(Path(config_path).read_text(encoding="utf-8"))
-    return VisionAgentConfig(**data)
+        config = VisionAgentConfig()
+    else:
+        data: dict[str, Any] = yaml.safe_load(Path(config_path).read_text(encoding="utf-8"))
+        config = VisionAgentConfig(**data)
+    if os.environ.get("USE_PLANNER_V2", "").lower() in ("true", "1", "yes"):
+        config.use_planner_v2 = True
+    return config
