@@ -65,7 +65,7 @@ class TestSandboxSecurity:
 
 @pytest.mark.unit
 class TestAtomsToDicts:
-    """atoms_to_dicts converts Atom objects to JSON-friendly dicts."""
+    """atoms_to_dicts converts Atom objects to flat dicts."""
 
     def test_atoms_to_dicts_basic(self) -> None:
         atom = _atom(jid=0, color=5, positions=frozenset({(1, 2), (3, 4)}))
@@ -74,23 +74,20 @@ class TestAtomsToDicts:
         d = result[0]
         assert d["jid"] == 0
         assert d["color"] == 5
-        assert d["cells"]["positions"] == [(1, 2), (3, 4)]
-        assert d["cells"]["size"] == 2
-        assert d["cells"]["centroid"] == (2.0, 3.0)
-        assert d["cells"]["bbox"] == (1, 2, 3, 4)
+        assert d["size"] == 2
+        assert d["centroid"] == (2.0, 3.0)
+        assert d["bbox"] == (1, 2, 3, 4)
 
     def test_atoms_to_dicts_bbox_none(self) -> None:
         atom = _atom(jid=0, color=5, positions=frozenset())
         result = atoms_to_dicts([atom])
-        assert result[0]["cells"]["bbox"] is None
+        assert result[0]["bbox"] is None
 
-    def test_atoms_to_dicts_positions_is_list(self) -> None:
+    def test_atoms_to_dicts_no_positions_key(self) -> None:
         atom = _atom(jid=0, color=3, positions=frozenset({(5, 6)}))
         result = atoms_to_dicts([atom])
-        positions = result[0]["cells"]["positions"]
-        assert isinstance(positions, list)
-        # Must be indexable, not a frozenset
-        assert positions[0] == (5, 6)
+        assert "positions" not in result[0]
+        assert "cells" not in result[0]
 
 
 @pytest.mark.unit
@@ -141,8 +138,8 @@ class TestRunSandboxed:
 
     def test_run_sandboxed_multiline_for_if(self) -> None:
         """Multi-line code with for/if blocks must execute without indentation errors."""
-        objs = ({"jid": 0, "color": 6, "cells": {"positions": [(0, 0)], "size": 1, "centroid": (0.0, 0.0), "bbox": (0, 0, 0, 0)}},)
-        code = "for obj in objects:\n    if obj['color'] == 6:\n        print(f\"found {obj['jid']}\")"
+        objs = ({"jid": 0, "color": 14, "size": 1, "centroid": (0.0, 0.0), "bbox": (0, 0, 0, 0)},)
+        code = "for obj in objects:\n    if obj['color'] == 14:\n        print(f\"found {obj['jid']}\")"
         result = run_sandboxed(code, objects=objs, adjacency=frozenset())
         assert "found 0" in result
         assert "Error" not in result

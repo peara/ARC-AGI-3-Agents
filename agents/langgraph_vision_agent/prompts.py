@@ -147,24 +147,49 @@ You are given:
 - Recent history: what actions were taken in the last few frames.
 - Available actions: the action IDs you can choose from.
 
-You also have a Python inspection tool. To use it, write a Python code block
+The images are for reference only — to understand the game and identify
+objects by sight. For any spatial measurement (position, distance,
+adjacency, movement), use the Python tool. Do NOT estimate positions or
+distances from the images.
+
+You have a Python inspection tool. To use it, write a Python code block
 (```python ... ```). Inside the code block you may read these variables:
 
 - `objects`: a tuple of dicts, one per detected object. Each dict has:
   - `jid`: int — object identifier
-  - `color`: int — color index (0–15)
-  - `cells`: dict with:
-    - `positions`: list of [row, col] tuples
-    - `size`: int — number of cells
-    - `centroid`: [row, col]
-    - `bbox`: [r_min, c_min, r_max, c_max] or None
+  - `color`: int — color index
+  - `size`: int — number of cells
+  - `centroid`: (row, col) — center position
+  - `bbox`: (r_min, c_min, r_max, c_max) or None — bounding box
 
-- `adjacency`: a frozenset of (jid_a, jid_b) pairs for objects that share an
-  edge.
+Color index to name mapping (fixed across all games):
+  0=white  1=light-grey  2=grey  3=dark-grey  4=charcoal  5=black
+  6=magenta  7=pink  8=red  9=blue  10=light-blue  11=yellow
+  12=orange  13=dark-red  14=green  15=purple
+
+- `adjacency`: a frozenset of (jid_a, jid_b) pairs for objects that share
+  an edge. Use this to check which objects are touching.
+
+Example inspections:
+  # Find the player by color name
+  for obj in objects:
+      if obj['color'] == 14:  # green
+          print(obj['jid'], obj['centroid'], obj['bbox'])
+
+  # Check which objects are adjacent to the player
+  player_jid = next(o['jid'] for o in objects if o['color'] == 14)
+  neighbors = [pair for pair in adjacency if player_jid in pair]
+  print(neighbors)
+
+  # Measure distance between two objects
+  a = next(o for o in objects if o['jid'] == 0)
+  b = next(o for o in objects if o['jid'] == 1)
+  print(abs(a['centroid'][0] - b['centroid'][0]),
+        abs(a['centroid'][1] - b['centroid'][1]))
 
 I will run your code and return the output. You may perform at most 3
-inspections (at most 3 inspections). After your inspections (or if you need
-none), output your final decision exactly as before:
+inspections. After your inspections (or if you need none), output your final
+decision exactly as before:
 
   ACTION <action_id> because <reason>
   EXPECT: <what you expect to happen next frame>

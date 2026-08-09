@@ -20,21 +20,16 @@ _MAX_OUTPUT = 2000
 
 
 def atoms_to_dicts(atoms: list[Atom]) -> tuple[dict, ...]:
-    """Convert Atom list to JSON-friendly dicts with sorted position lists."""
+    """Convert Atom list to flat dicts with geometry fields at top level."""
     result = []
     for atom in atoms:
-        pos_sorted = sorted(atom.cells.positions)
         centroid = atom.cells.centroid
-        bbox = atom.cells.bbox
         result.append({
             "jid": atom.jid,
             "color": atom.color,
-            "cells": {
-                "positions": pos_sorted,
-                "size": atom.cells.size,
-                "centroid": (float(centroid[0]), float(centroid[1])),
-                "bbox": bbox,
-            },
+            "size": atom.cells.size,
+            "centroid": (float(centroid[0]), float(centroid[1])),
+            "bbox": atom.cells.bbox,
         })
     return tuple(result)
 
