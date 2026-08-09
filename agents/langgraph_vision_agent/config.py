@@ -39,7 +39,9 @@ def load_config(path: str | None = None) -> VisionAgentConfig:
     if not config_path:
         config = VisionAgentConfig()
     else:
-        data: dict[str, Any] = yaml.safe_load(Path(config_path).read_text(encoding="utf-8"))
+        data: dict[str, Any] = yaml.safe_load(
+            Path(config_path).read_text(encoding="utf-8")
+        )
         config = VisionAgentConfig(**data)
     if os.environ.get("USE_PLANNER_V2", "").lower() in ("true", "1", "yes"):
         config.use_planner_v2 = True

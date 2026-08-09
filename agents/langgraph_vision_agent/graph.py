@@ -16,6 +16,7 @@ from langgraph.types import Command
 
 from .nodes.experiment import make_experiment_node
 from .nodes.plan import make_plan_node
+from .nodes.planner_v2 import make_planner_v2_node
 from .nodes.reflect import make_reflect_node
 from .observe import make_observe_node
 from .services import AgentServices
@@ -68,24 +69,43 @@ def build_workflow(services: AgentServices) -> Pregel:
     )
 
     # --- nodes (wrapped with path tracking) ---
-    graph.add_node("observe", _with_path_tracking("observe", make_observe_node(services)))
-    graph.add_node("reflect", _with_path_tracking("reflect", make_reflect_node(services)))
-    graph.add_node("plan", _with_path_tracking("plan", make_plan_node(services)))
-    graph.add_node("experiment", _with_path_tracking("experiment", make_experiment_node(services)))
+    graph.add_node(
+        "observe", _with_path_tracking("observe", make_observe_node(services))
+    )
+    graph.add_node(
+        "reflect", _with_path_tracking("reflect", make_reflect_node(services))
+    )
+    graph.add_node(
+        "plan",
+        _with_path_tracking(
+            "plan",
+            make_planner_v2_node(services)
+            if services.config.use_planner_v2
+            else make_plan_node(services),
+        ),
+    )
 
     # --- edges ---
     graph.add_edge(START, "observe")
     graph.add_edge("observe", "reflect")
     graph.add_edge("reflect", "plan")
 
-    # Conditional: plan → experiment (uncertain) or END (confident)
-    graph.add_conditional_edges(
-        "plan",
-        _plan_router,
-        {"experiment": "experiment", END: END},
-    )
+    if services.config.use_planner_v2:
+        graph.add_edge("plan", END)
+    else:
+        graph.add_node(
+            "experiment",
+            _with_path_tracking("experiment", make_experiment_node(services)),
+        )
 
-    graph.add_edge("experiment", END)
+        # Conditional: plan → experiment (uncertain) or END (confident)
+        graph.add_conditional_edges(
+            "plan",
+            _plan_router,
+            {"experiment": "experiment", END: END},
+        )
+
+        graph.add_edge("experiment", END)
 
     return graph.compile()
 
