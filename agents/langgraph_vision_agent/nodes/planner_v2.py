@@ -53,7 +53,11 @@ def make_planner_v2_node(services: AgentServices):
         # ---- Grid extraction and atom segmentation ----
         grid: np.ndarray | None = None
         if frames:
-            grid = frames[-1].frame  # type: ignore[union-attr]
+            raw = frames[-1].frame  # type: ignore[union-attr]
+            # FrameData.frame is list[list[list[int]]]; unwrap single-layer to 2D
+            if len(raw) == 1 and raw[0] and isinstance(raw[0][0], list):
+                raw = raw[0]
+            grid = np.array(raw, dtype=np.int64)
         elif state.get("prev_grid") is not None:
             grid = np.array(state["prev_grid"], dtype=np.int64)
 
