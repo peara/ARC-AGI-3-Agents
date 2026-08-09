@@ -138,3 +138,11 @@ class TestRunSandboxed:
     def test_run_sandboxed_returns_error_on_exception(self) -> None:
         result = run_sandboxed("1/0", objects=({},), adjacency=frozenset())
         assert "Error" in result or "ZeroDivision" in result
+
+    def test_run_sandboxed_multiline_for_if(self) -> None:
+        """Multi-line code with for/if blocks must execute without indentation errors."""
+        objs = ({"jid": 0, "color": 6, "cells": {"positions": [(0, 0)], "size": 1, "centroid": (0.0, 0.0), "bbox": (0, 0, 0, 0)}},)
+        code = "for obj in objects:\n    if obj['color'] == 6:\n        print(f\"found {obj['jid']}\")"
+        result = run_sandboxed(code, objects=objs, adjacency=frozenset())
+        assert "found 0" in result
+        assert "Error" not in result

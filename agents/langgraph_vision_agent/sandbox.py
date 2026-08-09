@@ -68,15 +68,7 @@ def _run_in_process(code: str, objects: tuple[dict, ...], adjacency: frozenset[t
     old_stdout = sys.stdout
     sys.stdout = buf
     try:
-        lines = code.split("\n")
-        if len(lines) > 1:
-            exec(compile("\n".join(lines[:-1]), "<sandbox>", "exec"), namespace)  # noqa: S102
-        last_line = lines[-1].strip()
-        try:
-            result = eval(compile(last_line, "<sandbox>", "eval"), namespace)  # noqa: S302
-            buf.write(repr(result))
-        except SyntaxError:
-            exec(compile(last_line, "<sandbox>", "exec"), namespace)  # noqa: S102
+        exec(compile(code, "<sandbox>", "exec"), namespace)  # noqa: S102
     except Exception as exc:
         return f"Error: {exc}"
     finally:
