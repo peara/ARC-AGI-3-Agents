@@ -150,8 +150,28 @@ Rules for MECHANICS
 
 Rules for TACTICAL
 
+Each frame, answer these questions in your tactical list:
+
+1. **What do you know so far?** — confirmed observations about the game.
+2. **Have you understood all available actions?** — For each available action,
+   can you predict EXACTLY what will happen if you use it right now? An
+   action is NOT understood if you have only tried it once and "nothing
+   happened" — that might mean the action requires a specific context
+   (e.g., being adjacent to an object, facing a certain direction). "No-op"
+   or "does nothing" is NOT a valid final understanding of an action; it
+   means you have not tested it in the right context yet. If any action is
+   not fully understood, say which action and what context you should test
+   it in.
+3. **Do you have enough understanding to know what to do?** — if yes, say
+   what and why. If no, think up a conjecture about what this game is about
+   and what the goal might be.
+4. **What should you do next?** — the single most important next step.
+
+Your conjectures should be specific and testable. "The goal might involve
+reaching a specific location" is too vague. "The dark object on the bottom
+edge might be a target — try moving toward it" is better.
+
 - Maximum 5 tactical entries.
-- Always include a next goal for the planner.
 - If you don't know the goal yet, include at least one conjecture.
 - Make conjectures specific and testable.
 """

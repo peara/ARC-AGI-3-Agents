@@ -111,7 +111,8 @@ def _truncate_messages(
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "image_url":
                     new_blocks.append({"type": "text", "text": "[image omitted]"})
-                    truncated_any = True
+                    # Image omission in the log is NOT content truncation —
+                    # the LLM still receives the full image. Do not set truncated_any.
                 elif isinstance(block, dict) and block.get("type") == "text":
                     text = block.get("text", "")
                     if len(text) > limit:
