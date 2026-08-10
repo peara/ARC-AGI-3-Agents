@@ -11,13 +11,12 @@ from __future__ import annotations
 from typing import Callable
 
 from agents.langgraph_unified_agent.config import UnifiedAgentConfig
-from agents.langgraph_vision_agent.services import (
-    AgentServices,
-    _make_callable,
-)
+from agents.langgraph_vision_agent.services import AgentServices
 from agents.llm_client import LLMClient
 from agents.recorder import Recorder
-from agents.templates.llm_logging import LlmCallLogger
+from agents.templates.llm_logging import LlmCallLogger, wrap_llm_call
+
+from .tools import UNIFIED_TOOLS
 
 
 def _noop_callable(_messages: list[dict[str, str]]) -> str:
@@ -47,13 +46,18 @@ def create_services(
 
     images_dir = recorder.images_dir_path() if recorder is not None else None
 
-    unified_call = _make_callable(
-        llm_client,
-        llm_logger,
-        kind="unified",
-        thinking=config.llm_thinking,
-        max_tokens=config.unified_max_tokens,
-    )
+    if llm_logger is None:
+        unified_call = llm_client.chat
+    else:
+        unified_call = wrap_llm_call(
+            llm_client.chat,
+            llm_logger,
+            kind="unified",
+            thinking=config.llm_thinking,
+            max_tokens=config.unified_max_tokens,
+            tools=UNIFIED_TOOLS,
+            tool_choice="auto",
+        )
 
     return AgentServices(
         llm_client=llm_client,

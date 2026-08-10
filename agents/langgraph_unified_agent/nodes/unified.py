@@ -1,19 +1,20 @@
 """Unified node merging reflector and planner into a single tool-using node.
 
-Runs up to ``unified_max_tool_calls`` (default 12) iterations of:
-  1. Call LLM
-  2. If ACTION detected anywhere in response → parse and return dict
-  3. If fenced Python block → sandbox execution, append result, loop
-  4. Otherwise → nudge and retry (via call_with_retry)
+Runs up to ``unified_max_tool_calls`` (default 12) iterations of a tool loop:
+  1. Call LLM with ``inspect`` and ``decide`` tools
+  2. If ``response.tool_calls`` contains ``inspect`` → sandbox execution, loop
+  3. If ``response.tool_calls`` contains ``decide`` → parse and return dict
+  4. If no tool calls → nudge (1 retry), then fallback to random
+  5. If both ``inspect`` and ``decide`` in same response → process inspect only, loop
 
 Always returns a dict — never a Command.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import random
-import re
 from collections.abc import Sequence
 from typing import Any, Callable
 
@@ -21,39 +22,18 @@ import numpy as np
 from arcengine import GameAction
 
 from agents.langgraph_vision_agent.logging import log_node
-from agents.langgraph_vision_agent.nodes.plan import (
-    _parse_expectation,
-    _parse_reflect_flag,
-)
-from agents.langgraph_vision_agent.nodes.reflect import _parse_response
 from agents.langgraph_vision_agent.sandbox import (
     atoms_to_dicts,
     compute_adjacency,
     run_sandboxed,
 )
-from agents.langgraph_vision_agent.services import AgentServices, call_with_retry
+from agents.langgraph_vision_agent.services import AgentServices
 
 from ..config import UnifiedAgentConfig
 from ..prompts import UNIFIED_SYSTEM_PROMPT
+from ..tools import UNIFIED_TOOLS
 
 logger = logging.getLogger(__name__)
-
-_ACTION_SEARCH_RE = re.compile(r"(?i)\bACTION\s+(\d+)")
-_FENCED_PYTHON_RE = re.compile(r"```python\s*\n(.*?)```", re.DOTALL)
-
-
-def _parse_action_id_anywhere(text: str) -> int | None:
-    """Extract action ID from anywhere in text, not just the start."""
-    m = _ACTION_SEARCH_RE.search(text)
-    return int(m.group(1)) if m else None
-
-
-def _extract_python_block(text: str) -> str | None:
-    """Return the first fenced python code block, or None."""
-    m = _FENCED_PYTHON_RE.search(text)
-    if m:
-        return m.group(1).strip()
-    return None
 
 
 def _frame_to_grid(frame_data: Any) -> np.ndarray | None:
@@ -106,10 +86,10 @@ def _build_user_content(
         parts.append("## REFLECTION REQUIRED THIS FRAME")
         if reflect_reason:
             parts.append(f"Reason: {reflect_reason}")
-        parts.append("You MUST set REFLECT=yes and output MECHANICS + TACTICAL sections.")
+        parts.append("You MUST set reflect=true in your decide() call and include mechanics and tactical observations.")
         parts.append("")
 
-    parts.append("Inspect the state with the Python tool, then output your decision.")
+    parts.append("Use inspect() to examine the state, then call decide() with your action.")
 
     text_prompt = "\n".join(parts)
 
@@ -127,10 +107,23 @@ def _build_user_content(
     return content_blocks
 
 
+def _deduplicate_tool_calls(tool_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep only the first tool call per function name."""
+    seen_names: set[str] = set()
+    unique: list[dict[str, Any]] = []
+    for tc in tool_calls:
+        name = tc["function"]["name"]
+        if name not in seen_names:
+            seen_names.add(name)
+            unique.append(tc)
+    return unique
+
+
 def make_unified_node(services: AgentServices) -> Callable[[dict[str, Any]], dict[str, Any]]:
     """Return a LangGraph node function that plans with a tool loop.
 
-    Merges reflection and planning into a single LLM call cycle.
+    Merges reflection and planning into a single LLM call cycle using
+    native OpenAI-compatible tool calling (inspect + decide).
     """
     # AgentServices.config is VisionAgentConfig at the type level, but the unified
     # agent stores a UnifiedAgentConfig there at runtime (see services.py).
@@ -183,53 +176,137 @@ def make_unified_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
         prev_tactical: list[str] = list(state.get("tactical", []))
         prev_tactical_summary: str = state.get("tactical_summary", "")
 
+        available_actions: list[int] = state.get("available_actions", [1])
+        if not available_actions:
+            available_actions = [1]
+
         # ---- Tool loop ----
+        nudge_count = 0
         for call_idx in range(max_tool_calls):
             try:
-                response = services.planner_call(messages)
+                response = services.planner_call(
+                    messages, tools=UNIFIED_TOOLS, tool_choice="auto",
+                )
             except Exception:
                 break  # LLM error → fallback below
 
-            raw = response if isinstance(response, str) else getattr(response, "content", str(response))
+            # Extract tool calls from response
+            raw_tool_calls: list[dict[str, Any]] | None = None
+            raw_content: str = ""
+            if isinstance(response, str):
+                raw_content = response
+            else:
+                raw_content = getattr(response, "content", "") or ""
+                raw_tool_calls = getattr(response, "tool_calls", None)
 
-            # ACTION takes priority — search anywhere in response (not just startswith)
-            action_match = re.search(r"(?i)\bACTION\s+(\d+)", raw)
-            if action_match is not None:
-                action_id = int(action_match.group(1))
-                expectation = _parse_expectation(raw)
-                needs_reflection = _parse_reflect_flag(raw)
-                log_node(frame_index, "unified", action=action_id, tool_calls=call_idx + 1)
+            # ---- No tool calls → nudge or fallback ----
+            if not raw_tool_calls:
+                nudge_count += 1
+                if nudge_count >= 2:
+                    # Second nudge failed → fallback
+                    break
+                # First nudge: append nudge message and continue
+                messages = messages + [
+                    {"role": "assistant", "content": raw_content},
+                    {"role": "user", "content": "Please call inspect() or decide()."},
+                ]
+                continue
 
-                # Parse MECHANICS + TACTICAL when REFLECT=yes
+            # ---- Deduplicate tool calls (keep first per function name) ----
+            tool_calls_list = _deduplicate_tool_calls(raw_tool_calls)
+            function_names = {tc["function"]["name"] for tc in tool_calls_list}
+
+            # ---- Both inspect and decide in same response → inspect only, loop ----
+            if "inspect" in function_names and "decide" in function_names:
+                # Keep only inspect, ignore decide this round
+                tool_calls_list = [
+                    tc for tc in tool_calls_list if tc["function"]["name"] == "inspect"
+                ]
+                function_names = {"inspect"}
+
+            # ---- Process inspect tool call ----
+            if "inspect" in function_names:
+                tc = next(tc for tc in tool_calls_list if tc["function"]["name"] == "inspect")
+                try:
+                    args = json.loads(tc["function"]["arguments"])
+                    code = args.get("code", "")
+                except (json.JSONDecodeError, AttributeError):
+                    # Bad JSON → append error as tool result, continue
+                    error_msg = tc.get("function", {}).get("arguments", "") if isinstance(tc, dict) else ""
+                    messages = messages + [
+                        {"role": "assistant", "content": raw_content, "tool_calls": raw_tool_calls},
+                        {"role": "tool", "tool_call_id": tc["id"], "content": f"Error: could not parse inspect arguments. {error_msg}"},
+                    ]
+                    continue
+
+                if not code:
+                    messages = messages + [
+                        {"role": "assistant", "content": raw_content, "tool_calls": raw_tool_calls},
+                        {"role": "tool", "tool_call_id": tc["id"], "content": "Error: inspect() requires a 'code' argument."},
+                    ]
+                    continue
+
+                # Run sandbox
+                result = run_sandboxed(
+                    code, objects, adjacency, list(history_cache), timeout=sandbox_timeout,
+                )
+                messages = messages + [
+                    {"role": "assistant", "content": raw_content, "tool_calls": raw_tool_calls},
+                    {"role": "tool", "tool_call_id": tc["id"], "content": result},
+                ]
+                continue
+
+            # ---- Process decide tool call ----
+            if "decide" in function_names:
+                tc = next(tc for tc in tool_calls_list if tc["function"]["name"] == "decide")
+                try:
+                    args = json.loads(tc["function"]["arguments"])
+                except (json.JSONDecodeError, AttributeError):
+                    # Bad JSON → fallback
+                    break
+
+                action_id = args.get("action_id")
+                expectation = args.get("expectation", "")
+                reflect = args.get("reflect", False)
+                mechanics_list = args.get("mechanics", [])
+                mechanics_summary = args.get("mechanics_summary", "")
+                tactical_list = args.get("tactical", [])
+                tactical_summary = args.get("tactical_summary", "")
+
+                # Validate action_id against available_actions
+                if action_id is None or action_id not in available_actions:
+                    break  # Invalid action → fallback
+
+                # force_reflect overrides reflect to True
+                if force_reflect:
+                    reflect = True
+
+                # Build output mechanics/tactical
                 mechanics_out: list[str] = prev_mechanics
                 mechanics_summary_out: str = prev_mechanics_summary
                 tactical_out: list[str] = prev_tactical
                 tactical_summary_out: str = prev_tactical_summary
 
-                if needs_reflection:
-                    parsed = _parse_response(raw)
-                    if parsed is not None:
-                        new_mech, new_mech_sum, new_tac, new_tac_sum = parsed
-                        # Cap lists
-                        max_mechanics = config.max_mechanics
-                        max_tactical = config.max_tactical
-                        if len(new_mech) > max_mechanics:
-                            new_mech = new_mech[-max_mechanics:]
-                        if len(new_tac) > max_tactical:
-                            new_tac = new_tac[-max_tactical:]
-                        mechanics_out = new_mech
-                        mechanics_summary_out = new_mech_sum
-                        tactical_out = new_tac
-                        tactical_summary_out = new_tac_sum
-                    else:
-                        logger.warning(
-                            "frame=%s REFLECT=yes but MECHANICS/TACTICAL parse failed; keeping existing values",
-                            frame_index,
-                        )
-                    # Clear the reflection flag after processing
-                    needs_reflection = False
+                if reflect:
+                    # Use values from the decide call
+                    new_mech = mechanics_list if mechanics_list else prev_mechanics
+                    new_mech_sum = mechanics_summary if mechanics_summary else prev_mechanics_summary
+                    new_tac = tactical_list if tactical_list else prev_tactical
+                    new_tac_sum = tactical_summary if tactical_summary else prev_tactical_summary
+                    # Cap lists
+                    max_mechanics = config.max_mechanics
+                    max_tactical = config.max_tactical
+                    if len(new_mech) > max_mechanics:
+                        new_mech = new_mech[-max_mechanics:]
+                    if len(new_tac) > max_tactical:
+                        new_tac = new_tac[-max_tactical:]
+                    mechanics_out = new_mech
+                    mechanics_summary_out = new_mech_sum
+                    tactical_out = new_tac
+                    tactical_summary_out = new_tac_sum
 
                 # 5-repeat action guard: count consecutive same-action entries
+                needs_reflection = reflect
                 consecutive = 0
                 for h in reversed(action_history):
                     if f"action={action_id}" in h:
@@ -245,6 +322,8 @@ def make_unified_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
                         consecutive,
                     )
 
+                log_node(frame_index, "unified", action=action_id, tool_calls=call_idx + 1)
+
                 # Cache this frame for next turn's history
                 history_cache.append({
                     "action": action_id,
@@ -254,7 +333,7 @@ def make_unified_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
 
                 return {
                     "action": GameAction.from_id(action_id),
-                    "plan": raw,
+                    "plan": f"Action {action_id}: {expectation}",
                     "expectation": expectation,
                     "needs_reflection": needs_reflection,
                     "mechanics": mechanics_out,
@@ -263,117 +342,7 @@ def make_unified_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
                     "tactical_summary": tactical_summary_out,
                 }
 
-            # Python code block → sandbox
-            code = _extract_python_block(raw)
-            if code is not None:
-                result = run_sandboxed(
-                    code, objects, adjacency, list(history_cache), timeout=sandbox_timeout,
-                )
-                messages = messages + [
-                    {"role": "assistant", "content": raw},
-                    {"role": "user", "content": f"Tool output:\n{result}"},
-                ]
-                continue
-
-            # Neither ACTION nor Python — nudge via call_with_retry
-            try:
-                parsed, final_raw, attempts = call_with_retry(
-                    services.planner_call,
-                    messages,
-                    lambda t: (
-                        {
-                            "action_id": aid,
-                            "expectation": _parse_expectation(t),
-                            "needs_reflection": _parse_reflect_flag(t),
-                        }
-                        if (aid := _parse_action_id_anywhere(t)) is not None
-                        else None
-                    ),
-                    max_attempts=2,
-                    nudge_prefix="Expected 'ACTION <id> because <reason>' or a ```python``` block",
-                )
-            except Exception:
-                break
-
-            if parsed is not None:
-                action_id: int = int(parsed["action_id"])
-                needs_reflection: bool = bool(parsed["needs_reflection"])
-
-                # Parse MECHANICS + TACTICAL when REFLECT=yes
-                mechanics_out = prev_mechanics
-                mechanics_summary_out = prev_mechanics_summary
-                tactical_out = prev_tactical
-                tactical_summary_out = prev_tactical_summary
-
-                if needs_reflection:
-                    reflect_parsed = _parse_response(final_raw)
-                    if reflect_parsed is not None:
-                        new_mech, new_mech_sum, new_tac, new_tac_sum = reflect_parsed
-                        max_mechanics = config.max_mechanics
-                        max_tactical = config.max_tactical
-                        if len(new_mech) > max_mechanics:
-                            new_mech = new_mech[-max_mechanics:]
-                        if len(new_tac) > max_tactical:
-                            new_tac = new_tac[-max_tactical:]
-                        mechanics_out = new_mech
-                        mechanics_summary_out = new_mech_sum
-                        tactical_out = new_tac
-                        tactical_summary_out = new_tac_sum
-                    else:
-                        logger.warning(
-                            "frame=%s REFLECT=yes but MECHANICS/TACTICAL parse failed (call_with_retry path); keeping existing values",
-                            frame_index,
-                        )
-                    needs_reflection = False
-
-                log_node(frame_index, "unified", action=action_id, tool_calls=call_idx + 1)
-
-                # 5-repeat action guard
-                action_history = state.get("history", [])
-                consecutive = 0
-                for h in reversed(action_history):
-                    if f"action={action_id}" in h:
-                        consecutive += 1
-                    else:
-                        break
-                if consecutive >= 5:
-                    needs_reflection = True
-                    logger.info(
-                        "frame=%s action=%s repeated %d times; forcing reflection",
-                        frame_index,
-                        action_id,
-                        consecutive,
-                    )
-
-                # Cache this frame for next turn's history
-                history_cache.append({
-                    "action": action_id,
-                    "objects": objects,
-                    "adjacency": adjacency,
-                })
-
-                return {
-                    "action": GameAction.from_id(action_id),
-                    "plan": final_raw,
-                    "expectation": parsed["expectation"],
-                    "needs_reflection": needs_reflection,
-                    "mechanics": mechanics_out,
-                    "mechanics_summary": mechanics_summary_out,
-                    "tactical": tactical_out,
-                    "tactical_summary": tactical_summary_out,
-                }
-
-            # Nudge also failed — append the failed exchange and continue
-            messages = messages + [
-                {"role": "assistant", "content": final_raw},
-                {"role": "user", "content": "Your response did not match the expected format. Please output ACTION <id> because <reason>."},
-            ]
-            continue
-
         # ---- Fallback: max tool calls exhausted or LLM error ----
-        available_actions: list[int] = state.get("available_actions", [1])
-        if not available_actions:
-            available_actions = [1]
         random_action_id = random.choice(available_actions)
         logger.warning(
             "frame=%s unified exhausted %d tool calls; random fallback action=%s",
