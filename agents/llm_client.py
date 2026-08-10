@@ -28,6 +28,7 @@ class ChatResponse:
 
     content: str
     finish_reason: str | None
+    tool_calls: list | None = None
 
     def __str__(self) -> str:
         return self.content
@@ -91,6 +92,8 @@ class LLMClient:
         *,
         thinking: bool | None = None,
         max_tokens: int | None = None,
+        tools: list[dict] | None = None,
+        tool_choice: str | None = None,
     ) -> ChatResponse:
         """Send a chat completion request and return a :class:`ChatResponse`.
 
@@ -129,6 +132,10 @@ class LLMClient:
             # (which is where extra_body lands). Do NOT pass it as a bare
             # kwarg — the OpenAI SDK rejects it as an unknown parameter.
             kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": thinking}}
+        if tools is not None:
+            kwargs["tools"] = tools
+        if tools is not None:
+            kwargs["tool_choice"] = tool_choice or "auto"
 
         try:
             response = self._client.chat.completions.create(**kwargs)
@@ -137,4 +144,13 @@ class LLMClient:
 
         content: str | None = response.choices[0].message.content
         finish_reason: str | None = response.choices[0].finish_reason
-        return ChatResponse(content=content or "", finish_reason=finish_reason)
+
+        raw_tool_calls = response.choices[0].message.tool_calls
+        tool_calls_list = None
+        if raw_tool_calls:
+            tool_calls_list = [
+                {"id": tc.id, "function": {"name": tc.function.name, "arguments": tc.function.arguments}, "type": tc.type}
+                for tc in raw_tool_calls
+            ]
+
+        return ChatResponse(content=content or "", finish_reason=finish_reason, tool_calls=tool_calls_list)

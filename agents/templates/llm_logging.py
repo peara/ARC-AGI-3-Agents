@@ -46,6 +46,8 @@ class LlmCallable(Protocol):
         *,
         thinking: bool | None = ...,
         max_tokens: int | None = ...,
+        tools: list[dict] | None = ...,
+        tool_choice: str | None = ...,
     ) -> ChatResponse | str: ...
 
 
@@ -135,11 +137,13 @@ def wrap_llm_call(
     *,
     thinking: bool | None = None,
     max_tokens: int | None = None,
+    tools: list[dict] | None = None,
+    tool_choice: str | None = None,
 ) -> Callable[..., ChatResponse | str]:
     """Wrap ``llm_call`` so every invocation is logged to ``logger.path``.
 
     The returned callable has the same signature as ``llm_call``:
-    ``(messages, *, thinking=None, max_tokens=None) -> ChatResponse | str``.
+    ``(messages, *, thinking=None, max_tokens=None, tools=None, tool_choice=None) -> ChatResponse | str``.
 
     ``thinking`` / ``max_tokens`` set here act as per-kind defaults applied
     to every call through this wrapper. They may be overridden per-call by
@@ -156,6 +160,8 @@ def wrap_llm_call(
         *,
         thinking: bool | None = thinking,
         max_tokens: int | None = max_tokens,
+        tools: list[dict] | None = tools,
+        tool_choice: str | None = tool_choice,
     ) -> ChatResponse | str:
         seq = logger.next_seq()
         frame_index = logger._frame_indexer()
@@ -165,11 +171,19 @@ def wrap_llm_call(
         error: str | None = None
         raw = ""
         finish_reason: str | None = None
+        tool_calls_data: list[dict] | None = None
         try:
-            result = llm_call(messages, thinking=thinking, max_tokens=max_tokens)
+            result = llm_call(
+                messages,
+                thinking=thinking,
+                max_tokens=max_tokens,
+                tools=tools,
+                tool_choice=tool_choice,
+            )
             if isinstance(result, ChatResponse):
                 raw = result.content
                 finish_reason = result.finish_reason
+                tool_calls_data = result.tool_calls
             else:
                 # Backward compat: bare-string return from fakes / old callables.
                 raw = result
@@ -207,6 +221,7 @@ def wrap_llm_call(
                         "trigger": trigger,
                         "messages": trunc_msgs,
                         "response_raw": trunc_raw,
+                        "tool_calls": tool_calls_data,
                         "latency_ms": latency_ms,
                         "ok": ok,
                         "error": error,
@@ -224,6 +239,7 @@ def wrap_llm_call(
                 "trigger": trigger,
                 "messages": trunc_msgs,
                 "response_raw": trunc_raw,
+                "tool_calls": tool_calls_data,
                 "latency_ms": latency_ms,
                 "ok": ok,
                 "error": error,
