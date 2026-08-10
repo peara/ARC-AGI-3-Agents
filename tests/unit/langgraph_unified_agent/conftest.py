@@ -1,11 +1,13 @@
-"""Shared fixtures for LangGraph unified-agent parser tests.
+"""Shared fixtures for LangGraph unified-agent tool-call tests.
 
-Mimics the vision-agent conftest pattern but keeps only the helpers the
-unified-agent parser tests need.
+Provides helpers to build ``ChatResponse`` objects with native tool calls
+(inspect / decide) instead of the old text-based ``"ACTION 1 because …"``
+protocol.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from unittest.mock import MagicMock
@@ -15,10 +17,16 @@ from arcengine import FrameData, GameState
 
 from agents.langgraph_unified_agent.config import UnifiedAgentConfig
 from agents.langgraph_vision_agent.services import AgentServices
+from agents.llm_client import ChatResponse
 
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
+
+
+# ---------------------------------------------------------------------------
+# Grid / frame helpers
+# ---------------------------------------------------------------------------
 
 
 def _make_grid(value: int = 0, rows: int = 64, cols: int = 64):
@@ -54,30 +62,122 @@ def make_frame():
     return _make_frame
 
 
+# ---------------------------------------------------------------------------
+# ChatResponse builders
+# ---------------------------------------------------------------------------
+
+_CALL_COUNTER = 0
+
+
+def _next_call_id() -> str:
+    """Return a unique tool-call id like ``call_0``, ``call_1``, …"""
+    global _CALL_COUNTER
+    _CALL_COUNTER += 1
+    return f"call_{_CALL_COUNTER}"
+
+
+def make_decide_response(
+    action_id: int,
+    expectation: str = "test expectation",
+    reflect: bool = False,
+    mechanics: list[str] | None = None,
+    mechanics_summary: str = "",
+    tactical: list[str] | None = None,
+    tactical_summary: str = "",
+    content: str = "",
+) -> ChatResponse:
+    """Build a ``ChatResponse`` containing a single ``decide`` tool call."""
+    args: dict = {
+        "action_id": action_id,
+        "expectation": expectation,
+        "reflect": reflect,
+    }
+    if mechanics is not None:
+        args["mechanics"] = mechanics
+    if mechanics_summary:
+        args["mechanics_summary"] = mechanics_summary
+    if tactical is not None:
+        args["tactical"] = tactical
+    if tactical_summary:
+        args["tactical_summary"] = tactical_summary
+
+    return ChatResponse(
+        content=content,
+        finish_reason="stop",
+        tool_calls=[
+            {
+                "id": _next_call_id(),
+                "function": {
+                    "name": "decide",
+                    "arguments": json.dumps(args),
+                },
+                "type": "function",
+            }
+        ],
+    )
+
+
+def make_inspect_response(code: str, content: str = "") -> ChatResponse:
+    """Build a ``ChatResponse`` containing a single ``inspect`` tool call."""
+    return ChatResponse(
+        content=content,
+        finish_reason="stop",
+        tool_calls=[
+            {
+                "id": _next_call_id(),
+                "function": {
+                    "name": "inspect",
+                    "arguments": json.dumps({"code": code}),
+                },
+                "type": "function",
+            }
+        ],
+    )
+
+
+def make_text_response(content: str) -> ChatResponse:
+    """Build a ``ChatResponse`` with no tool calls (plain text only)."""
+    return ChatResponse(content=content, finish_reason="stop", tool_calls=None)
+
+
+# ---------------------------------------------------------------------------
+# Mock services factory
+# ---------------------------------------------------------------------------
+
+
 def _mock_services(
-    unified_return=None,
+    unified_return: ChatResponse | type[Exception] | None = None,
     config: UnifiedAgentConfig | None = None,
 ) -> AgentServices:
-    """Build AgentServices with MagicMock LLM callables for the unified agent."""
+    """Build AgentServices with a mock ``planner_call`` for tool-call tests.
+
+    Parameters
+    ----------
+    unified_return:
+        - ``ChatResponse`` → mock returns it on every call.
+        - ``Exception`` subclass → mock raises it on every call.
+        - ``None`` → mock returns a default ``decide(action_id=1)`` response.
+    config:
+        Optional config override (uses ``UnifiedAgentConfig()`` by default).
+    """
     cfg = config or UnifiedAgentConfig()
 
-    def _make_call(side_effect):
-        m = MagicMock()
-        if side_effect is not None and isinstance(side_effect, type) and issubclass(side_effect, Exception):
-            m.side_effect = side_effect
-        elif side_effect is not None:
-            m.return_value = side_effect
-        else:
-            m.return_value = "ACTION 1 because fallback"
-        return m
+    if unified_return is None:
+        unified_return = make_decide_response(action_id=1, expectation="fallback")
+
+    m = MagicMock()
+    if isinstance(unified_return, type) and issubclass(unified_return, Exception):
+        m.side_effect = unified_return
+    else:
+        m.return_value = unified_return
 
     return AgentServices(
         llm_client=MagicMock(),
         llm_logger=None,
         images_dir=None,
-        planner_call=_make_call(unified_return),
-        reflector_call=_make_call("placeholder reflector return"),
-        experimenter_call=_make_call("placeholder experimenter return"),
+        planner_call=m,
+        reflector_call=MagicMock(return_value="placeholder reflector return"),
+        experimenter_call=MagicMock(return_value="placeholder experimenter return"),
         config=cfg,
     )
 

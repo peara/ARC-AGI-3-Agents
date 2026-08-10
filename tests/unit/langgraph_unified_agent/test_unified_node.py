@@ -1,13 +1,21 @@
-"""Integration tests for the unified node: tool loop, action parsing, reflection, guardrails."""
+"""Unit tests for the unified node: native tool calling, deduplication, fallbacks."""
 
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
 from arcengine import GameAction
 
 from agents.langgraph_unified_agent.nodes.unified import make_unified_node
+from agents.llm_client import ChatResponse
+
+from .conftest import (
+    make_decide_response,
+    make_inspect_response,
+    make_text_response,
+)
 
 _PATCHES = [
     patch("optitrack.atoms.extract_atoms", return_value=()),
@@ -43,7 +51,7 @@ def _base_state(make_frame, **overrides):
 
 @pytest.mark.unit
 class TestUnifiedNode:
-    """Integration tests for the unified node (merges reflector + planner)."""
+    """Unit tests for the unified node using native tool calls."""
 
     @pytest.fixture(autouse=True)
     def _patch_deps(self):
@@ -51,10 +59,17 @@ class TestUnifiedNode:
             yield
 
     # ------------------------------------------------------------------ #
-    # 1. Basic: returns action dict with all expected keys
+    # 1. Basic: decide tool call → returns dict with action
     # ------------------------------------------------------------------ #
-    def test_unified_returns_action_dict(self, mock_services, make_frame):
-        services = mock_services(unified_return="ACTION 1 because safe")
+    def test_decide_tool_call(self, mock_services, make_frame):
+        """Mock LLM returns a decide() tool call → node returns dict with action."""
+        services = mock_services(
+            unified_return=make_decide_response(
+                action_id=2,
+                expectation="player moves right",
+                reflect=False,
+            ),
+        )
         node = make_unified_node(services)
         state = _base_state(make_frame)
 
@@ -62,29 +77,30 @@ class TestUnifiedNode:
             result = node(state)
 
         assert isinstance(result, dict)
-        assert result["action"] == GameAction.from_id(1)
+        assert result["action"] == GameAction.from_id(2)
+        assert result["expectation"] == "player moves right"
+        assert result["needs_reflection"] is False
         assert "plan" in result
-        assert "expectation" in result
-        assert "needs_reflection" in result
 
     # ------------------------------------------------------------------ #
-    # 2. Tool loop: Python code block → sandbox → second LLM call → ACTION
+    # 2. Inspect then decide: two-call loop
     # ------------------------------------------------------------------ #
-    def test_unified_tool_loop(self, mock_services, make_frame):
+    def test_inspect_then_decide(self, mock_services, make_frame):
+        """Mock LLM returns inspect() then decide() → sandbox runs, then action returned."""
         call_count = 0
 
-        def alternating(messages):
+        def alternating(messages, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return "```python\nprint(objects)\n```"
-            return "ACTION 2 because result"
+                return make_inspect_response("len(objects)")
+            return make_decide_response(action_id=3, expectation="found target")
 
         services = mock_services()
         services.planner_call = MagicMock(side_effect=alternating)
 
         with (
-            patch("agents.langgraph_unified_agent.nodes.unified.run_sandboxed", return_value="42"),
+            patch("agents.langgraph_unified_agent.nodes.unified.run_sandboxed", return_value="5"),
             patch("agents.langgraph_unified_agent.nodes.unified.log_node"),
         ):
             node = make_unified_node(services)
@@ -93,85 +109,117 @@ class TestUnifiedNode:
 
         assert call_count == 2
         assert isinstance(result, dict)
-        assert result["action"] == GameAction.from_id(2)
-
-    # ------------------------------------------------------------------ #
-    # 3. ACTION not at start: _parse_action_id_anywhere finds ACTION=3
-    # ------------------------------------------------------------------ #
-    def test_unified_action_not_at_start(self, mock_services, make_frame):
-        services = mock_services(
-            unified_return="The player can move.\nACTION 3 because target above",
-        )
-        node = make_unified_node(services)
-        state = _base_state(make_frame)
-
-        with patch("agents.langgraph_unified_agent.nodes.unified.log_node"):
-            result = node(state)
-
-        assert isinstance(result, dict)
         assert result["action"] == GameAction.from_id(3)
+        assert result["expectation"] == "found target"
 
     # ------------------------------------------------------------------ #
-    # 4. REFLECT: yes with MECHANICS + TACTICAL sections parsed
+    # 3. No tool calls → nudge, then fallback to random
     # ------------------------------------------------------------------ #
-    def test_unified_reflect_yes_mechanics(self, mock_services, make_frame):
-        response = (
-            "ACTION 1 because safe\n"
-            "EXPECT: player moves\n"
-            "REFLECT: yes\n\n"
-            "MECHANICS:\n"
-            "- gravity works\n\n"
-            "MECHANICS_SUMMARY: gravity pulls\n\n"
-            "TACTICAL:\n"
-            "- go right\n\n"
-            "TACTICAL_SUMMARY: explore east"
-        )
-        services = mock_services(unified_return=response)
+    def test_no_tool_calls_fallback(self, mock_services, make_frame):
+        """Mock LLM returns content only (no tool_calls) twice → random fallback."""
+        text_response = make_text_response("I am not sure what to do.")
+        services = mock_services(unified_return=text_response)
         node = make_unified_node(services)
-        state = _base_state(make_frame)
+        state = _base_state(make_frame, available_actions=[1, 2, 3])
 
         with patch("agents.langgraph_unified_agent.nodes.unified.log_node"):
             result = node(state)
 
         assert isinstance(result, dict)
-        assert result["action"] == GameAction.from_id(1)
-        assert result["expectation"] == "player moves"
-        assert "gravity works" in result["mechanics"]
-        assert result["mechanics_summary"] == "gravity pulls"
-        assert "go right" in result["tactical"]
-        assert result["tactical_summary"] == "explore east"
+        assert result["action"] in [
+            GameAction.from_id(1),
+            GameAction.from_id(2),
+            GameAction.from_id(3),
+        ]
+        assert "fallback" in result["plan"]
 
     # ------------------------------------------------------------------ #
-    # 5. REFLECT: yes but no MECHANICS/TACTICAL → graceful degradation
+    # 4. Inspect and decide simultaneous → inspect only, loop continues
     # ------------------------------------------------------------------ #
-    def test_unified_reflect_yes_no_mechanics(self, mock_services, make_frame):
-        services = mock_services(unified_return="ACTION 1 because safe\nREFLECT: yes")
-        node = make_unified_node(services)
-        # Provide existing mechanics/tactical in state
-        state = _base_state(
-            make_frame,
-            mechanics=["old rule"],
-            mechanics_summary="old summary",
-            tactical=["old tactic"],
-            tactical_summary="old tactical summary",
+    def test_inspect_and_decide_simultaneous(self, mock_services, make_frame):
+        """Mock LLM returns both inspect() and decide() → inspect runs, decide ignored."""
+        call_count = 0
+
+        def both_then_decide(messages, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # Return both inspect and decide in one response
+                return ChatResponse(
+                    content="",
+                    finish_reason="stop",
+                    tool_calls=[
+                        {
+                            "id": "call_inspect_1",
+                            "function": {
+                                "name": "inspect",
+                                "arguments": json.dumps({"code": "len(objects)"}),
+                            },
+                            "type": "function",
+                        },
+                        {
+                            "id": "call_decide_1",
+                            "function": {
+                                "name": "decide",
+                                "arguments": json.dumps({
+                                    "action_id": 1,
+                                    "expectation": "should be ignored",
+                                    "reflect": False,
+                                }),
+                            },
+                            "type": "function",
+                        },
+                    ],
+                )
+            # Second call: just decide
+            return make_decide_response(action_id=4, expectation="after inspect")
+
+        services = mock_services()
+        services.planner_call = MagicMock(side_effect=both_then_decide)
+
+        with (
+            patch("agents.langgraph_unified_agent.nodes.unified.run_sandboxed", return_value="3"),
+            patch("agents.langgraph_unified_agent.nodes.unified.log_node"),
+        ):
+            node = make_unified_node(services)
+            state = _base_state(make_frame)
+            result = node(state)
+
+        assert call_count == 2
+        assert isinstance(result, dict)
+        assert result["action"] == GameAction.from_id(4)
+        assert result["expectation"] == "after inspect"
+
+    # ------------------------------------------------------------------ #
+    # 5. Invalid action_id → fallback
+    # ------------------------------------------------------------------ #
+    def test_invalid_action_id(self, mock_services, make_frame):
+        """decide with action_id=99, available=[1,2,3] → random fallback."""
+        services = mock_services(
+            unified_return=make_decide_response(action_id=99, expectation="bad action"),
         )
+        node = make_unified_node(services)
+        state = _base_state(make_frame, available_actions=[1, 2, 3])
 
         with patch("agents.langgraph_unified_agent.nodes.unified.log_node"):
             result = node(state)
 
         assert isinstance(result, dict)
-        assert result["action"] == GameAction.from_id(1)
-        # Existing mechanics/tactical preserved (graceful degradation)
-        assert result["mechanics"] == ["old rule"]
-        assert result["mechanics_summary"] == "old summary"
-        assert result["tactical"] == ["old tactic"]
-        assert result["tactical_summary"] == "old tactical summary"
+        assert result["action"] in [
+            GameAction.from_id(1),
+            GameAction.from_id(2),
+            GameAction.from_id(3),
+        ]
+        assert "fallback" in result["plan"]
 
     # ------------------------------------------------------------------ #
-    # 6. 5-repeat guard: 5 consecutive same-action → needs_reflection=True
+    # 6. 5-repeat guard: 5 consecutive same actions → needs_reflection=True
     # ------------------------------------------------------------------ #
-    def test_unified_5_repeat_guard(self, mock_services, make_frame):
-        services = mock_services(unified_return="ACTION 1 because same move")
+    def test_5_repeat_guard(self, mock_services, make_frame):
+        """5 consecutive same-action history → needs_reflection=True."""
+        services = mock_services(
+            unified_return=make_decide_response(action_id=1, expectation="same move", reflect=False),
+        )
         node = make_unified_node(services)
         history = [
             "frame=0: action=1, 5 cells changed",
@@ -192,32 +240,38 @@ class TestUnifiedNode:
     # ------------------------------------------------------------------ #
     # 7. Force reflect from needs_reflection state flag
     # ------------------------------------------------------------------ #
-    def test_unified_force_reflect_from_needs_reflection(self, mock_services, make_frame):
-        services = mock_services(unified_return="ACTION 2 because exploring")
+    def test_force_reflect_from_needs_reflection(self, mock_services, make_frame):
+        """State has needs_reflection=True → reflect overridden to True."""
+        services = mock_services(
+            unified_return=make_decide_response(
+                action_id=2,
+                expectation="exploring",
+                reflect=False,  # LLM says no reflect, but state forces it
+            ),
+        )
         node = make_unified_node(services)
-        state = _base_state(make_frame, needs_reflection=True)
 
-        # We verify that force_reflect=True changes the prompt by checking
-        # the LLM was called. The prompt should contain "REFLECTION REQUIRED".
+        # Capture the messages passed to planner_call to verify REFLECTION REQUIRED
         call_args = None
 
-        def capture_call(messages):
+        def capture_call(messages, **kwargs):
             nonlocal call_args
             call_args = messages
-            return "ACTION 2 because exploring"
+            return make_decide_response(action_id=2, expectation="exploring", reflect=False)
 
         services.planner_call = MagicMock(side_effect=capture_call)
+        state = _base_state(make_frame, needs_reflection=True)
 
         with patch("agents.langgraph_unified_agent.nodes.unified.log_node"):
             result = node(state)
 
         assert isinstance(result, dict)
         assert result["action"] == GameAction.from_id(2)
+        # force_reflect overrides reflect to True
+        assert result["needs_reflection"] is True
         # Verify the prompt included reflection instruction
         assert call_args is not None
         user_content = call_args[1]["content"]
-        # user_content is a list of content blocks when observation is list,
-        # or a string otherwise. Check for REFLECTION REQUIRED in text parts.
         if isinstance(user_content, list):
             text_parts = [b for b in user_content if isinstance(b, dict) and b.get("type") == "text"]
             combined_text = " ".join(b.get("text", "") for b in text_parts)
@@ -226,9 +280,10 @@ class TestUnifiedNode:
         assert "REFLECTION REQUIRED" in combined_text
 
     # ------------------------------------------------------------------ #
-    # 8. LLM error → random action fallback
+    # 8. LLM error → random fallback
     # ------------------------------------------------------------------ #
-    def test_unified_llm_error_fallback(self, mock_services, make_frame):
+    def test_llm_error_fallback(self, mock_services, make_frame):
+        """LLM raises exception → random action fallback."""
         services = mock_services(unified_return=RuntimeError)
         node = make_unified_node(services)
         state = _base_state(make_frame, available_actions=[1, 2])
@@ -241,12 +296,12 @@ class TestUnifiedNode:
         assert "fallback" in result["plan"]
 
     # ------------------------------------------------------------------ #
-    # 9. Max tool calls exhausted → random action fallback
+    # 9. Max tool calls exhausted → random fallback
     # ------------------------------------------------------------------ #
-    def test_unified_max_calls_fallback(self, mock_services, make_frame):
-        services = mock_services()
-        # Always return Python code (never ACTION) to exhaust tool loop
-        services.planner_call = MagicMock(return_value="```python\nlen(objects)\n```")
+    def test_max_calls_fallback(self, mock_services, make_frame):
+        """12 tool calls all return inspect → fallback after max iterations."""
+        # Always return inspect, never decide → exhaust max_tool_calls
+        services = mock_services(unified_return=make_inspect_response("len(objects)"))
 
         with (
             patch("agents.langgraph_unified_agent.nodes.unified.run_sandboxed", return_value="7"),
@@ -267,11 +322,14 @@ class TestUnifiedNode:
     # ------------------------------------------------------------------ #
     # 10. Node never returns a Command object — always a plain dict
     # ------------------------------------------------------------------ #
-    def test_unified_never_returns_command(self, mock_services, make_frame):
+    def test_never_returns_command(self, mock_services, make_frame):
+        """Node always returns dict, never a langgraph Command."""
         from langgraph.types import Command
 
-        # Scenario 1: normal return
-        services = mock_services(unified_return="ACTION 3 because clear")
+        # Scenario 1: normal decide return
+        services = mock_services(
+            unified_return=make_decide_response(action_id=3, expectation="clear"),
+        )
         node = make_unified_node(services)
         state = _base_state(make_frame)
 
@@ -289,18 +347,18 @@ class TestUnifiedNode:
         assert isinstance(result2, dict)
         assert not isinstance(result2, Command)
 
-        # Scenario 3: tool loop with sandbox call
+        # Scenario 3: inspect then decide loop
         call_count = 0
 
-        def python_then_action(messages):
+        def inspect_then_decide(messages, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return "```python\nlen(objects)\n```"
-            return "ACTION 4 because found"
+                return make_inspect_response("len(objects)")
+            return make_decide_response(action_id=4, expectation="found")
 
         services3 = mock_services()
-        services3.planner_call = MagicMock(side_effect=python_then_action)
+        services3.planner_call = MagicMock(side_effect=inspect_then_decide)
         node3 = make_unified_node(services3)
 
         with (
@@ -312,20 +370,21 @@ class TestUnifiedNode:
         assert not isinstance(result3, Command)
 
     # ------------------------------------------------------------------ #
-    # 11. History cache persists across turns (same node closure)
+    # 11. History cache persists across turns
     # ------------------------------------------------------------------ #
-    def test_unified_history_caches(self, mock_services, make_frame):
+    def test_history_caches(self, mock_services, make_frame):
+        """Two turns — second turn sees history from first."""
         call_count = 0
 
-        def alternating(messages):
+        def inspect_then_decide(messages, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return "```python\nlen(history)\n```"
-            return "ACTION 2 because found"
+                return make_inspect_response("len(history)")
+            return make_decide_response(action_id=2, expectation="found")
 
         services = mock_services()
-        services.planner_call = MagicMock(side_effect=alternating)
+        services.planner_call = MagicMock(side_effect=inspect_then_decide)
 
         sandbox_mock = MagicMock(return_value="0")
         with (
@@ -340,14 +399,14 @@ class TestUnifiedNode:
 
         call_count = 0
 
-        def alternating2(messages):
+        def inspect_then_decide2(messages, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return "```python\nlen(history)\n```"
-            return "ACTION 3 because deeper"
+                return make_inspect_response("len(history)")
+            return make_decide_response(action_id=3, expectation="deeper")
 
-        services.planner_call = MagicMock(side_effect=alternating2)
+        services.planner_call = MagicMock(side_effect=inspect_then_decide2)
 
         sandbox_mock2 = MagicMock(return_value="1")
         with (
@@ -368,3 +427,56 @@ class TestUnifiedNode:
         )
         assert len(second_history) == 1
         assert second_history[0]["action"] == 2
+
+    # ------------------------------------------------------------------ #
+    # 12. Deduplicate tool calls: duplicate inspect → only first runs
+    # ------------------------------------------------------------------ #
+    def test_deduplicate_tool_calls(self, mock_services, make_frame):
+        """Mock LLM returns duplicate inspect calls → only first runs."""
+        call_count = 0
+
+        def inspect_dup_then_decide(messages, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # Return two inspect calls with the same function name
+                return ChatResponse(
+                    content="",
+                    finish_reason="stop",
+                    tool_calls=[
+                        {
+                            "id": "call_dup_1",
+                            "function": {
+                                "name": "inspect",
+                                "arguments": json.dumps({"code": "len(objects)"}),
+                            },
+                            "type": "function",
+                        },
+                        {
+                            "id": "call_dup_2",
+                            "function": {
+                                "name": "inspect",
+                                "arguments": json.dumps({"code": "objects[0]"}),
+                            },
+                            "type": "function",
+                        },
+                    ],
+                )
+            return make_decide_response(action_id=2, expectation="after first inspect")
+
+        services = mock_services()
+        services.planner_call = MagicMock(side_effect=inspect_dup_then_decide)
+
+        sandbox_mock = MagicMock(return_value="3")
+        with (
+            patch("agents.langgraph_unified_agent.nodes.unified.run_sandboxed", sandbox_mock),
+            patch("agents.langgraph_unified_agent.nodes.unified.log_node"),
+        ):
+            node = make_unified_node(services)
+            state = _base_state(make_frame)
+            result = node(state)
+
+        # Only the first inspect call should have been sandboxed (dedup drops second)
+        assert sandbox_mock.call_count == 1
+        assert isinstance(result, dict)
+        assert result["action"] == GameAction.from_id(2)
