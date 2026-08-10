@@ -3,6 +3,7 @@ from typing import Type, cast
 from dotenv import load_dotenv
 
 from .agent import Agent, Playback
+from .langgraph_unified_agent.agent import LangGraphUnifiedAgent
 from .langgraph_vision_agent.agent import LangGraphVisionAgent
 from .llm_client import LLMCallError, LLMClient
 from .recorder import Recorder
@@ -29,6 +30,7 @@ AVAILABLE_AGENTS: dict[str, Type[Agent]] = {
 }
 
 AVAILABLE_AGENTS["langgraphvision"] = cast(Type[Agent], LangGraphVisionAgent)
+AVAILABLE_AGENTS["langgraphunified"] = cast(Type[Agent], LangGraphUnifiedAgent)
 
 # add all the recording files as valid agent names
 for rec in Recorder.list():
@@ -47,6 +49,7 @@ __all__ = [
     "LangGraphTextOnly",
     "LangGraphThinking",
     "LangGraphRandom",
+    "LangGraphUnifiedAgent",
     "LLM",
     "FastLLM",
     "ReasoningLLM",
