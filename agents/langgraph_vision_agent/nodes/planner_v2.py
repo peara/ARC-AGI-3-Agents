@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import random
 import re
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
@@ -43,8 +44,19 @@ def _extract_python_block(text: str) -> str | None:
     return None
 
 
+def _frame_to_grid(frame_data: Any) -> np.ndarray | None:
+    """Extract a 2D numpy grid from a FrameData object."""
+    raw = frame_data.frame
+    if len(raw) == 1 and raw[0] and isinstance(raw[0][0], list | Sequence):
+        raw = raw[0]
+    return np.array(raw, dtype=np.int64)
+
+
 def make_planner_v2_node(services: AgentServices):
     """Return a LangGraph node function that plans with a tool loop."""
+    # Per-game history cache: list of {"action": int, "objects": tuple, "adjacency": frozenset}
+    # Persists across turns (closure), dies when the graph dies.
+    history_cache: list[dict[str, Any]] = []
 
     def planner_v2_node(state: dict[str, Any]) -> dict[str, Any]:
         frame_index: int = state.get("frame_index", 0)
@@ -53,11 +65,7 @@ def make_planner_v2_node(services: AgentServices):
         # ---- Grid extraction and atom segmentation ----
         grid: np.ndarray | None = None
         if frames:
-            raw = frames[-1].frame  # type: ignore[union-attr]
-            # FrameData.frame is list[list[list[int]]]; unwrap single-layer to 2D
-            if len(raw) == 1 and raw[0] and isinstance(raw[0][0], list):
-                raw = raw[0]
-            grid = np.array(raw, dtype=np.int64)
+            grid = _frame_to_grid(frames[-1])
         elif state.get("prev_grid") is not None:
             grid = np.array(state["prev_grid"], dtype=np.int64)
 
@@ -99,9 +107,9 @@ def make_planner_v2_node(services: AgentServices):
                     log_node(frame_index, "planner_v2", action=action_id, tool_calls=call_idx + 1)
 
                     # 5-repeat action guard
-                    history: list[str] = state.get("history", [])
+                    action_history: list[str] = state.get("history", [])
                     consecutive = 0
-                    for h in reversed(history):
+                    for h in reversed(action_history):
                         if f"action={action_id}" in h:
                             consecutive += 1
                         else:
@@ -115,6 +123,13 @@ def make_planner_v2_node(services: AgentServices):
                             consecutive,
                         )
 
+                    # Cache this frame for next turn's history
+                    history_cache.append({
+                        "action": action_id,
+                        "objects": objects,
+                        "adjacency": adjacency,
+                    })
+
                     return {
                         "action": GameAction.from_id(action_id),
                         "plan": raw,
@@ -126,7 +141,9 @@ def make_planner_v2_node(services: AgentServices):
             # Python code block → sandbox
             code = _extract_python_block(raw)
             if code is not None:
-                result = run_sandboxed(code, objects, adjacency, timeout=sandbox_timeout)
+                result = run_sandboxed(
+                    code, objects, adjacency, list(history_cache), timeout=sandbox_timeout,
+                )
                 messages = messages + [
                     {"role": "assistant", "content": raw},
                     {"role": "user", "content": f"Tool output:\n{result}"},
@@ -154,9 +171,9 @@ def make_planner_v2_node(services: AgentServices):
                 needs_reflection: bool = bool(parsed["needs_reflection"])
                 log_node(frame_index, "planner_v2", action=action_id, tool_calls=call_idx + 1)
 
-                history = state.get("history", [])
+                action_history = state.get("history", [])
                 consecutive = 0
-                for h in reversed(history):
+                for h in reversed(action_history):
                     if f"action={action_id}" in h:
                         consecutive += 1
                     else:
@@ -169,6 +186,13 @@ def make_planner_v2_node(services: AgentServices):
                         action_id,
                         consecutive,
                     )
+
+                # Cache this frame for next turn's history
+                history_cache.append({
+                    "action": action_id,
+                    "objects": objects,
+                    "adjacency": adjacency,
+                })
 
                 return {
                     "action": GameAction.from_id(action_id),
@@ -197,6 +221,13 @@ def make_planner_v2_node(services: AgentServices):
             random_action_id,
         )
         log_node(frame_index, "planner_v2", action=random_action_id, fallback=True)
+
+        # Cache this frame even on fallback
+        history_cache.append({
+            "action": random_action_id,
+            "objects": objects,
+            "adjacency": adjacency,
+        })
 
         return {
             "action": GameAction.from_id(random_action_id),

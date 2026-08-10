@@ -166,3 +166,42 @@ class TestPlannerV2Node:
         result2 = node2(state)
         assert isinstance(result2, dict)
         assert not hasattr(result2, "goto")
+
+    def test_planner_v2_history_caches_across_turns(self, mock_services, make_frame):
+        call_count = 0
+
+        def alternating(messages):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return "```python\nlen(history)\n```"
+            return "ACTION 2 because found"
+
+        services = mock_services()
+        services.planner_call = MagicMock(side_effect=alternating)
+
+        sandbox_mock = MagicMock(return_value="0")
+        with patch(
+            "agents.langgraph_vision_agent.nodes.planner_v2.run_sandboxed",
+            sandbox_mock,
+        ):
+            node = make_planner_v2_node(services)
+            state = _base_state(make_frame)
+            node(state)
+
+        assert sandbox_mock.call_count == 1
+
+        call_count = 0
+        sandbox_mock2 = MagicMock(return_value="1")
+        with patch(
+            "agents.langgraph_vision_agent.nodes.planner_v2.run_sandboxed",
+            sandbox_mock2,
+        ):
+            state2 = _base_state(make_frame, frame_index=1)
+            node(state2)
+
+        assert sandbox_mock2.call_count == 1
+        second_call_args = sandbox_mock2.call_args
+        second_history = second_call_args.args[3] if len(second_call_args.args) > 3 else second_call_args.kwargs.get("history", [])
+        assert len(second_history) == 1
+        assert second_history[0]["action"] == 2

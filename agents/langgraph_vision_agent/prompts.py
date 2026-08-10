@@ -155,37 +155,61 @@ distances from the images.
 You have a Python inspection tool. To use it, write a Python code block
 (```python ... ```). Inside the code block you may read these variables:
 
-- `objects`: a tuple of dicts, one per detected object. Each dict has:
-  - `jid`: int — object identifier
+- `objects`: a tuple of dicts, one per detected object in the current frame.
+  Each dict has:
   - `color`: int — color index
   - `size`: int — number of cells
   - `centroid`: (row, col) — center position
   - `bbox`: (r_min, c_min, r_max, c_max) or None — bounding box
+  - `hash`: str — translation-invariant shape+color signature. Same shape
+    and color → same hash, regardless of position. Use this to track an
+    object across frames.
+
+- `adjacency`: a frozenset of (i, j) index pairs into `objects` for objects
+  that share an edge. Use this to check which objects are touching.
+
+- `history`: a list of dicts, one per past frame (oldest first). Each dict
+  has:
+  - `action`: int — the action that was taken on that frame
+  - `objects`: tuple of dicts — same format as current `objects`
+  - `adjacency`: frozenset of (i, j) pairs — same format as current
+    `adjacency`
+
+  `history[-1]` is the most recent past frame. Use it to compare what
+  changed after the last action.
 
 Color index to name mapping (fixed across all games):
   0=white  1=light-grey  2=grey  3=dark-grey  4=charcoal  5=black
   6=magenta  7=pink  8=red  9=blue  10=light-blue  11=yellow
   12=orange  13=dark-red  14=green  15=purple
 
-- `adjacency`: a frozenset of (jid_a, jid_b) pairs for objects that share
-  an edge. Use this to check which objects are touching.
-
 Example inspections:
   # Find the player by color name
   for obj in objects:
       if obj['color'] == 14:  # green
-          print(obj['jid'], obj['centroid'], obj['bbox'])
+          print(obj['centroid'], obj['bbox'], obj['hash'])
 
   # Check which objects are adjacent to the player
-  player_jid = next(o['jid'] for o in objects if o['color'] == 14)
-  neighbors = [pair for pair in adjacency if player_jid in pair]
+  player_idx = next(i for i, o in enumerate(objects) if o['color'] == 14)
+  neighbors = [pair for pair in adjacency if player_idx in pair]
   print(neighbors)
 
-  # Measure distance between two objects
-  a = next(o for o in objects if o['jid'] == 0)
-  b = next(o for o in objects if o['jid'] == 1)
-  print(abs(a['centroid'][0] - b['centroid'][0]),
-        abs(a['centroid'][1] - b['centroid'][1]))
+  # Track the player across frames by hash
+  player_hash = next(o['hash'] for o in objects if o['color'] == 14)
+  for i, entry in enumerate(history):
+      match = [o for o in entry['objects'] if o['hash'] == player_hash]
+      if match:
+          print(f"frame {i} action={entry['action']} centroid={match[0]['centroid']}")
+
+  # Compare current vs previous frame to see what moved
+  prev = history[-1]['objects'] if history else ()
+  for obj in objects:
+      prev_match = [o for o in prev if o['hash'] == obj['hash']]
+      if prev_match:
+          dr = obj['centroid'][0] - prev_match[0]['centroid'][0]
+          dc = obj['centroid'][1] - prev_match[0]['centroid'][1]
+          if dr or dc:
+              print(f"color={obj['color']} moved by ({dr}, {dc})")
 
 I will run your code and return the output. You may perform at most 3
 inspections. After your inspections (or if you need none), output your final
