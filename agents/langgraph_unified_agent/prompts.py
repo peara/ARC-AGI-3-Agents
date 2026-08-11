@@ -63,8 +63,11 @@ Tools
    tactical_summary: str)
    Make your final action decision. Call this when you are ready to act.
    - `action_id`: the single action you choose from the available actions.
-   - `expectation`: what you expect to happen next frame after taking the
-     action.
+   - `expectation`: a specific, testable prediction about what will change
+     next frame. Next frame, you will see whether this prediction was met.
+     If it was not met, your action did not produce the expected result —
+     your understanding of that action is wrong or incomplete. Use this
+     mismatch to update your mechanics.
    - `reflect`: whether this frame requires updating the world model (see
      Reflection triggers below).
    - `mechanics`: list of mechanics entries. Max 10 entries. Tag each entry
@@ -84,27 +87,12 @@ Color index to name mapping (fixed across all games):
   12=orange  13=dark-red  14=green  15=purple
 
 Example inspections:
-  # Find the player by color name
+  # List all objects
   for obj in objects:
-      if obj['color'] == 14:  # green
-          print(obj['centroid'], obj['bbox'], obj['hash'])
+      print(obj['color'], obj['centroid'], obj['hash'])
 
-  # Track the player across frames by hash
-  player_hash = next(o['hash'] for o in objects if o['color'] == 14)
-  for i, entry in enumerate(history):
-      match = [o for o in entry['objects'] if o['hash'] == player_hash]
-      if match:
-          print(f"frame {i} action={entry['action']} centroid={match[0]['centroid']}")
-
-  # Compare current vs previous frame to see what moved
-  prev = history[-1]['objects'] if history else ()
-  for obj in objects:
-      prev_match = [o for o in prev if o['hash'] == obj['hash']]
-      if prev_match:
-          dr = obj['centroid'][0] - prev_match[0]['centroid'][0]
-          dc = obj['centroid'][1] - prev_match[0]['centroid'][1]
-          if dr or dc:
-              print(f"color={obj['color']} moved by ({dr}, {dc})")
+  # Access previous frame via history
+  prev = history[-1]['objects']
 
 ---
 
@@ -123,10 +111,9 @@ Reflection triggers
 
 Set reflect=true in decide() when:
 - This is the first frame (initialize mechanics and tactical).
-- A level boundary was reached.
 - You have repeated the same action 5 or more times and need to re-evaluate.
 - An action did not produce the expected result (you may be blocked or wrong).
-- You confirmed or disproved an action mapping.
+- You confirmed or disproved a conjecture.
 - Something unexpected happened that the mechanics don't explain.
 
 If the prompt explicitly indicates "REFLECTION REQUIRED", you MUST set
@@ -174,6 +161,24 @@ edge might be a target — try moving toward it" is better.
 - Maximum 5 tactical entries.
 - If you don't know the goal yet, include at least one conjecture.
 - Make conjectures specific and testable.
+
+---
+
+When an action does not produce the expected result (e.g., the player does
+not move), that is a confirmed observation, not ambiguity. One observation of
+"no movement" in a specific context is sufficient to conclude the action is
+blocked or ineffective in that context. Do not repeat the same action to
+"confirm" a block — the block is already confirmed.
+
+If an action fails, ask yourself: what does this tell you about the game?
+A blocked movement means there is an obstacle or boundary. This is new
+knowledge — update your mechanics and redirect your strategy. Continuing
+to repeat a blocked action wastes turns that could be spent learning about
+other actions or exploring different parts of the grid.
+
+If you have untested actions, testing one of them is almost always more
+valuable than repeating a known-blocked action. Each untested action is a
+chance to learn something new about the game.
 """
 
 __all__ = ["UNIFIED_SYSTEM_PROMPT"]
