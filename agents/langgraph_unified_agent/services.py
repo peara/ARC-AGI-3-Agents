@@ -16,7 +16,7 @@ from agents.llm_client import LLMClient
 from agents.recorder import Recorder
 from agents.templates.llm_logging import LlmCallLogger, wrap_llm_call
 
-from .tools import UNIFIED_TOOLS
+from .tools import UNIFIED_TOOLS_V2
 
 
 def _noop_callable(_messages: list[dict[str, str]]) -> str:
@@ -55,7 +55,7 @@ def create_services(
             kind="unified",
             thinking=config.llm_thinking,
             max_tokens=config.unified_max_tokens,
-            tools=UNIFIED_TOOLS,
+            tools=UNIFIED_TOOLS_V2,
             tool_choice="auto",
         )
 

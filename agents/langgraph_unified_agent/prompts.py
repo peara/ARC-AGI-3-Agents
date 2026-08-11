@@ -69,8 +69,7 @@ Tools
    multiple times.
 
 2. decide(action_id: int, expectation: str, reflect: bool,
-   mechanics: list[str], mechanics_summary: str, tactical: list[str],
-   tactical_summary: str)
+   world_model: object)
    Make your final action decision. Call this when you are ready to act.
    - `action_id`: the single action you choose from the available actions.
    - `expectation`: a specific, testable prediction about what will change
@@ -81,11 +80,24 @@ Tools
    - `reflect`: set to true if you learned something new this frame (confirmed
      or disproved a conjecture, an action failed, something unexpected
      happened). Set to false for routine moves that worked as expected.
-   - `mechanics`: list of mechanics entries. Max 10 entries. Tag each entry
-     with [HIGH], [MEDIUM], or [LOW] confidence.
-   - `mechanics_summary`: one paragraph summarizing the current game mechanics.
-   - `tactical`: list of tactical observations and next goals. Max 5 entries.
-   - `tactical_summary`: one sentence summarizing the current strategy.
+   - `world_model`: your current understanding of the game, updated each
+     frame. An object with these fields:
+     - `scene`: list of observations about the game world — what objects
+       exist, their layout, structure, and relationships. Not about actions
+       or strategy. Max 10 entries.
+     - `scene_summary`: one sentence — what kind of game is this?
+     - `mechanics`: list of mechanics entries. Max 10 entries. Tag each
+       entry with [HIGH], [MEDIUM], or [LOW] confidence.
+     - `mechanics_summary`: one paragraph summarizing the current game
+       mechanics.
+     - `tactical`: list of tactical observations and next goals. Max 5
+       entries. If you don't know the goal yet, include at least one
+       testable conjecture.
+     - `tactical_summary`: one sentence summarizing the current strategy.
+
+   Keep entries from previous frames that are still valid. Add new ones.
+   Drop ones that are disproven. Stale-but-valid is better than lost
+   knowledge.
 
    You MUST always call decide() and pick the best available action, even if
    you are uncertain. There is no "uncertain" option; choose and explain.
@@ -135,16 +147,28 @@ Each turn, follow these steps in order:
 
 3. **Investigate the current state.** What has changed since last frame?
    What is new? What is relevant to your goal? Use inspect() as needed.
+   Observe the scene — what objects exist, how are they arranged, what
+   changed? Update your scene observations in the world model.
 
 4. **Update your conjecture.** Based on what you know so far, what is this
    game about? What is the goal? What should you do next? If you have
    untested actions, testing one is more valuable than repeating a known
    action.
 
-5. **Call decide()** with your action and a new testable expectation for
-   next frame.
+5. **Call decide()** with your action, your updated world model, and a new
+   testable expectation for next frame.
 
 ---
+
+Rules for SCENE
+
+- Describe what objects exist, their colors, positions, shapes, and
+  relationships (containment, adjacency, alignment).
+- Do NOT include action mappings or strategy — those go in mechanics and
+  tactical.
+- Update the scene when objects appear, disappear, move, or change.
+- Keep scene observations from previous frames that are still visible.
+- Maximum 10 scene entries.
 
 Rules for MECHANICS
 

@@ -128,11 +128,11 @@ DECIDE_V2_TOOL: dict = {
                                 "Observations about the game world — what "
                                 "objects exist, their layout, structure, and "
                                 "relationships. Not about actions or strategy. "
-                                "Examples: 'Three blue squares in the upper "
-                                "half, each surrounded by charcoal borders', "
-                                "'A grey rectangle in the center containing a "
-                                "blue object', 'A pink bar along the bottom "
-                                "edge'."
+                                "Max 10 entries. Examples: 'Three blue squares "
+                                "in the upper half, each surrounded by charcoal "
+                                "borders', 'A grey rectangle in the center "
+                                "containing a blue object', 'A pink bar along "
+                                "the bottom edge'."
                             ),
                         },
                         "scene_summary": {

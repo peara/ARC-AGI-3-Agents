@@ -80,6 +80,8 @@ def make_decide_response(
     action_id: int,
     expectation: str = "test expectation",
     reflect: bool = False,
+    scene: list[str] | None = None,
+    scene_summary: str = "",
     mechanics: list[str] | None = None,
     mechanics_summary: str = "",
     tactical: list[str] | None = None,
@@ -87,19 +89,26 @@ def make_decide_response(
     content: str = "",
 ) -> ChatResponse:
     """Build a ``ChatResponse`` containing a single ``decide`` tool call."""
+    world_model: dict = {}
+    if scene is not None:
+        world_model["scene"] = scene
+    if scene_summary:
+        world_model["scene_summary"] = scene_summary
+    if mechanics is not None:
+        world_model["mechanics"] = mechanics
+    if mechanics_summary:
+        world_model["mechanics_summary"] = mechanics_summary
+    if tactical is not None:
+        world_model["tactical"] = tactical
+    if tactical_summary:
+        world_model["tactical_summary"] = tactical_summary
+
     args: dict = {
         "action_id": action_id,
         "expectation": expectation,
         "reflect": reflect,
+        "world_model": world_model,
     }
-    if mechanics is not None:
-        args["mechanics"] = mechanics
-    if mechanics_summary:
-        args["mechanics_summary"] = mechanics_summary
-    if tactical is not None:
-        args["tactical"] = tactical
-    if tactical_summary:
-        args["tactical_summary"] = tactical_summary
 
     return ChatResponse(
         content=content,

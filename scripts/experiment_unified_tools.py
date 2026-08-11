@@ -48,6 +48,8 @@ def load_grid(rec_lines: list[str], fi: int) -> np.ndarray:
 
 def build_user_content(
     frame_index: int,
+    scene: list[str],
+    scene_summary: str,
     mechanics: list[str],
     mechanics_summary: str,
     tactical: list[str],
@@ -60,7 +62,8 @@ def build_user_content(
     prev_b64: str | None,
     cur_b64: str | None,
 ) -> list[dict]:
-    """Build user content blocks mirroring _build_user_content() from unified.py:50-107."""
+    """Build user content blocks mirroring _build_user_content() from unified.py."""
+    scene_bullets = "\n".join(f"- {s}" for s in scene) if scene else "(none yet)"
     mechanics_bullets = "\n".join(f"- {m}" for m in mechanics) if mechanics else "(none yet)"
     tactical_bullets = "\n".join(f"- {t}" for t in tactical) if tactical else "(none yet)"
     recent_history = history[-5:] if history else []
@@ -71,6 +74,8 @@ def build_user_content(
         f"Last expectation: {expectation or '(none)'}",
         f"Recent actions: {recent_history}",
         "",
+        f"## Current scene (max 10)\n{scene_bullets}",
+        f"## Scene summary\n{scene_summary or '(none yet)'}",
         f"## Current mechanics (max 10)\n{mechanics_bullets}",
         f"## Mechanics summary\n{mechanics_summary or '(none yet)'}",
         f"## Current tactical (max 5)\n{tactical_bullets}",
@@ -146,6 +151,8 @@ def run_experiment(
     frame_idx: int,
     history_data: list[dict],
     rec_lines: list[str],
+    scene: list[str],
+    scene_summary: str,
     mechanics: list[str],
     mechanics_summary: str,
     tactical: list[str],
@@ -182,6 +189,8 @@ def run_experiment(
     # Build user content
     user_content = build_user_content(
         frame_index=frame_idx,
+        scene=scene,
+        scene_summary=scene_summary,
         mechanics=mechanics,
         mechanics_summary=mechanics_summary,
         tactical=tactical,
@@ -453,6 +462,8 @@ def main() -> None:
     for fi in frames_to_test:
         # Extract state from recording
         lg = json.loads(rec_lines[fi])["data"].get("scene_state", {}).get("langgraph_state", {})
+        scene = lg.get("scene", [])
+        scene_summary = lg.get("scene_summary", "")
         mechanics = lg.get("mechanics", [])
         mechanics_summary = lg.get("mechanics_summary", "")
         tactical = lg.get("tactical", [])
@@ -474,6 +485,8 @@ def main() -> None:
             frame_idx=fi,
             history_data=history_data,
             rec_lines=rec_lines,
+            scene=scene,
+            scene_summary=scene_summary,
             mechanics=mechanics,
             mechanics_summary=mechanics_summary,
             tactical=tactical,
