@@ -75,4 +75,118 @@ DECIDE_TOOL: dict = {
 
 UNIFIED_TOOLS: list = [INSPECT_TOOL, DECIDE_TOOL]
 
-__all__ = ["INSPECT_TOOL", "DECIDE_TOOL", "UNIFIED_TOOLS"]
+# --- Experimental: decide with nested world_model object ---
+
+DECIDE_V2_TOOL: dict = {
+    "type": "function",
+    "function": {
+        "name": "decide",
+        "description": (
+            "Make your final action decision. Call this after inspecting the "
+            "state with inspect(). You must also provide your updated world "
+            "model — the current understanding of the game scene, mechanics, "
+            "and tactical situation."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action_id": {
+                    "type": "integer",
+                    "description": "The action ID to execute",
+                },
+                "expectation": {
+                    "type": "string",
+                    "description": (
+                        "A specific, testable prediction about what will "
+                        "change next frame. Next frame, you will see whether "
+                        "this prediction was met. If it was not met, your "
+                        "understanding of that action is wrong or incomplete."
+                    ),
+                },
+                "reflect": {
+                    "type": "boolean",
+                    "description": (
+                        "Set to true if you learned something new this frame "
+                        "(confirmed or disproved a conjecture, an action "
+                        "failed, something unexpected happened). Set to false "
+                        "for routine moves that worked as expected."
+                    ),
+                },
+                "world_model": {
+                    "type": "object",
+                    "description": (
+                        "Your current understanding of the game. Update each "
+                        "frame based on what you observed. Keep entries from "
+                        "previous frames that are still valid; add new ones; "
+                        "drop ones that are disproven."
+                    ),
+                    "properties": {
+                        "scene": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "Observations about the game world — what "
+                                "objects exist, their layout, structure, and "
+                                "relationships. Not about actions or strategy. "
+                                "Examples: 'Three blue squares in the upper "
+                                "half, each surrounded by charcoal borders', "
+                                "'A grey rectangle in the center containing a "
+                                "blue object', 'A pink bar along the bottom "
+                                "edge'."
+                            ),
+                        },
+                        "scene_summary": {
+                            "type": "string",
+                            "description": (
+                                "One sentence: what kind of game is this?"
+                            ),
+                        },
+                        "mechanics": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "Confirmed rules about how the game works. "
+                                "Tag each entry with [HIGH], [MEDIUM], or "
+                                "[LOW] confidence."
+                            ),
+                        },
+                        "mechanics_summary": {
+                            "type": "string",
+                            "description": (
+                                "One paragraph summarizing the current game "
+                                "mechanics."
+                            ),
+                        },
+                        "tactical": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "Tactical observations, conjectures, and next "
+                                "goals. If you don't know the goal yet, "
+                                "include at least one testable conjecture."
+                            ),
+                        },
+                        "tactical_summary": {
+                            "type": "string",
+                            "description": (
+                                "One sentence summarizing the current strategy."
+                            ),
+                        },
+                    },
+                    "required": ["scene", "mechanics", "tactical"],
+                },
+            },
+            "required": ["action_id", "expectation", "reflect", "world_model"],
+        },
+    },
+}
+
+UNIFIED_TOOLS_V2: list = [INSPECT_TOOL, DECIDE_V2_TOOL]
+
+__all__ = [
+    "INSPECT_TOOL",
+    "DECIDE_TOOL",
+    "UNIFIED_TOOLS",
+    "DECIDE_V2_TOOL",
+    "UNIFIED_TOOLS_V2",
+]
