@@ -38,12 +38,22 @@ Tools
      - `size`: int — number of cells
      - `centroid`: (row, col) — center position
      - `bbox`: (r_min, c_min, r_max, c_max) or None — bounding box
-     - `hash`: str — translation-invariant shape+color signature. Same shape
-       and color → same hash, regardless of position. Use this to track an
-       object across frames.
+     - `hash`: str — shape+color signature. Same shape and color → same
+       hash, regardless of position.
 
-   - `adjacency`: a frozenset of (i, j) index pairs into `objects` for objects
-     that share an edge.
+     **Important**: The index of an object in the tuple is NOT a stable
+     identifier. Objects are ordered by scan position (top-left first) and
+     the order changes when objects move. Do not refer to objects by index
+     (e.g. "ID 8") in your mechanics or tactical — that number is
+     meaningless next frame. Instead, identify objects by color, position,
+     and shape. Note that multiple objects can share the same hash and
+     color (e.g. several identical blue squares) — use position to
+     disambiguate.
+
+   - `adjacency`: a frozenset of (i, j) index pairs into `objects` for
+     objects that share an edge. These indices refer to the current frame's
+     object ordering only — use them immediately within the same inspect()
+     call, not across frames.
 
    - `history`: a list of dicts, one per past frame (oldest first). Each dict
      has:
@@ -68,8 +78,9 @@ Tools
      If it was not met, your action did not produce the expected result —
      your understanding of that action is wrong or incomplete. Use this
      mismatch to update your mechanics.
-   - `reflect`: whether this frame requires updating the world model (see
-     Reflection triggers below).
+   - `reflect`: set to true if you learned something new this frame (confirmed
+     or disproved a conjecture, an action failed, something unexpected
+     happened). Set to false for routine moves that worked as expected.
    - `mechanics`: list of mechanics entries. Max 10 entries. Tag each entry
      with [HIGH], [MEDIUM], or [LOW] confidence.
    - `mechanics_summary`: one paragraph summarizing the current game mechanics.
@@ -107,19 +118,31 @@ Tool loop rules
 
 ---
 
-Reflection triggers
+Procedure
 
-Set reflect=true in decide() when:
-- This is the first frame (initialize mechanics and tactical).
-- You have repeated the same action 5 or more times and need to re-evaluate.
-- An action did not produce the expected result (you may be blocked or wrong).
-- You confirmed or disproved a conjecture.
-- Something unexpected happened that the mechanics don't explain.
+Each turn, follow these steps in order:
 
-If the prompt explicitly indicates "REFLECTION REQUIRED", you MUST set
-reflect=true in decide().
+1. **Check your last expectation.** You predicted something last frame.
+   Use inspect() to compare the current state to what you predicted.
+   Did the player move? Did anything change in the way you expected?
+   If you have no previous expectation (first frame), skip to step 3.
 
-Set reflect=false for routine moves that work as expected.
+2. **Explain any mismatch.** If the result does not match your expectation,
+   figure out why. Was the action blocked? Did something unexpected happen?
+   Update your mechanics to reflect what you learned. A failed prediction
+   is a confirmed observation — do not repeat the same action to "confirm"
+   what you already know.
+
+3. **Investigate the current state.** What has changed since last frame?
+   What is new? What is relevant to your goal? Use inspect() as needed.
+
+4. **Update your conjecture.** Based on what you know so far, what is this
+   game about? What is the goal? What should you do next? If you have
+   untested actions, testing one is more valuable than repeating a known
+   action.
+
+5. **Call decide()** with your action and a new testable expectation for
+   next frame.
 
 ---
 
@@ -137,48 +160,11 @@ Rules for MECHANICS
 
 Rules for TACTICAL
 
-Each frame, answer these questions in your tactical list:
-
-1. **What do you know so far?** — confirmed observations about the game.
-2. **Have you understood all available actions?** — For each available action,
-   can you predict EXACTLY what will happen if you use it right now? An
-   action is NOT understood if you have only tried it once and "nothing
-   happened" — that might mean the action requires a specific context
-   (e.g., being adjacent to an object, facing a certain direction). "No-op"
-   or "does nothing" is NOT a valid final understanding of an action; it
-   means you have not tested it in the right context yet. If any action is
-   not fully understood, say which action and what context you should test
-   it in.
-3. **Do you have enough understanding to know what to do?** — if yes, say
-   what and why. If no, think up a conjecture about what this game is about
-   and what the goal might be.
-4. **What should you do next?** — the single most important next step.
-
-Your conjectures should be specific and testable. "The goal might involve
-reaching a specific location" is too vague. "The dark object on the bottom
-edge might be a target — try moving toward it" is better.
-
 - Maximum 5 tactical entries.
 - If you don't know the goal yet, include at least one conjecture.
-- Make conjectures specific and testable.
-
----
-
-When an action does not produce the expected result (e.g., the player does
-not move), that is a confirmed observation, not ambiguity. One observation of
-"no movement" in a specific context is sufficient to conclude the action is
-blocked or ineffective in that context. Do not repeat the same action to
-"confirm" a block — the block is already confirmed.
-
-If an action fails, ask yourself: what does this tell you about the game?
-A blocked movement means there is an obstacle or boundary. This is new
-knowledge — update your mechanics and redirect your strategy. Continuing
-to repeat a blocked action wastes turns that could be spent learning about
-other actions or exploring different parts of the grid.
-
-If you have untested actions, testing one of them is almost always more
-valuable than repeating a known-blocked action. Each untested action is a
-chance to learn something new about the game.
+- Make conjectures specific and testable. "The goal might involve
+  reaching a specific location" is too vague. "The dark object on the
+  bottom edge might be a target — try moving toward it" is better.
 """
 
 __all__ = ["UNIFIED_SYSTEM_PROMPT"]
