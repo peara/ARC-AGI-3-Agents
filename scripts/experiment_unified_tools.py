@@ -30,7 +30,7 @@ from agents.langgraph_unified_agent.prompts import UNIFIED_SYSTEM_PROMPT
 from agents.langgraph_unified_agent.tools import UNIFIED_TOOLS, UNIFIED_TOOLS_V2
 from agents.langgraph_vision_agent.sandbox import run_sandboxed
 from agents.llm_client import LLMClient
-from vision.render import grid_to_image, image_to_base64
+from vision.render import image_to_base64
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger(__name__)
@@ -48,8 +48,6 @@ def load_grid(rec_lines: list[str], fi: int) -> np.ndarray:
 
 def build_user_content(
     frame_index: int,
-    scene: list[str],
-    scene_summary: str,
     mechanics: list[str],
     mechanics_summary: str,
     tactical: list[str],
@@ -59,11 +57,9 @@ def build_user_content(
     available_actions: list[int],
     force_reflect: bool,
     reflect_reason: str | None,
-    prev_b64: str | None,
-    cur_b64: str | None,
+    observation: list[dict] | None = None,
 ) -> list[dict]:
     """Build user content blocks mirroring _build_user_content() from unified.py."""
-    scene_bullets = "\n".join(f"- {s}" for s in scene) if scene else "(none yet)"
     mechanics_bullets = "\n".join(f"- {m}" for m in mechanics) if mechanics else "(none yet)"
     tactical_bullets = "\n".join(f"- {t}" for t in tactical) if tactical else "(none yet)"
     recent_history = history[-5:] if history else []
@@ -74,11 +70,9 @@ def build_user_content(
         f"Last expectation: {expectation or '(none)'}",
         f"Recent actions: {recent_history}",
         "",
-        f"## Current scene (max 10)\n{scene_bullets}",
-        f"## Scene summary\n{scene_summary or '(none yet)'}",
         f"## Current mechanics (max 10)\n{mechanics_bullets}",
         f"## Mechanics summary\n{mechanics_summary or '(none yet)'}",
-        f"## Current tactical (max 5)\n{tactical_bullets}",
+        f"## Current tactical (max 10)\n{tactical_bullets}",
         f"## Tactical summary\n{tactical_summary or '(none yet)'}",
         "",
     ]
@@ -96,14 +90,12 @@ def build_user_content(
 
     content_blocks: list[dict] = []
 
-    # Add observation images if available
-    if prev_b64 and cur_b64:
-        content_blocks.append({"type": "text", "text": "Previous frame:"})
-        content_blocks.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{prev_b64}"}})
-        content_blocks.append({"type": "text", "text": "Current frame:"})
-        content_blocks.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{cur_b64}"}})
+    if observation:
+        content_blocks.extend(observation)
+        content_blocks.append({"type": "text", "text": text_prompt})
+    else:
+        content_blocks.append({"type": "text", "text": text_prompt})
 
-    content_blocks.append({"type": "text", "text": text_prompt})
     return content_blocks
 
 
@@ -151,8 +143,6 @@ def run_experiment(
     frame_idx: int,
     history_data: list[dict],
     rec_lines: list[str],
-    scene: list[str],
-    scene_summary: str,
     mechanics: list[str],
     mechanics_summary: str,
     tactical: list[str],
@@ -176,21 +166,35 @@ def run_experiment(
     adjacency: frozenset[tuple[int, int]] = current["adjacency"]
     sandbox_history: list[dict] = history_data[:frame_idx]
 
-    # Render images
+    # Build observation block matching the real observe node
     prev_frame_idx = max(0, frame_idx - 1)
     prev_grid = load_grid(rec_lines, prev_frame_idx)
     cur_grid = load_grid(rec_lines, frame_idx)
 
-    prev_img = grid_to_image(prev_grid)
-    cur_img = grid_to_image(cur_grid)
-    prev_b64 = image_to_base64(prev_img)
-    cur_b64 = image_to_base64(cur_img)
+    from agents.langgraph_vision_agent.observe import (
+        draw_boxes_on_grid,
+        find_changed_regions,
+    )
+    render_scale = 8
+    regions = find_changed_regions(prev_grid, cur_grid)
+    prev_boxed = draw_boxes_on_grid(prev_grid, regions, scale=render_scale)
+    cur_boxed = draw_boxes_on_grid(cur_grid, regions, scale=render_scale)
+    prev_b64 = image_to_base64(prev_boxed)
+    cur_b64 = image_to_base64(cur_boxed)
+
+    last_action_id = action_history[-1].split("=")[1].strip() if action_history else None
+    caption = f"Action taken: {last_action_id}. You expected: {expectation}"
+    observation = [
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{prev_b64}"}},
+        {"type": "text", "text": f"Frame {frame_idx - 1}"},
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{cur_b64}"}},
+        {"type": "text", "text": f"Frame {frame_idx}"},
+        {"type": "text", "text": caption},
+    ]
 
     # Build user content
     user_content = build_user_content(
         frame_index=frame_idx,
-        scene=scene,
-        scene_summary=scene_summary,
         mechanics=mechanics,
         mechanics_summary=mechanics_summary,
         tactical=tactical,
@@ -200,8 +204,7 @@ def run_experiment(
         available_actions=available_actions,
         force_reflect=force_reflect,
         reflect_reason=reflect_reason,
-        prev_b64=prev_b64,
-        cur_b64=cur_b64,
+        observation=observation,
     )
 
     messages: list[dict] = [
@@ -462,8 +465,6 @@ def main() -> None:
     for fi in frames_to_test:
         # Extract state from recording
         lg = json.loads(rec_lines[fi])["data"].get("scene_state", {}).get("langgraph_state", {})
-        scene = lg.get("scene", [])
-        scene_summary = lg.get("scene_summary", "")
         mechanics = lg.get("mechanics", [])
         mechanics_summary = lg.get("mechanics_summary", "")
         tactical = lg.get("tactical", [])
@@ -485,8 +486,6 @@ def main() -> None:
             frame_idx=fi,
             history_data=history_data,
             rec_lines=rec_lines,
-            scene=scene,
-            scene_summary=scene_summary,
             mechanics=mechanics,
             mechanics_summary=mechanics_summary,
             tactical=tactical,

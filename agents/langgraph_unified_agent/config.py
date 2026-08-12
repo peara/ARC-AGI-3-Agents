@@ -17,8 +17,8 @@ class UnifiedAgentConfig:
     unified_max_tool_calls: int = 12
     unified_sandbox_timeout: float = 10.0
     llm_thinking: bool = False
-    llm_temperature: float | None = None
-    llm_top_p: float | None = None
+    llm_temperature: float | None = 0.5
+    llm_top_p: float | None = 0.95
     render_scale: int = 8
     vision_enabled: bool = True
     max_history: int = 5

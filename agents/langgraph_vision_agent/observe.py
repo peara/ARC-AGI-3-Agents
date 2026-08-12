@@ -98,6 +98,13 @@ def make_observe_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
                 {"type": "text", "text": f"Frame {frame_index}"},
                 {"type": "text", "text": caption},
             ]
+
+            images_dir = getattr(services, "images_dir", None)
+            if images_dir:
+                import os
+                os.makedirs(images_dir, exist_ok=True)
+                prev_boxed.save(os.path.join(images_dir, f"frame_{frame_index - 1:04d}.png"))
+                curr_boxed.save(os.path.join(images_dir, f"frame_{frame_index:04d}.png"))
         else:
             observation = render_observation(
                 frame, frame_index=frame_index, render_scale=render_scale
