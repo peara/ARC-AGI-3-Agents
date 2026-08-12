@@ -46,6 +46,8 @@ class LlmCallable(Protocol):
         *,
         thinking: bool | None = ...,
         max_tokens: int | None = ...,
+        temperature: float | None = ...,
+        top_p: float | None = ...,
         tools: list[dict] | None = ...,
         tool_choice: str | None = ...,
     ) -> ChatResponse | str: ...
@@ -138,6 +140,8 @@ def wrap_llm_call(
     *,
     thinking: bool | None = None,
     max_tokens: int | None = None,
+    temperature: float | None = None,
+    top_p: float | None = None,
     tools: list[dict] | None = None,
     tool_choice: str | None = None,
 ) -> Callable[..., ChatResponse | str]:
@@ -146,10 +150,11 @@ def wrap_llm_call(
     The returned callable has the same signature as ``llm_call``:
     ``(messages, *, thinking=None, max_tokens=None, tools=None, tool_choice=None) -> ChatResponse | str``.
 
-    ``thinking`` / ``max_tokens`` set here act as per-kind defaults applied
-    to every call through this wrapper. They may be overridden per-call by
-    passing the same kwargs to the returned callable. Precedence:
-    per-call kwarg > wrap-time default > env var > server default.
+    ``thinking`` / ``max_tokens`` / ``temperature`` / ``top_p`` set here act
+    as per-kind defaults applied to every call through this wrapper. They may
+    be overridden per-call by passing the same kwargs to the returned
+    callable. Precedence: per-call kwarg > wrap-time default > env var >
+    server default.
 
     Truncation detection: if the LLM response has ``finish_reason == "length"``
     the event is marked ``truncated: true``.  In ``LLM_STRICT_MODE`` this
@@ -161,6 +166,8 @@ def wrap_llm_call(
         *,
         thinking: bool | None = thinking,
         max_tokens: int | None = max_tokens,
+        temperature: float | None = temperature,
+        top_p: float | None = top_p,
         tools: list[dict] | None = tools,
         tool_choice: str | None = tool_choice,
     ) -> ChatResponse | str:
@@ -178,6 +185,8 @@ def wrap_llm_call(
                 messages,
                 thinking=thinking,
                 max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
                 tools=tools,
                 tool_choice=tool_choice,
             )

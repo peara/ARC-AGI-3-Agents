@@ -92,6 +92,8 @@ class LLMClient:
         *,
         thinking: bool | None = None,
         max_tokens: int | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
         tools: list[dict] | None = None,
         tool_choice: str | None = None,
     ) -> ChatResponse:
@@ -125,6 +127,10 @@ class LLMClient:
         }
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        if top_p is not None:
+            kwargs["top_p"] = top_p
         if thinking is not None:
             # extra_body merges into the top-level HTTP request body — the SDK
             # rejects unknown kwargs, but extra_body is forwarded verbatim.

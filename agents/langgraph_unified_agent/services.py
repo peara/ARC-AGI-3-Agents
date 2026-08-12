@@ -55,6 +55,8 @@ def create_services(
             kind="unified",
             thinking=config.llm_thinking,
             max_tokens=config.unified_max_tokens,
+            temperature=config.llm_temperature,
+            top_p=config.llm_top_p,
             tools=UNIFIED_TOOLS_V2,
             tool_choice="auto",
         )
