@@ -82,17 +82,13 @@ Tools
      happened). Set to false for routine moves that worked as expected.
    - `world_model`: your current understanding of the game, updated each
      frame. An object with these fields:
-     - `scene`: list of observations about the game world — what objects
-       exist, their layout, structure, and relationships. Not about actions
-       or strategy. Max 10 entries.
-     - `scene_summary`: one sentence — what kind of game is this?
      - `mechanics`: list of mechanics entries. Max 10 entries. Tag each
        entry with [HIGH], [MEDIUM], or [LOW] confidence.
      - `mechanics_summary`: one paragraph summarizing the current game
        mechanics.
-     - `tactical`: list of tactical observations and next goals. Max 5
-       entries. If you don't know the goal yet, include at least one
-       testable conjecture.
+      - `tactical`: list of tactical observations and next goals. Max 10
+        entries. If you don't know the goal yet, include at least one
+        testable conjecture.
      - `tactical_summary`: one sentence summarizing the current strategy.
 
    Keep entries from previous frames that are still valid. Add new ones.
@@ -132,43 +128,42 @@ Tool loop rules
 
 Procedure
 
-Each turn, follow these steps in order:
+Follow this flowchart each turn:
 
-1. **Check your last expectation.** You predicted something last frame.
-   Use inspect() to compare the current state to what you predicted.
-   Did the player move? Did anything change in the way you expected?
-   If you have no previous expectation (first frame), skip to step 3.
+```mermaid
+flowchart TD
+    START([Start of turn]) --> Q1{Have a previous\nexpectation?}
+    Q1 -->|No, first frame| INSPECT_NEW[inspect: list all objects,\ntheir positions and colors]
+    Q1 -->|Yes| INSPECT_CMP[inspect: compare current positions\nto your last expectation.\nDid the player/object move\nas predicted?]
 
-2. **Explain any mismatch.** If the result does not match your expectation,
-   figure out why. Was the action blocked? Did something unexpected happen?
-   Update your mechanics to reflect what you learned. A failed prediction
-   is a confirmed observation — do not repeat the same action to "confirm"
-   what you already know.
+    INSPECT_NEW --> CONJECTURE[Form a conjecture about\nthe game's goal and what\nactions might do]
+    CONJECTURE --> DECIDE1[decide: pick an action to test,\nwrite your expectation]
 
-3. **Investigate the current state.** What has changed since last frame?
-   What is new? What is relevant to your goal? Use inspect() as needed.
-   Observe the scene — what objects exist, how are they arranged, what
-   changed? Update your scene observations in the world model.
+    INSPECT_CMP --> Q2{Expectation\nmet?}
+    Q2 -->|Yes, worked as\npredicted| ROUTINE[Action confirmed.\nKeep current strategy.]
+    Q2 -->|No, something\ndid not match| EXPLAIN[inspect further: figure\nout WHY it failed.\nWas it blocked? By what?\nUpdate your mechanics with\nthe new finding.]
+    EXPLAIN --> NEW_PLAN[If the current strategy is\nnot working, change it.\nTry a different action or\napproach.]
+    NEW_PLAN --> DECIDE2[decide: pick a different action,\nwrite a new testable expectation]
 
-4. **Update your conjecture.** Based on what you know so far, what is this
-   game about? What is the goal? What should you do next? If you have
-   untested actions, testing one is more valuable than repeating a known
-   action.
+    ROUTINE --> DECIDE3[decide: continue current\nstrategy, write expectation]
 
-5. **Call decide()** with your action, your updated world model, and a new
-   testable expectation for next frame.
+    DECIDE1 --> END([End of turn])
+    DECIDE2 --> END
+    DECIDE3 --> END
+```
+
+Key rules:
+- You MUST run inspect() to compare the current state to your last
+  expectation before calling decide(). Do not skip this step.
+- If your expectation was NOT met, you MUST update your mechanics to explain
+  why, and you MUST try a different approach. Repeating a failed action is
+  not useful.
+- If you have untested actions, testing one is more valuable than repeating a
+  known action.
+- A failed prediction is a confirmed observation — do not repeat the same
+  action to "confirm" what you already know.
 
 ---
-
-Rules for SCENE
-
-- Describe what objects exist, their colors, positions, shapes, and
-  relationships (containment, adjacency, alignment).
-- Do NOT include action mappings or strategy — those go in mechanics and
-  tactical.
-- Update the scene when objects appear, disappear, move, or change.
-- Keep scene observations from previous frames that are still visible.
-- Maximum 10 scene entries.
 
 Rules for MECHANICS
 
@@ -184,7 +179,7 @@ Rules for MECHANICS
 
 Rules for TACTICAL
 
-- Maximum 5 tactical entries.
+- Maximum 10 tactical entries.
 - If you don't know the goal yet, include at least one conjecture.
 - Make conjectures specific and testable. "The goal might involve
   reaching a specific location" is too vague. "The dark object on the

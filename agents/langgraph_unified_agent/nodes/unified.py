@@ -57,8 +57,6 @@ def _build_user_content(
     a multimodal user message.
     """
     frame_index: int = state.get("frame_index", 0)
-    scene: list[str] = state.get("scene", [])
-    scene_summary: str = state.get("scene_summary", "")
     mechanics: list[str] = state.get("mechanics", [])
     mechanics_summary: str = state.get("mechanics_summary", "")
     tactical: list[str] = state.get("tactical", [])
@@ -67,7 +65,6 @@ def _build_user_content(
     expectation: str = state.get("expectation", "")
     available_actions: list[int] = state.get("available_actions", [])
 
-    scene_bullets = "\n".join(f"- {s}" for s in scene) if scene else "(none yet)"
     mechanics_bullets = "\n".join(f"- {m}" for m in mechanics) if mechanics else "(none yet)"
     tactical_bullets = "\n".join(f"- {t}" for t in tactical) if tactical else "(none yet)"
     recent_history = history[-5:] if history else []
@@ -78,11 +75,9 @@ def _build_user_content(
         f"Last expectation: {expectation or '(none)'}",
         f"Recent actions: {recent_history}",
         "",
-        f"## Current scene (max 10)\n{scene_bullets}",
-        f"## Scene summary\n{scene_summary or '(none yet)'}",
         f"## Current mechanics (max 10)\n{mechanics_bullets}",
         f"## Mechanics summary\n{mechanics_summary or '(none yet)'}",
-        f"## Current tactical (max 5)\n{tactical_bullets}",
+        f"## Current tactical (max 10)\n{tactical_bullets}",
         f"## Tactical summary\n{tactical_summary or '(none yet)'}",
         "",
     ]
@@ -176,8 +171,6 @@ def make_unified_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
         sandbox_timeout = config.unified_sandbox_timeout
 
         # Existing scene/mechanics/tactical for graceful degradation
-        prev_scene: list[str] = list(state.get("scene", []))
-        prev_scene_summary: str = state.get("scene_summary", "")
         prev_mechanics: list[str] = list(state.get("mechanics", []))
         prev_mechanics_summary: str = state.get("mechanics_summary", "")
         prev_tactical: list[str] = list(state.get("tactical", []))
@@ -278,15 +271,11 @@ def make_unified_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
 
                 wm = args.get("world_model")
                 if wm is not None:
-                    scene_list = wm.get("scene", [])
-                    scene_summary_dec = wm.get("scene_summary", "")
                     mechanics_list = wm.get("mechanics", [])
                     mechanics_summary = wm.get("mechanics_summary", "")
                     tactical_list = wm.get("tactical", [])
                     tactical_summary = wm.get("tactical_summary", "")
                 else:
-                    scene_list = []
-                    scene_summary_dec = ""
                     mechanics_list = args.get("mechanics", [])
                     mechanics_summary = args.get("mechanics_summary", "")
                     tactical_list = args.get("tactical", [])
@@ -300,32 +289,23 @@ def make_unified_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
                 if force_reflect:
                     reflect = True
 
-                # Build output scene/mechanics/tactical
-                scene_out: list[str] = prev_scene
-                scene_summary_out: str = prev_scene_summary
+                # Build output mechanics/tactical
                 mechanics_out: list[str] = prev_mechanics
                 mechanics_summary_out: str = prev_mechanics_summary
                 tactical_out: list[str] = prev_tactical
                 tactical_summary_out: str = prev_tactical_summary
 
                 if reflect:
-                    new_scene = scene_list if scene_list else prev_scene
-                    new_scene_sum = scene_summary_dec if scene_summary_dec else prev_scene_summary
                     new_mech = mechanics_list if mechanics_list else prev_mechanics
                     new_mech_sum = mechanics_summary if mechanics_summary else prev_mechanics_summary
                     new_tac = tactical_list if tactical_list else prev_tactical
                     new_tac_sum = tactical_summary if tactical_summary else prev_tactical_summary
-                    max_scene = 10
                     max_mechanics = config.max_mechanics
                     max_tactical = config.max_tactical
-                    if len(new_scene) > max_scene:
-                        new_scene = new_scene[-max_scene:]
                     if len(new_mech) > max_mechanics:
                         new_mech = new_mech[-max_mechanics:]
                     if len(new_tac) > max_tactical:
                         new_tac = new_tac[-max_tactical:]
-                    scene_out = new_scene
-                    scene_summary_out = new_scene_sum
                     mechanics_out = new_mech
                     mechanics_summary_out = new_mech_sum
                     tactical_out = new_tac
@@ -362,8 +342,6 @@ def make_unified_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
                     "plan": f"Action {action_id}: {expectation}",
                     "expectation": expectation,
                     "needs_reflection": needs_reflection,
-                    "scene": scene_out,
-                    "scene_summary": scene_summary_out,
                     "mechanics": mechanics_out,
                     "mechanics_summary": mechanics_summary_out,
                     "tactical": tactical_out,
@@ -392,8 +370,6 @@ def make_unified_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
             "plan": "unified fallback, random action",
             "expectation": "",
             "needs_reflection": False,
-            "scene": prev_scene,
-            "scene_summary": prev_scene_summary,
             "mechanics": prev_mechanics,
             "mechanics_summary": prev_mechanics_summary,
             "tactical": prev_tactical,
