@@ -15,6 +15,7 @@ class UnifiedState(TypedDict, total=False):
     mechanics_summary: str
     tactical: list[str]
     tactical_summary: str
+    actions: list[str]
     plan: str
     history: list[str]
     action: GameAction | None

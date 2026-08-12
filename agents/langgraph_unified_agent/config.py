@@ -24,6 +24,7 @@ class UnifiedAgentConfig:
     max_history: int = 5
     max_tactical: int = 10
     max_mechanics: int = 20
+    max_action_entries: int = 10
 
 
 def load_config(path: str | None = None) -> UnifiedAgentConfig:

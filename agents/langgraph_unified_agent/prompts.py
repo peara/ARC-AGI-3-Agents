@@ -80,16 +80,20 @@ Tools
    - `reflect`: set to true if you learned something new this frame (confirmed
      or disproved a conjecture, an action failed, something unexpected
      happened). Set to false for routine moves that worked as expected.
-   - `world_model`: your current understanding of the game, updated each
-     frame. An object with these fields:
-     - `mechanics`: list of mechanics entries. Max 10 entries. Tag each
-       entry with [HIGH], [MEDIUM], or [LOW] confidence.
-     - `mechanics_summary`: one paragraph summarizing the current game
-       mechanics.
-      - `tactical`: list of tactical observations and next goals. Max 10
-        entries. If you don't know the goal yet, include at least one
-        testable conjecture.
-     - `tactical_summary`: one sentence summarizing the current strategy.
+    - `world_model`: your current understanding of the game, updated each
+      frame. An object with these fields:
+      - `actions`: list of action descriptions. One entry per available
+        action ID, e.g. "1=UP (confirmed)", "5=unknown, not yet tested".
+        Mark tested actions as (confirmed) or (guessed), untested as
+        (unknown). Max 10 entries.
+      - `mechanics`: list of mechanics entries. Max 10 entries. Tag each
+        entry with [HIGH], [MEDIUM], or [LOW] confidence.
+      - `mechanics_summary`: one paragraph summarizing the current game
+        mechanics.
+       - `tactical`: list of tactical observations and next goals. Max 10
+         entries. If you don't know the goal yet, include at least one
+         testable conjecture.
+      - `tactical_summary`: one sentence summarizing the current strategy.
 
    Keep entries from previous frames that are still valid. Add new ones.
    Drop ones that are disproven. Stale-but-valid is better than lost
@@ -140,17 +144,20 @@ flowchart TD
     CONJECTURE --> DECIDE1[decide: pick an action to test,\nwrite your expectation]
 
     INSPECT_CMP --> Q2{Expectation\nmet?}
-    Q2 -->|Yes, worked as\npredicted| ROUTINE[Action confirmed.\nKeep current strategy.]
+    Q2 -->|Yes, worked as\npredicted| Q3{Any action\nmarked (unknown)?}
+    Q3 -->|Yes| TEST_UNKNOWN[decide: test the unknown\naction, write expectation\nabout what it might do]
+    Q3 -->|No| ROUTINE[Action confirmed.\nKeep current strategy.]
     Q2 -->|No, something\ndid not match| EXPLAIN[inspect further: figure\nout WHY it failed.\nWas it blocked? By what?\nUpdate your mechanics with\nthe new finding.]
     EXPLAIN --> NEW_PLAN[If the current strategy is\nnot working, change it.\nTry a different action or\napproach.]
     NEW_PLAN --> DECIDE2[decide: pick a different action,\nwrite a new testable expectation]
 
     ROUTINE --> DECIDE3[decide: continue current\nstrategy, write expectation]
+    TEST_UNKNOWN --> END
 
     DECIDE1 --> END([End of turn])
     DECIDE2 --> END
     DECIDE3 --> END
-```
+    ```
 
 Key rules:
 - You MUST run inspect() to compare the current state to your last
@@ -158,8 +165,8 @@ Key rules:
 - If your expectation was NOT met, you MUST update your mechanics to explain
   why, and you MUST try a different approach. Repeating a failed action is
   not useful.
-- If you have untested actions, testing one is more valuable than repeating a
-  known action.
+- If your `actions` list has any (unknown) entries, testing one is
+  more valuable than repeating a known action.
 - A failed prediction is a confirmed observation — do not repeat the same
   action to "confirm" what you already know.
 

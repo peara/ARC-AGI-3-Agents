@@ -10,8 +10,10 @@ import pytest
 
 from agents.langgraph_unified_agent.tools import (
     DECIDE_TOOL,
+    DECIDE_V2_TOOL,
     INSPECT_TOOL,
     UNIFIED_TOOLS,
+    UNIFIED_TOOLS_V2,
 )
 
 
@@ -92,3 +94,46 @@ def test_unified_tools_contains_inspect_and_decide():
     """UNIFIED_TOOLS[0] is INSPECT_TOOL, UNIFIED_TOOLS[1] is DECIDE_TOOL."""
     assert UNIFIED_TOOLS[0] is INSPECT_TOOL
     assert UNIFIED_TOOLS[1] is DECIDE_TOOL
+
+
+# ------------------------------------------------------------------
+# V2 schema tests (DECIDE_V2_TOOL / UNIFIED_TOOLS_V2)
+# ------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_decide_v2_tool_schema():
+    """DECIDE_V2_TOOL has type='function', function.name='decide'."""
+    assert DECIDE_V2_TOOL["type"] == "function"
+    assert DECIDE_V2_TOOL["function"]["name"] == "decide"
+
+
+@pytest.mark.unit
+def test_decide_v2_world_model_actions():
+    """DECIDE_V2_TOOL world_model has actions array of strings."""
+    wm = DECIDE_V2_TOOL["function"]["parameters"]["properties"]["world_model"]
+    assert "actions" in wm["properties"]
+    assert wm["properties"]["actions"]["type"] == "array"
+    assert wm["properties"]["actions"]["items"]["type"] == "string"
+
+
+@pytest.mark.unit
+def test_decide_v2_world_model_actions_required():
+    """actions is in world_model.required."""
+    wm = DECIDE_V2_TOOL["function"]["parameters"]["properties"]["world_model"]
+    assert "actions" in wm["required"]
+
+
+@pytest.mark.unit
+def test_decide_v2_world_model_required_fields():
+    """world_model.required includes actions, mechanics, tactical."""
+    wm = DECIDE_V2_TOOL["function"]["parameters"]["properties"]["world_model"]
+    assert sorted(wm["required"]) == ["actions", "mechanics", "tactical"]
+
+
+@pytest.mark.unit
+def test_unified_tools_v2_list():
+    """UNIFIED_TOOLS_V2 has 2 items (inspect + decide_v2)."""
+    assert len(UNIFIED_TOOLS_V2) == 2
+    assert UNIFIED_TOOLS_V2[0]["function"]["name"] == "inspect"
+    assert UNIFIED_TOOLS_V2[1]["function"]["name"] == "decide"

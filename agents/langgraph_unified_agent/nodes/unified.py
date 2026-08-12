@@ -46,6 +46,7 @@ def _frame_to_grid(frame_data: Any) -> np.ndarray | None:
 
 def _build_user_content(
     state: dict[str, Any],
+    config: UnifiedAgentConfig,
     objects: tuple[dict[str, Any], ...],
     adjacency: frozenset[tuple[int, int]],
     force_reflect: bool,
@@ -61,12 +62,14 @@ def _build_user_content(
     mechanics_summary: str = state.get("mechanics_summary", "")
     tactical: list[str] = state.get("tactical", [])
     tactical_summary: str = state.get("tactical_summary", "")
+    actions: list[str] = state.get("actions", [])
     history: list[str] = state.get("history", [])
     expectation: str = state.get("expectation", "")
     available_actions: list[int] = state.get("available_actions", [])
 
     mechanics_bullets = "\n".join(f"- {m}" for m in mechanics) if mechanics else "(none yet)"
     tactical_bullets = "\n".join(f"- {t}" for t in tactical) if tactical else "(none yet)"
+    actions_bullets = "\n".join(f"- {a}" for a in actions) if actions else "(none yet)"
     recent_history = history[-5:] if history else []
 
     parts: list[str] = [
@@ -79,6 +82,7 @@ def _build_user_content(
         f"## Mechanics summary\n{mechanics_summary or '(none yet)'}",
         f"## Current tactical (max 10)\n{tactical_bullets}",
         f"## Tactical summary\n{tactical_summary or '(none yet)'}",
+        f"## Actions (max {config.max_action_entries})\n{actions_bullets}",
         "",
     ]
 
@@ -163,7 +167,7 @@ def make_unified_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
         # ---- Build messages ----
         system_message = {"role": "system", "content": UNIFIED_SYSTEM_PROMPT}
         user_content = _build_user_content(
-            state, objects, adjacency, force_reflect, reflect_reason,
+            state, config, objects, adjacency, force_reflect, reflect_reason,
         )
         messages = [system_message, {"role": "user", "content": user_content}]
 
@@ -175,6 +179,7 @@ def make_unified_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
         prev_mechanics_summary: str = state.get("mechanics_summary", "")
         prev_tactical: list[str] = list(state.get("tactical", []))
         prev_tactical_summary: str = state.get("tactical_summary", "")
+        prev_actions: list[str] = list(state.get("actions", []))
 
         available_actions: list[int] = state.get("available_actions", [1])
         if not available_actions:
@@ -275,11 +280,13 @@ def make_unified_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
                     mechanics_summary = wm.get("mechanics_summary", "")
                     tactical_list = wm.get("tactical", [])
                     tactical_summary = wm.get("tactical_summary", "")
+                    actions_list = wm.get("actions", [])
                 else:
                     mechanics_list = args.get("mechanics", [])
                     mechanics_summary = args.get("mechanics_summary", "")
                     tactical_list = args.get("tactical", [])
                     tactical_summary = args.get("tactical_summary", "")
+                    actions_list = args.get("actions", [])
 
                 # Validate action_id against available_actions
                 if action_id is None or action_id not in available_actions:
@@ -294,22 +301,28 @@ def make_unified_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
                 mechanics_summary_out: str = prev_mechanics_summary
                 tactical_out: list[str] = prev_tactical
                 tactical_summary_out: str = prev_tactical_summary
+                actions_out: list[str] = prev_actions
 
                 if reflect:
                     new_mech = mechanics_list if mechanics_list else prev_mechanics
                     new_mech_sum = mechanics_summary if mechanics_summary else prev_mechanics_summary
                     new_tac = tactical_list if tactical_list else prev_tactical
                     new_tac_sum = tactical_summary if tactical_summary else prev_tactical_summary
+                    new_actions = actions_list if actions_list else prev_actions
                     max_mechanics = config.max_mechanics
                     max_tactical = config.max_tactical
+                    max_action_entries = config.max_action_entries
                     if len(new_mech) > max_mechanics:
                         new_mech = new_mech[-max_mechanics:]
                     if len(new_tac) > max_tactical:
                         new_tac = new_tac[-max_tactical:]
+                    if len(new_actions) > max_action_entries:
+                        new_actions = new_actions[-max_action_entries:]
                     mechanics_out = new_mech
                     mechanics_summary_out = new_mech_sum
                     tactical_out = new_tac
                     tactical_summary_out = new_tac_sum
+                    actions_out = new_actions
 
                 # 5-repeat action guard: count consecutive same-action entries
                 needs_reflection = reflect
@@ -346,6 +359,7 @@ def make_unified_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
                     "mechanics_summary": mechanics_summary_out,
                     "tactical": tactical_out,
                     "tactical_summary": tactical_summary_out,
+                    "actions": actions_out,
                 }
 
         # ---- Fallback: max tool calls exhausted or LLM error ----
@@ -374,6 +388,7 @@ def make_unified_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
             "mechanics_summary": prev_mechanics_summary,
             "tactical": prev_tactical,
             "tactical_summary": prev_tactical_summary,
+            "actions": prev_actions,
         }
 
     return unified_node

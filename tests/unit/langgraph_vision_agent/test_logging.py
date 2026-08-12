@@ -91,6 +91,7 @@ class TestLogging:
             "mechanics_summary",
             "tactical",
             "tactical_summary",
+            "actions",
             "plan",
             "uncertain_about",
             "needs_reflection",

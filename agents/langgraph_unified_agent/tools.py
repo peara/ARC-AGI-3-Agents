@@ -121,6 +121,17 @@ DECIDE_V2_TOOL: dict = {
                         "drop ones that are disproven."
                     ),
                     "properties": {
+                        "actions": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "What each available action does. One entry per action ID, "
+                                "e.g. '1=UP (confirmed)', '5=unknown, not yet tested'. "
+                                "Mark actions you have tested as (confirmed) or (guessed). "
+                                "Mark untested actions as (unknown). You must include ALL "
+                                "available actions every turn."
+                            ),
+                        },
                         "mechanics": {
                             "type": "array",
                             "items": {"type": "string"},
@@ -153,7 +164,7 @@ DECIDE_V2_TOOL: dict = {
                             ),
                         },
                     },
-                    "required": ["mechanics", "tactical"],
+                    "required": ["actions", "mechanics", "tactical"],
                 },
             },
             "required": ["action_id", "expectation", "reflect", "world_model"],

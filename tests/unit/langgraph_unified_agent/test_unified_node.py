@@ -34,6 +34,7 @@ def _base_state(make_frame, **overrides):
         "mechanics_summary": "",
         "tactical": [],
         "tactical_summary": "",
+        "actions": [],
         "plan": "",
         "history": [],
         "action": None,
@@ -480,3 +481,36 @@ class TestUnifiedNode:
         assert sandbox_mock.call_count == 1
         assert isinstance(result, dict)
         assert result["action"] == GameAction.from_id(2)
+
+    # ------------------------------------------------------------------ #
+    # 13. decide with actions in world_model → actions returned in dict
+    # ------------------------------------------------------------------ #
+    def test_actions_returned_by_decide(self, mock_services, make_frame):
+        """decide() with reflect=True returns actions in result dict."""
+        services = mock_services(
+            unified_return=make_decide_response(
+                action_id=1,
+                reflect=True,
+                actions=["1=UP (confirmed)", "5=unknown, not yet tested"],
+            ),
+        )
+        node = make_unified_node(services)
+        state = _base_state(make_frame)
+        with patch("agents.langgraph_unified_agent.nodes.unified.log_node"):
+            result = node(state)
+        assert isinstance(result, dict)
+        assert result["actions"] == ["1=UP (confirmed)", "5=unknown, not yet tested"]
+
+    # ------------------------------------------------------------------ #
+    # 14. Fallback path carries forward prev_actions
+    # ------------------------------------------------------------------ #
+    def test_actions_carry_forward_on_fallback(self, mock_services, make_frame):
+        """Fallback path carries forward prev_actions."""
+        text_response = make_text_response("I am not sure what to do.")
+        services = mock_services(unified_return=text_response)
+        node = make_unified_node(services)
+        state = _base_state(make_frame, actions=["1=UP (confirmed)"])
+        with patch("agents.langgraph_unified_agent.nodes.unified.log_node"):
+            result = node(state)
+        assert isinstance(result, dict)
+        assert result["actions"] == ["1=UP (confirmed)"]
