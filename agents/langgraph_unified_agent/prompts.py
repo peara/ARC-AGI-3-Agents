@@ -192,10 +192,12 @@ Key rules:
 - If your goal_status is 'blocked', you MUST set a new goal before repeating
   the same action.
 - If your goal_status is 'completed', you MUST set a new goal.
-- If your `actions` list has any (unknown) entries, testing one is
-  more valuable than repeating a known action.
+- If your `actions` list has any (unknown) entries, you MUST test one
+  before repeating a known action more than 3 times in a row.
 - A failed prediction is a confirmed observation — do not repeat the same
   action to "confirm" what you already know.
+- If the same action produced no change (flatline) for 2+ consecutive
+  frames, your goal_status MUST be 'blocked'. Do not keep repeating it.
 
 ---
 
@@ -224,8 +226,15 @@ Rules for GOAL
 - Your goal is a single sentence describing your current primary objective.
   It can include multiple steps, e.g. "Move adjacent to the blue object,
   then test action 5". Update it each turn.
+- Your goal must be specific and actionable, not vague. "Explore the grid"
+  is NOT a goal. "Reach the blue object at (25, 45)" or "Test action 5
+  near the pink object" are valid goals.
+- If you don't know the game's objective yet, your goal should be to find
+  out — examine objects and try interactions to discover what wins the game.
 - If goal_status is 'blocked' or 'completed', you MUST set a new goal before
   deciding the next action.
+- When setting a new goal, check your `actions` list first. If any action
+  is (unknown), testing it should be your next goal.
 """
 
 __all__ = ["UNIFIED_SYSTEM_PROMPT"]
