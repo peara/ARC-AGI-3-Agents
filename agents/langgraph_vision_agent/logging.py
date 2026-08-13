@@ -54,6 +54,8 @@ def extract_state_for_recording(state: dict[str, Any]) -> dict[str, Any]:
         "tactical": state.get("tactical", []),
         "tactical_summary": state.get("tactical_summary", ""),
         "actions": state.get("actions", []),
+        "goal": state.get("goal", ""),
+        "goal_status": state.get("goal_status", ""),
         "plan": state.get("plan", ""),
         "uncertain_about": state.get("uncertain_about"),
         "needs_reflection": state.get("needs_reflection", False),

@@ -92,6 +92,8 @@ class TestLogging:
             "tactical",
             "tactical_summary",
             "actions",
+            "goal",
+            "goal_status",
             "plan",
             "uncertain_about",
             "needs_reflection",

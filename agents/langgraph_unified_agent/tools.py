@@ -132,6 +132,24 @@ DECIDE_V2_TOOL: dict = {
                                 "available actions every turn."
                             ),
                         },
+                        "goal": {
+                            "type": "string",
+                            "description": (
+                                "Your current primary objective, one sentence. "
+                                "Can include multiple steps, e.g. 'Move adjacent to the "
+                                "blue object, then test action 5'. Update each turn."
+                            ),
+                        },
+                        "goal_status": {
+                            "type": "string",
+                            "enum": ["discovering", "in_progress", "blocked", "completed"],
+                            "description": (
+                                "Status of your current goal. 'blocked' = current approach "
+                                "isn't working, you must set a new goal. 'completed' = done, "
+                                "set a new goal. 'discovering' = still learning what the game "
+                                "is about. 'in_progress' = actively working on it."
+                            ),
+                        },
                         "mechanics": {
                             "type": "array",
                             "items": {"type": "string"},
@@ -164,7 +182,7 @@ DECIDE_V2_TOOL: dict = {
                             ),
                         },
                     },
-                    "required": ["actions", "mechanics", "tactical"],
+                    "required": ["actions", "goal", "goal_status", "mechanics", "tactical"],
                 },
             },
             "required": ["action_id", "expectation", "reflect", "world_model"],

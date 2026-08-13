@@ -126,9 +126,34 @@ def test_decide_v2_world_model_actions_required():
 
 @pytest.mark.unit
 def test_decide_v2_world_model_required_fields():
-    """world_model.required includes actions, mechanics, tactical."""
+    """world_model.required includes actions, goal, goal_status, mechanics, tactical."""
     wm = DECIDE_V2_TOOL["function"]["parameters"]["properties"]["world_model"]
-    assert sorted(wm["required"]) == ["actions", "mechanics", "tactical"]
+    assert sorted(wm["required"]) == ["actions", "goal", "goal_status", "mechanics", "tactical"]
+
+
+@pytest.mark.unit
+def test_decide_v2_world_model_goal():
+    """DECIDE_V2_TOOL world_model has goal string field."""
+    wm = DECIDE_V2_TOOL["function"]["parameters"]["properties"]["world_model"]
+    assert "goal" in wm["properties"]
+    assert wm["properties"]["goal"]["type"] == "string"
+
+
+@pytest.mark.unit
+def test_decide_v2_world_model_goal_status():
+    """DECIDE_V2_TOOL world_model has goal_status string enum field."""
+    wm = DECIDE_V2_TOOL["function"]["parameters"]["properties"]["world_model"]
+    assert "goal_status" in wm["properties"]
+    assert wm["properties"]["goal_status"]["type"] == "string"
+    assert "enum" in wm["properties"]["goal_status"]
+    assert "blocked" in wm["properties"]["goal_status"]["enum"]
+
+
+@pytest.mark.unit
+def test_decide_v2_world_model_required_with_goal():
+    """world_model.required includes actions, goal, goal_status, mechanics, tactical."""
+    wm = DECIDE_V2_TOOL["function"]["parameters"]["properties"]["world_model"]
+    assert sorted(wm["required"]) == ["actions", "goal", "goal_status", "mechanics", "tactical"]
 
 
 @pytest.mark.unit

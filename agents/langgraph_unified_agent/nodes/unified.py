@@ -63,6 +63,8 @@ def _build_user_content(
     tactical: list[str] = state.get("tactical", [])
     tactical_summary: str = state.get("tactical_summary", "")
     actions: list[str] = state.get("actions", [])
+    goal: str = state.get("goal", "")
+    goal_status: str = state.get("goal_status", "")
     history: list[str] = state.get("history", [])
     expectation: str = state.get("expectation", "")
     available_actions: list[int] = state.get("available_actions", [])
@@ -83,6 +85,8 @@ def _build_user_content(
         f"## Current tactical (max 10)\n{tactical_bullets}",
         f"## Tactical summary\n{tactical_summary or '(none yet)'}",
         f"## Actions (max {config.max_action_entries})\n{actions_bullets}",
+        f"## Goal\n{goal or '(none)'}",
+        f"## Goal status\n{goal_status or '(none)'}",
         "",
     ]
 
@@ -180,6 +184,8 @@ def make_unified_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
         prev_tactical: list[str] = list(state.get("tactical", []))
         prev_tactical_summary: str = state.get("tactical_summary", "")
         prev_actions: list[str] = list(state.get("actions", []))
+        prev_goal: str = state.get("goal", "")
+        prev_goal_status: str = state.get("goal_status", "")
 
         available_actions: list[int] = state.get("available_actions", [1])
         if not available_actions:
@@ -281,12 +287,16 @@ def make_unified_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
                     tactical_list = wm.get("tactical", [])
                     tactical_summary = wm.get("tactical_summary", "")
                     actions_list = wm.get("actions", [])
+                    goal = wm.get("goal", "")
+                    goal_status = wm.get("goal_status", "")
                 else:
                     mechanics_list = args.get("mechanics", [])
                     mechanics_summary = args.get("mechanics_summary", "")
                     tactical_list = args.get("tactical", [])
                     tactical_summary = args.get("tactical_summary", "")
                     actions_list = args.get("actions", [])
+                    goal = args.get("goal", "")
+                    goal_status = args.get("goal_status", "")
 
                 # Validate action_id against available_actions
                 if action_id is None or action_id not in available_actions:
@@ -302,6 +312,8 @@ def make_unified_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
                 tactical_out: list[str] = prev_tactical
                 tactical_summary_out: str = prev_tactical_summary
                 actions_out: list[str] = prev_actions
+                goal_out: str = prev_goal
+                goal_status_out: str = prev_goal_status
 
                 if reflect:
                     new_mech = mechanics_list if mechanics_list else prev_mechanics
@@ -309,6 +321,8 @@ def make_unified_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
                     new_tac = tactical_list if tactical_list else prev_tactical
                     new_tac_sum = tactical_summary if tactical_summary else prev_tactical_summary
                     new_actions = actions_list if actions_list else prev_actions
+                    new_goal = goal if goal else prev_goal
+                    new_goal_status = goal_status if goal_status else prev_goal_status
                     max_mechanics = config.max_mechanics
                     max_tactical = config.max_tactical
                     max_action_entries = config.max_action_entries
@@ -323,6 +337,8 @@ def make_unified_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
                     tactical_out = new_tac
                     tactical_summary_out = new_tac_sum
                     actions_out = new_actions
+                    goal_out = new_goal
+                    goal_status_out = new_goal_status
 
                 # 5-repeat action guard: count consecutive same-action entries
                 needs_reflection = reflect
@@ -360,6 +376,8 @@ def make_unified_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
                     "tactical": tactical_out,
                     "tactical_summary": tactical_summary_out,
                     "actions": actions_out,
+                    "goal": goal_out,
+                    "goal_status": goal_status_out,
                 }
 
         # ---- Fallback: max tool calls exhausted or LLM error ----
@@ -389,6 +407,8 @@ def make_unified_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
             "tactical": prev_tactical,
             "tactical_summary": prev_tactical_summary,
             "actions": prev_actions,
+            "goal": prev_goal,
+            "goal_status": prev_goal_status,
         }
 
     return unified_node

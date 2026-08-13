@@ -86,9 +86,11 @@ def make_decide_response(
     tactical_summary: str = "",
     content: str = "",
     actions: list[str] | None = None,
+    goal: str = "",
+    goal_status: str = "",
 ) -> ChatResponse:
     """Build a ``ChatResponse`` containing a single ``decide`` tool call."""
-    world_model: dict = {"actions": actions or []}
+    world_model: dict = {"actions": actions or [], "goal": goal, "goal_status": goal_status}
     if mechanics is not None:
         world_model["mechanics"] = mechanics
     if mechanics_summary:

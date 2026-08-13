@@ -24,6 +24,17 @@ objects by sight. For any spatial measurement (position, distance,
 adjacency, movement), use the inspect() tool. Do NOT estimate positions or
 distances from the images.
 
+Game world facts
+
+The game world is deterministic:
+- Same action from the same state always produces the same result. There is
+  no randomness, no chance, no luck.
+- Nothing appears or disappears on its own. If an object wasn't there last
+  frame, it won't appear this frame unless your action caused it.
+- If an action produced no change (flatline), repeating the same action from
+  the same position will also produce no change. You MUST try something
+  different.
+
 ---
 
 Tools
@@ -82,12 +93,20 @@ Tools
      happened). Set to false for routine moves that worked as expected.
     - `world_model`: your current understanding of the game, updated each
       frame. An object with these fields:
-      - `actions`: list of action descriptions. One entry per available
-        action ID, e.g. "1=UP (confirmed)", "5=unknown, not yet tested".
-        Mark tested actions as (confirmed) or (guessed), untested as
-        (unknown). Max 10 entries.
-      - `mechanics`: list of mechanics entries. Max 10 entries. Tag each
-        entry with [HIGH], [MEDIUM], or [LOW] confidence.
+       - `actions`: list of action descriptions. One entry per available
+         action ID, e.g. "1=UP (confirmed)", "5=unknown, not yet tested".
+         Mark tested actions as (confirmed) or (guessed), untested as
+         (unknown). Max 10 entries.
+       - `goal`: your current primary objective, one sentence. Can include
+         multiple steps, e.g. "Move adjacent to the blue object, then test
+         action 5". Update each turn.
+       - `goal_status`: one of discovering, in_progress, blocked, completed.
+         discovering = still learning what the game is about.
+         in_progress = actively working on the goal.
+         blocked = current approach is not working, you must set a new goal.
+         completed = done, set a new goal.
+       - `mechanics`: list of mechanics entries. Max 10 entries. Tag each
+         entry with [HIGH], [MEDIUM], or [LOW] confidence.
       - `mechanics_summary`: one paragraph summarizing the current game
         mechanics.
        - `tactical`: list of tactical observations and next goals. Max 10
@@ -144,7 +163,10 @@ flowchart TD
     CONJECTURE --> DECIDE1[decide: pick an action to test,\nwrite your expectation]
 
     INSPECT_CMP --> Q2{Expectation\nmet?}
-    Q2 -->|Yes, worked as\npredicted| Q3{Any action\nmarked (unknown)?}
+    Q2 -->|Yes, worked as\npredicted| Q_GOAL{goal_status?}
+    Q_GOAL -->|blocked| NEW_GOAL[Set a new goal.\nCheck actions for unknowns.\nPick a different approach.]
+    Q_GOAL -->|completed| NEW_GOAL
+    Q_GOAL -->|in_progress\nor discovering| Q3{Any action\nmarked (unknown)?}
     Q3 -->|Yes| TEST_UNKNOWN[decide: test the unknown\naction, write expectation\nabout what it might do]
     Q3 -->|No| ROUTINE[Action confirmed.\nKeep current strategy.]
     Q2 -->|No, something\ndid not match| EXPLAIN[inspect further: figure\nout WHY it failed.\nWas it blocked? By what?\nUpdate your mechanics with\nthe new finding.]
@@ -152,7 +174,9 @@ flowchart TD
     NEW_PLAN --> DECIDE2[decide: pick a different action,\nwrite a new testable expectation]
 
     ROUTINE --> DECIDE3[decide: continue current\nstrategy, write expectation]
+    NEW_GOAL --> DECIDE_NEW[decide: new goal + action,\nwrite expectation]
     TEST_UNKNOWN --> END
+    DECIDE_NEW --> END
 
     DECIDE1 --> END([End of turn])
     DECIDE2 --> END
@@ -165,6 +189,9 @@ Key rules:
 - If your expectation was NOT met, you MUST update your mechanics to explain
   why, and you MUST try a different approach. Repeating a failed action is
   not useful.
+- If your goal_status is 'blocked', you MUST set a new goal before repeating
+  the same action.
+- If your goal_status is 'completed', you MUST set a new goal.
 - If your `actions` list has any (unknown) entries, testing one is
   more valuable than repeating a known action.
 - A failed prediction is a confirmed observation — do not repeat the same
@@ -191,6 +218,14 @@ Rules for TACTICAL
 - Make conjectures specific and testable. "The goal might involve
   reaching a specific location" is too vague. "The dark object on the
   bottom edge might be a target — try moving toward it" is better.
+
+Rules for GOAL
+
+- Your goal is a single sentence describing your current primary objective.
+  It can include multiple steps, e.g. "Move adjacent to the blue object,
+  then test action 5". Update it each turn.
+- If goal_status is 'blocked' or 'completed', you MUST set a new goal before
+  deciding the next action.
 """
 
 __all__ = ["UNIFIED_SYSTEM_PROMPT"]

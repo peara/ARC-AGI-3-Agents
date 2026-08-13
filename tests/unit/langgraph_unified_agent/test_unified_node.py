@@ -35,6 +35,8 @@ def _base_state(make_frame, **overrides):
         "tactical": [],
         "tactical_summary": "",
         "actions": [],
+        "goal": "",
+        "goal_status": "",
         "plan": "",
         "history": [],
         "action": None,
@@ -514,3 +516,38 @@ class TestUnifiedNode:
             result = node(state)
         assert isinstance(result, dict)
         assert result["actions"] == ["1=UP (confirmed)"]
+
+    # ------------------------------------------------------------------ #
+    # 15. goal returned by decide
+    # ------------------------------------------------------------------ #
+    def test_goal_returned_by_decide(self, mock_services, make_frame):
+        """decide() with goal and goal_status in world_model returns them in dict."""
+        services = mock_services(
+            unified_return=make_decide_response(
+                action_id=1,
+                reflect=True,
+                actions=["1=UP (confirmed)"],
+                goal="Test action 5 on the blue object",
+                goal_status="in_progress",
+            ),
+        )
+        node = make_unified_node(services)
+        state = _base_state(make_frame)
+        with patch("agents.langgraph_unified_agent.nodes.unified.log_node"):
+            result = node(state)
+        assert result["goal"] == "Test action 5 on the blue object"
+        assert result["goal_status"] == "in_progress"
+
+    # ------------------------------------------------------------------ #
+    # 16. goal carried forward on fallback
+    # ------------------------------------------------------------------ #
+    def test_goal_carry_forward_on_fallback(self, mock_services, make_frame):
+        """Fallback path carries forward goal and goal_status."""
+        text_response = make_text_response("I am not sure what to do.")
+        services = mock_services(unified_return=text_response)
+        node = make_unified_node(services)
+        state = _base_state(make_frame, goal="Explore the grid", goal_status="in_progress")
+        with patch("agents.langgraph_unified_agent.nodes.unified.log_node"):
+            result = node(state)
+        assert result["goal"] == "Explore the grid"
+        assert result["goal_status"] == "in_progress"
