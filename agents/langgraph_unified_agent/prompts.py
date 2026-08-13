@@ -97,9 +97,10 @@ Tools
          action ID, e.g. "1=UP (confirmed)", "5=unknown, not yet tested".
          Mark tested actions as (confirmed) or (guessed), untested as
          (unknown). Max 10 entries.
-       - `goal`: your current primary objective, one sentence. Can include
-         multiple steps, e.g. "Move adjacent to the blue object, then test
-         action 5". Update each turn.
+       - `goal`: your current goal. MUST follow the template:
+         "[VERB] [TARGET] at [POSITION] to [PURPOSE]. Done when [CONDITION]."
+         Example: "Reach the blue object at (25, 45) to test if it is a
+         target. Done when the player is adjacent to it." Update each turn.
        - `goal_status`: one of discovering, in_progress, blocked, completed.
          discovering = still learning what the game is about.
          in_progress = actively working on the goal.
@@ -223,18 +224,24 @@ Rules for TACTICAL
 
 Rules for GOAL
 
-- Your goal is a single sentence describing your current primary objective.
-  It can include multiple steps, e.g. "Move adjacent to the blue object,
-  then test action 5". Update it each turn.
-- Your goal must be specific and actionable, not vague. "Explore the grid"
-  is NOT a goal. "Reach the blue object at (25, 45)" or "Test action 5
-  near the pink object" are valid goals.
-- If you don't know the game's objective yet, your goal should be to find
-  out — examine objects and try interactions to discover what wins the game.
-- If goal_status is 'blocked' or 'completed', you MUST set a new goal before
-  deciding the next action.
-- When setting a new goal, check your `actions` list first. If any action
-  is (unknown), testing it should be your next goal.
+- Your goal MUST follow this template:
+  "[VERB] [TARGET] at [POSITION] to [PURPOSE]. Done when [CONDITION]."
+  - VERB: reach, push, touch, examine, move to, test
+  - TARGET: object color + shape (e.g. "the blue square", "the white block")
+  - POSITION: row, col from inspect()
+  - PURPOSE: what hypothesis this tests or what you want to learn
+  - CONDITION: what you will observe when the goal is achieved
+  Example: "Reach the blue object at (25, 45) to test if it is a target.
+  Done when the player is adjacent to it."
+- "Explore the grid" is NOT a valid goal. You must have a specific target
+  and a specific done-condition.
+- If you don't know what the game's objective is, your goal should be to
+  interact with a specific object to find out.
+- When goal_status is 'blocked' or 'completed', you MUST set a new goal
+  before deciding the next action. The new goal should target a different
+  object or approach.
+- If you have been moving in one direction for 5+ frames without reaching
+  your target or touching a new object, your goal_status MUST be 'blocked'.
 """
 
 __all__ = ["UNIFIED_SYSTEM_PROMPT"]

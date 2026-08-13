@@ -135,9 +135,12 @@ DECIDE_V2_TOOL: dict = {
                         "goal": {
                             "type": "string",
                             "description": (
-                                "Your current primary objective, one sentence. "
-                                "Can include multiple steps, e.g. 'Move adjacent to the "
-                                "blue object, then test action 5'. Update each turn."
+                                "Your current goal. MUST follow the template: "
+                                "'[VERB] [TARGET] at [POSITION] to [PURPOSE]. "
+                                "Done when [CONDITION].' Example: 'Reach the "
+                                "blue object at (25, 45) to test if it is a "
+                                "target. Done when the player is adjacent to it.' "
+                                "Update each turn."
                             ),
                         },
                         "goal_status": {
