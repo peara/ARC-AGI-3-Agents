@@ -123,6 +123,72 @@ def make_decide_response(
     )
 
 
+def make_reflect_response(
+    reason: str = "testing reflection",
+    goal: str = "Test goal at (10, 20) to learn. Done when adjacent.",
+    goal_status: str = "in_progress",
+    actions: list[str] | None = None,
+    mechanics: list[str] | None = None,
+    mechanics_summary: str = "",
+    tactical: list[str] | None = None,
+    tactical_summary: str = "",
+    content: str = "",
+) -> ChatResponse:
+    """Build a ChatResponse containing a single reflect tool call."""
+    args: dict = {
+        "reason": reason,
+        "goal": goal,
+        "goal_status": goal_status,
+        "actions": actions or ["1=UP (confirmed)"],
+        "mechanics": mechanics or ["Player moves on input [HIGH]"],
+        "tactical": tactical or ["Move toward blue object"],
+    }
+    if mechanics_summary:
+        args["mechanics_summary"] = mechanics_summary
+    if tactical_summary:
+        args["tactical_summary"] = tactical_summary
+    return ChatResponse(
+        content=content,
+        finish_reason="stop",
+        tool_calls=[
+            {
+                "id": _next_call_id(),
+                "function": {
+                    "name": "reflect",
+                    "arguments": json.dumps(args),
+                },
+                "type": "function",
+            }
+        ],
+    )
+
+
+def make_decide_v3_response(
+    action_id: int,
+    expectation: str = "test expectation",
+    content: str = "",
+) -> ChatResponse:
+    """Build a ChatResponse containing a single V3 decide tool call (no world_model)."""
+    args: dict = {
+        "action_id": action_id,
+        "expectation": expectation,
+    }
+    return ChatResponse(
+        content=content,
+        finish_reason="stop",
+        tool_calls=[
+            {
+                "id": _next_call_id(),
+                "function": {
+                    "name": "decide",
+                    "arguments": json.dumps(args),
+                },
+                "type": "function",
+            }
+        ],
+    )
+
+
 def make_inspect_response(code: str, content: str = "") -> ChatResponse:
     """Build a ``ChatResponse`` containing a single ``inspect`` tool call."""
     return ChatResponse(

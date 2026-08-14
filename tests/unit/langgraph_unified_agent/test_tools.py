@@ -11,9 +11,12 @@ import pytest
 from agents.langgraph_unified_agent.tools import (
     DECIDE_TOOL,
     DECIDE_V2_TOOL,
+    DECIDE_V3_TOOL,
     INSPECT_TOOL,
+    REFLECT_TOOL,
     UNIFIED_TOOLS,
     UNIFIED_TOOLS_V2,
+    UNIFIED_TOOLS_V3,
 )
 
 
@@ -162,3 +165,63 @@ def test_unified_tools_v2_list():
     assert len(UNIFIED_TOOLS_V2) == 2
     assert UNIFIED_TOOLS_V2[0]["function"]["name"] == "inspect"
     assert UNIFIED_TOOLS_V2[1]["function"]["name"] == "decide"
+
+
+# ------------------------------------------------------------------
+# V3 schema tests (REFLECT_TOOL / DECIDE_V3_TOOL / UNIFIED_TOOLS_V3)
+# ------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_reflect_tool_schema():
+    """REFLECT_TOOL has type='function', function.name='reflect'."""
+    assert REFLECT_TOOL["type"] == "function"
+    assert REFLECT_TOOL["function"]["name"] == "reflect"
+
+
+@pytest.mark.unit
+def test_reflect_tool_required_fields():
+    """REFLECT_TOOL required: reason, goal, goal_status, actions, mechanics, tactical."""
+    required = REFLECT_TOOL["function"]["parameters"]["required"]
+    assert sorted(required) == ["actions", "goal", "goal_status", "mechanics", "reason", "tactical"]
+
+
+@pytest.mark.unit
+def test_reflect_tool_has_reason_field():
+    """REFLECT_TOOL has a 'reason' property of type string."""
+    props = REFLECT_TOOL["function"]["parameters"]["properties"]
+    assert "reason" in props
+    assert props["reason"]["type"] == "string"
+
+
+@pytest.mark.unit
+def test_decide_v3_tool_schema():
+    """DECIDE_V3_TOOL has type='function', function.name='decide'."""
+    assert DECIDE_V3_TOOL["type"] == "function"
+    assert DECIDE_V3_TOOL["function"]["name"] == "decide"
+
+
+@pytest.mark.unit
+def test_decide_v3_tool_required_fields():
+    """DECIDE_V3_TOOL required: action_id, expectation (no world_model, no reflect)."""
+    required = DECIDE_V3_TOOL["function"]["parameters"]["required"]
+    assert sorted(required) == ["action_id", "expectation"]
+    # Verify world_model and reflect are NOT in the tool
+    props = DECIDE_V3_TOOL["function"]["parameters"]["properties"]
+    assert "world_model" not in props
+    assert "reflect" not in props
+
+
+@pytest.mark.unit
+def test_unified_tools_v3_list():
+    """UNIFIED_TOOLS_V3 has 3 tools: inspect, reflect, decide."""
+    assert len(UNIFIED_TOOLS_V3) == 3
+    assert UNIFIED_TOOLS_V3[0]["function"]["name"] == "inspect"
+    assert UNIFIED_TOOLS_V3[1]["function"]["name"] == "reflect"
+    assert UNIFIED_TOOLS_V3[2]["function"]["name"] == "decide"
+
+
+@pytest.mark.unit
+def test_v2_tools_unchanged():
+    """UNIFIED_TOOLS_V2 still has 2 tools (regression check)."""
+    assert len(UNIFIED_TOOLS_V2) == 2
