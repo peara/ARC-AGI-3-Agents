@@ -584,7 +584,7 @@ class TestV3ToolOrderings:
                 )
             return make_decide_v3_response(action_id=2, expectation="player moves up")
 
-        cfg = UnifiedAgentConfig(use_v3_tools=True)
+        cfg = UnifiedAgentConfig(use_routing=True)
         services = mock_services(config=cfg)
         services.planner_call = MagicMock(side_effect=reflect_then_decide)
 
@@ -603,7 +603,7 @@ class TestV3ToolOrderings:
 
     def test_decide_only_carry_forward(self, mock_services, make_frame):
         """V3: decide() only (no reflect) → world_model carries forward from prev state."""
-        cfg = UnifiedAgentConfig(use_v3_tools=True)
+        cfg = UnifiedAgentConfig(use_routing=True)
         services = mock_services(
             unified_return=make_decide_v3_response(action_id=1, expectation="moving"),
             config=cfg,
@@ -629,7 +629,7 @@ class TestV3ToolOrderings:
 
     def test_decide_before_reflect_ignored(self, mock_services, make_frame):
         """V3: decide() before reflect() → decide terminates, reflect ignored."""
-        cfg = UnifiedAgentConfig(use_v3_tools=True)
+        cfg = UnifiedAgentConfig(use_routing=True)
 
         response = ChatResponse(
             content="",
@@ -698,7 +698,7 @@ class TestV3ToolOrderings:
                 )
             return make_decide_v3_response(action_id=1, expectation="acting now")
 
-        cfg = UnifiedAgentConfig(use_v3_tools=True)
+        cfg = UnifiedAgentConfig(use_routing=True)
         services = mock_services(config=cfg)
         services.planner_call = MagicMock(side_effect=reflect_then_decide)
 
@@ -725,7 +725,7 @@ class TestV3ToolOrderings:
                 return make_reflect_response(reason="expectation not met")
             return make_decide_v3_response(action_id=2, expectation="trying different approach")
 
-        cfg = UnifiedAgentConfig(use_v3_tools=True)
+        cfg = UnifiedAgentConfig(use_routing=True)
         services = mock_services(config=cfg)
         services.planner_call = MagicMock(side_effect=reflect_then_decide)
 
@@ -738,7 +738,7 @@ class TestV3ToolOrderings:
 
     def test_reflect_reason_carry_forward(self, mock_services, make_frame):
         """V3: no reflect → prev reflect_reason carries forward."""
-        cfg = UnifiedAgentConfig(use_v3_tools=True)
+        cfg = UnifiedAgentConfig(use_routing=True)
         services = mock_services(
             unified_return=make_decide_v3_response(action_id=1, expectation="routine move"),
             config=cfg,

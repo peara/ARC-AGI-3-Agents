@@ -25,7 +25,8 @@ class UnifiedAgentConfig:
     max_tactical: int = 10
     max_mechanics: int = 20
     max_action_entries: int = 10
-    use_v3_tools: bool = False
+    use_routing: bool = False
+    decide_thinking: bool = True
 
 
 def load_config(path: str | None = None) -> UnifiedAgentConfig:

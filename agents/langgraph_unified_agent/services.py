@@ -49,7 +49,7 @@ def create_services(
     if llm_logger is None:
         unified_call = llm_client.chat
     else:
-        tools = UNIFIED_TOOLS_V3 if config.use_v3_tools else UNIFIED_TOOLS_V2
+        tools = UNIFIED_TOOLS_V3 if config.use_routing else UNIFIED_TOOLS_V2
         unified_call = wrap_llm_call(
             llm_client.chat,
             llm_logger,

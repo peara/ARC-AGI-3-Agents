@@ -289,27 +289,38 @@ DECIDE_V3_TOOL: dict = {
     "function": {
         "name": "decide",
         "description": (
-            "Commit your action. Call this after you have inspected the state "
-            "and (optionally) reflected. You must call decide exactly once per turn."
+            "Commit your action OR request reflection. "
+            "If your expectation was met and nothing surprising happened, "
+            "return action_id + expectation (routine move). "
+            "If something unexpected happened, you learned something new, "
+            "or your goal needs to change, set need_reflect=true and "
+            "omit action_id/expectation — you will get a chance to reflect "
+            "with extended thinking. When in doubt, reflect."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "action_id": {
                     "type": "integer",
-                    "description": "The action ID to execute",
+                    "description": "The action ID to execute. Omit if need_reflect=true.",
                 },
                 "expectation": {
                     "type": "string",
                     "description": (
                         "A specific, testable prediction about what will "
-                        "change next frame. Next frame, you will see whether "
-                        "this prediction was met. If it was not met, your "
-                        "understanding of that action is wrong or incomplete."
+                        "change next frame. Omit if need_reflect=true."
+                    ),
+                },
+                "need_reflect": {
+                    "type": "boolean",
+                    "description": (
+                        "Set to true if you need to reflect (update world model) "
+                        "before acting. This triggers a follow-up call with "
+                        "extended thinking enabled. Omit (or false) for routine moves."
                     ),
                 },
             },
-            "required": ["action_id", "expectation"],
+            "required": [],
         },
     },
 }

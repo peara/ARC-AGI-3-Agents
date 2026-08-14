@@ -96,7 +96,7 @@ def _build_user_content(
         parts.append("## REFLECTION REQUIRED THIS FRAME")
         if reflect_reason:
             parts.append(f"Reason: {reflect_reason}")
-        if config.use_v3_tools:
+        if config.use_routing:
             parts.append("You MUST call reflect() this frame before decide().")
         else:
             parts.append("You MUST set reflect=true in your decide() call and include mechanics and tactical observations.")
@@ -199,7 +199,7 @@ def make_unified_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
 
         # ---- Tool loop ----
         nudge_count = 0
-        tools = UNIFIED_TOOLS_V3 if config.use_v3_tools else UNIFIED_TOOLS_V2
+        tools = UNIFIED_TOOLS_V3 if config.use_routing else UNIFIED_TOOLS_V2
         for call_idx in range(max_tool_calls):
             try:
                 response = services.planner_call(
@@ -224,7 +224,7 @@ def make_unified_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
                     # Second nudge failed → fallback
                     break
                 # First nudge: append nudge message and continue
-                nudge_hint = "Please call inspect() or decide()." if not config.use_v3_tools else "Please call inspect(), reflect(), or decide()."
+                nudge_hint = "Please call inspect() or decide()." if not config.use_routing else "Please call inspect(), reflect(), or decide()."
                 messages = messages + [
                     {"role": "assistant", "content": raw_content},
                     {"role": "user", "content": nudge_hint},
@@ -280,7 +280,7 @@ def make_unified_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
             # ============================================================
             # V3 3-tool dispatch: reflect and/or decide
             # ============================================================
-            if config.use_v3_tools:
+            if config.use_routing:
                 # Determine order of reflect/decide calls
                 has_reflect = REFLECT_TOOL_NAME in function_names
                 has_decide = "decide" in function_names
