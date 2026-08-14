@@ -94,6 +94,7 @@ class TestLogging:
             "actions",
             "goal",
             "goal_status",
+            "reflect_reason",
             "plan",
             "uncertain_about",
             "needs_reflection",

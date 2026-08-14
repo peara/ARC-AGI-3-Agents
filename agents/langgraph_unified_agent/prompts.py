@@ -79,45 +79,42 @@ Tools
    Use print() to return output from inspect(). You may call inspect()
    multiple times.
 
-2. decide(action_id: int, expectation: str, reflect: bool,
-   world_model: object)
-   Make your final action decision. Call this when you are ready to act.
-   - `action_id`: the single action you choose from the available actions.
-   - `expectation`: a specific, testable prediction about what will change
-     next frame. Next frame, you will see whether this prediction was met.
-     If it was not met, your action did not produce the expected result —
-     your understanding of that action is wrong or incomplete. Use this
-     mismatch to update your mechanics.
-   - `reflect`: set to true if you learned something new this frame (confirmed
-     or disproved a conjecture, an action failed, something unexpected
-     happened). Set to false for routine moves that worked as expected.
-    - `world_model`: your current understanding of the game, updated each
-      frame. An object with these fields:
-       - `actions`: list of action descriptions. One entry per available
-         action ID, e.g. "1=UP (confirmed)", "5=unknown, not yet tested".
-         Mark tested actions as (confirmed) or (guessed), untested as
-         (unknown). Max 10 entries.
-       - `goal`: your current goal. MUST follow the template:
-         "[VERB] [TARGET] at [POSITION] to [PURPOSE]. Done when [CONDITION]."
-         Example: "Reach the blue object at (25, 45) to test if it is a
-         target. Done when the player is adjacent to it." Update each turn.
-       - `goal_status`: one of discovering, in_progress, blocked, completed.
-         discovering = still learning what the game is about.
-         in_progress = actively working on the goal.
-         blocked = current approach is not working, you must set a new goal.
-         completed = done, set a new goal.
-       - `mechanics`: list of mechanics entries. Max 10 entries. Tag each
-         entry with [HIGH], [MEDIUM], or [LOW] confidence.
-      - `mechanics_summary`: one paragraph summarizing the current game
-        mechanics.
-       - `tactical`: list of tactical observations and next goals. Max 10
-         entries. If you don't know the goal yet, include at least one
-         testable conjecture.
-      - `tactical_summary`: one sentence summarizing the current strategy.
+2. reflect(reason: str, goal: str, goal_status: str, actions: list[str],
+   mechanics: list[str], tactical: list[str], mechanics_summary: str,
+   tactical_summary: str)
+   Update your world model. Call this when you learned something new, your
+   expectation was not met, your goal is blocked or completed, or you need
+   to set a new goal. Do NOT call reflect for routine moves that worked as
+   expected.
+   - reason: why you are reflecting. e.g. "expectation not met — blocked
+     by blue object", "tested action 5 — confirmed NO-OP", "goal completed
+     — reached target"
+   - goal: your current goal. MUST follow the template: "[VERB] [TARGET]
+     at [POSITION] to [PURPOSE]. Done when [CONDITION]." Update each turn.
+   - goal_status: one of discovering, in_progress, blocked, completed.
+   - actions: list of action descriptions. One entry per available action
+     ID, e.g. "1=UP (confirmed)", "5=unknown, not yet tested". Max 10
+     entries.
+   - mechanics: list of mechanics entries. Max 10 entries. Tag each entry
+     with [HIGH], [MEDIUM], or [LOW] confidence.
+   - mechanics_summary: one paragraph summarizing current game mechanics.
+   - tactical: list of tactical observations and next goals. Max 10
+     entries. If you don't know the goal yet, include at least one
+     testable conjecture.
+   - tactical_summary: one sentence summarizing the current strategy.
 
    Keep entries from previous frames that are still valid. Add new ones.
    Drop ones that are disproven. Stale-but-valid is better than lost
    knowledge.
+
+3. decide(action_id: int, expectation: str)
+   Commit your action. Call this after you have inspected the state and
+   (optionally) reflected. You must call decide exactly once per turn.
+   - action_id: the single action you choose from the available actions.
+   - expectation: a specific, testable prediction about what will change
+     next frame. Next frame, you will see whether this prediction was met.
+     If it was not met, your understanding of that action is wrong or
+     incomplete.
 
    You MUST always call decide() and pick the best available action, even if
    you are uncertain. There is no "uncertain" option; choose and explain.
@@ -142,11 +139,15 @@ Example inspections:
 Tool loop rules
 
 - Call inspect() to examine the state. You may call it multiple times.
-- When you are ready, call decide() with your action.
+- Call reflect() when you learned something new or your expectation was not
+  met. reflect is optional — if nothing changed, skip it and your world
+  model carries forward unchanged.
+- Call decide() exactly once per turn to commit your action.
 - Maximum 12 tool calls per frame.
 - If both inspect() and decide() are called in the same response, inspect()
   will run first and the loop will continue, giving you a chance to use the
   inspect output before calling decide() again.
+- If force_reflect is set, you MUST call reflect() before decide().
 
 ---
 
@@ -161,32 +162,32 @@ flowchart TD
     Q1 -->|Yes| INSPECT_CMP[inspect: compare current positions\nto your last expectation.\nDid the player/object move\nas predicted?]
 
     INSPECT_NEW --> CONJECTURE[Form a conjecture about\nthe game's goal and what\nactions might do]
-    CONJECTURE --> DECIDE1[decide: pick an action to test,\nwrite your expectation]
+    CONJECTURE --> REFLECT_NEW[reflect: set your initial\nworld model + reason]
+    REFLECT_NEW --> DECIDE1[decide: pick an action to test,\nwrite your expectation]
 
     INSPECT_CMP --> Q2{Expectation\nmet?}
-    Q2 -->|Yes, worked as\npredicted| Q_GOAL{goal_status?}
-    Q_GOAL -->|blocked| NEW_GOAL[Set a new goal.\nCheck actions for unknowns.\nPick a different approach.]
-    Q_GOAL -->|completed| NEW_GOAL
-    Q_GOAL -->|in_progress\nor discovering| Q3{Any action\nmarked (unknown)?}
-    Q3 -->|Yes| TEST_UNKNOWN[decide: test the unknown\naction, write expectation\nabout what it might do]
-    Q3 -->|No| ROUTINE[Action confirmed.\nKeep current strategy.]
+    Q2 -->|Yes, worked as\npredicted| Q_REFLECT{Learned something\nor goal changed?}
+    Q_REFLECT -->|Yes| REFLECT[reflect: update\nworld_model + reason]
+    Q_REFLECT -->|No| DECIDE_DIRECT[decide: action + expectation]
+    REFLECT --> DECIDE_AFTER[decide: action + expectation]
     Q2 -->|No, something\ndid not match| EXPLAIN[inspect further: figure\nout WHY it failed.\nWas it blocked? By what?\nUpdate your mechanics with\nthe new finding.]
-    EXPLAIN --> NEW_PLAN[If the current strategy is\nnot working, change it.\nTry a different action or\napproach.]
-    NEW_PLAN --> DECIDE2[decide: pick a different action,\nwrite a new testable expectation]
-
-    ROUTINE --> DECIDE3[decide: continue current\nstrategy, write expectation]
-    NEW_GOAL --> DECIDE_NEW[decide: new goal + action,\nwrite expectation]
-    TEST_UNKNOWN --> END
-    DECIDE_NEW --> END
+    EXPLAIN --> REFLECT_EXPLAIN[reflect: update mechanics\nand goal + reason]
+    REFLECT_EXPLAIN --> DECIDE2[decide: pick a different action,\nwrite a new testable expectation]
 
     DECIDE1 --> END([End of turn])
     DECIDE2 --> END
-    DECIDE3 --> END
+    DECIDE_DIRECT --> END
+    DECIDE_AFTER --> END
     ```
 
 Key rules:
 - You MUST run inspect() to compare the current state to your last
   expectation before calling decide(). Do not skip this step.
+- Call reflect() when your expectation was NOT met, you learned something new,
+  or your goal needs to change.
+- When you do NOT call reflect(), your world_model carries forward unchanged.
+  This is correct for routine moves.
+- You MUST call decide() every turn. reflect() is optional.
 - If your expectation was NOT met, you MUST update your mechanics to explain
   why, and you MUST try a different approach. Repeating a failed action is
   not useful.

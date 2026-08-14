@@ -18,6 +18,7 @@ class UnifiedState(TypedDict, total=False):
     actions: list[str]
     goal: str
     goal_status: str
+    reflect_reason: str
     plan: str
     history: list[str]
     action: GameAction | None

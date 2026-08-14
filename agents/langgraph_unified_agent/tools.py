@@ -195,10 +195,134 @@ DECIDE_V2_TOOL: dict = {
 
 UNIFIED_TOOLS_V2: list = [INSPECT_TOOL, DECIDE_V2_TOOL]
 
+REFLECT_TOOL: dict = {
+    "type": "function",
+    "function": {
+        "name": "reflect",
+        "description": (
+            "Update your world model. Call this when you learned something new, "
+            "your expectation was not met, your goal is blocked or completed, "
+            "or you need to set a new goal. Do NOT call reflect for routine "
+            "moves that worked as expected."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": (
+                        "Why you are reflecting. e.g. 'expectation not met — blocked by blue object', "
+                        "'tested action 5 — confirmed NO-OP', 'goal completed — reached target'"
+                    ),
+                },
+                "goal": {
+                    "type": "string",
+                    "description": (
+                        "Your current goal. MUST follow the template: "
+                        "'[VERB] [TARGET] at [POSITION] to [PURPOSE]. "
+                        "Done when [CONDITION].' Example: 'Reach the "
+                        "blue object at (25, 45) to test if it is a "
+                        "target. Done when the player is adjacent to it.' "
+                        "Update each turn."
+                    ),
+                },
+                "goal_status": {
+                    "type": "string",
+                    "enum": ["discovering", "in_progress", "blocked", "completed"],
+                    "description": (
+                        "Status of your current goal. 'blocked' = current approach "
+                        "isn't working, you must set a new goal. 'completed' = done, "
+                        "set a new goal. 'discovering' = still learning what the game "
+                        "is about. 'in_progress' = actively working on it."
+                    ),
+                },
+                "actions": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "What each available action does. One entry per action ID, "
+                        "e.g. '1=UP (confirmed)', '5=unknown, not yet tested'. "
+                        "Mark actions you have tested as (confirmed) or (guessed). "
+                        "Mark untested actions as (unknown). You must include ALL "
+                        "available actions every turn."
+                    ),
+                },
+                "mechanics": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Confirmed rules about how the game works. "
+                        "Tag each entry with [HIGH], [MEDIUM], or "
+                        "[LOW] confidence."
+                    ),
+                },
+                "mechanics_summary": {
+                    "type": "string",
+                    "description": (
+                        "One paragraph summarizing the current game "
+                        "mechanics."
+                    ),
+                },
+                "tactical": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Tactical observations, conjectures, and next "
+                        "goals. If you don't know the goal yet, "
+                        "include at least one testable conjecture."
+                    ),
+                },
+                "tactical_summary": {
+                    "type": "string",
+                    "description": (
+                        "One sentence summarizing the current strategy."
+                    ),
+                },
+            },
+            "required": ["reason", "goal", "goal_status", "actions", "mechanics", "tactical"],
+        },
+    },
+}
+
+DECIDE_V3_TOOL: dict = {
+    "type": "function",
+    "function": {
+        "name": "decide",
+        "description": (
+            "Commit your action. Call this after you have inspected the state "
+            "and (optionally) reflected. You must call decide exactly once per turn."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action_id": {
+                    "type": "integer",
+                    "description": "The action ID to execute",
+                },
+                "expectation": {
+                    "type": "string",
+                    "description": (
+                        "A specific, testable prediction about what will "
+                        "change next frame. Next frame, you will see whether "
+                        "this prediction was met. If it was not met, your "
+                        "understanding of that action is wrong or incomplete."
+                    ),
+                },
+            },
+            "required": ["action_id", "expectation"],
+        },
+    },
+}
+
+UNIFIED_TOOLS_V3: list = [INSPECT_TOOL, REFLECT_TOOL, DECIDE_V3_TOOL]
+
 __all__ = [
     "INSPECT_TOOL",
     "DECIDE_TOOL",
     "UNIFIED_TOOLS",
     "DECIDE_V2_TOOL",
     "UNIFIED_TOOLS_V2",
+    "REFLECT_TOOL",
+    "DECIDE_V3_TOOL",
+    "UNIFIED_TOOLS_V3",
 ]
