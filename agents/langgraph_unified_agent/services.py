@@ -16,7 +16,7 @@ from agents.llm_client import LLMClient
 from agents.recorder import Recorder
 from agents.templates.llm_logging import LlmCallLogger, wrap_llm_call
 
-from .tools import UNIFIED_TOOLS_V2
+from .tools import UNIFIED_TOOLS_V2, UNIFIED_TOOLS_V3
 
 
 def _noop_callable(_messages: list[dict[str, str]]) -> str:
@@ -49,6 +49,7 @@ def create_services(
     if llm_logger is None:
         unified_call = llm_client.chat
     else:
+        tools = UNIFIED_TOOLS_V3 if config.use_v3_tools else UNIFIED_TOOLS_V2
         unified_call = wrap_llm_call(
             llm_client.chat,
             llm_logger,
@@ -57,7 +58,7 @@ def create_services(
             max_tokens=config.unified_max_tokens,
             temperature=config.llm_temperature,
             top_p=config.llm_top_p,
-            tools=UNIFIED_TOOLS_V2,
+            tools=tools,
             tool_choice="auto",
         )
 
