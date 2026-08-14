@@ -203,13 +203,23 @@ def test_decide_v3_tool_schema():
 
 @pytest.mark.unit
 def test_decide_v3_tool_required_fields():
-    """DECIDE_V3_TOOL required: action_id, expectation (no world_model, no reflect)."""
+    """DECIDE_V3_TOOL required: [] (all fields optional for routing dispatch)."""
     required = DECIDE_V3_TOOL["function"]["parameters"]["required"]
-    assert sorted(required) == ["action_id", "expectation"]
+    assert required == []
     # Verify world_model and reflect are NOT in the tool
     props = DECIDE_V3_TOOL["function"]["parameters"]["properties"]
     assert "world_model" not in props
     assert "reflect" not in props
+
+
+@pytest.mark.unit
+def test_decide_v3_tool_has_need_reflect():
+    """DECIDE_V3_TOOL has need_reflect optional field and required=[]."""
+    props = DECIDE_V3_TOOL["function"]["parameters"]["properties"]
+    assert "need_reflect" in props
+    assert props["need_reflect"]["type"] == "boolean"
+    required = DECIDE_V3_TOOL["function"]["parameters"]["required"]
+    assert required == []
 
 
 @pytest.mark.unit

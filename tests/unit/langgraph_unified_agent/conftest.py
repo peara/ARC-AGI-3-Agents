@@ -212,6 +212,41 @@ def make_text_response(content: str) -> ChatResponse:
     return ChatResponse(content=content, finish_reason="stop", tool_calls=None)
 
 
+def make_routing_decide_response(
+    action_id: int | None = None,
+    expectation: str = "",
+    need_reflect: bool = False,
+    content: str = "",
+) -> ChatResponse:
+    """Build a ChatResponse for a routing-mode decide call.
+
+    If need_reflect=True, action_id and expectation are omitted (routing to reflect path).
+    If need_reflect=False, action_id must be provided (routine path).
+    """
+    args: dict = {}
+    if need_reflect:
+        args["need_reflect"] = True
+    else:
+        if action_id is not None:
+            args["action_id"] = action_id
+        if expectation:
+            args["expectation"] = expectation
+    return ChatResponse(
+        content=content,
+        finish_reason="stop",
+        tool_calls=[
+            {
+                "id": _next_call_id(),
+                "function": {
+                    "name": "decide",
+                    "arguments": json.dumps(args),
+                },
+                "type": "function",
+            }
+        ],
+    )
+
+
 # ---------------------------------------------------------------------------
 # Mock services factory
 # ---------------------------------------------------------------------------

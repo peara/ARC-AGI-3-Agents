@@ -14,9 +14,8 @@ from agents.llm_client import ChatResponse
 
 from .conftest import (
     make_decide_response,
-    make_decide_v3_response,
     make_inspect_response,
-    make_reflect_response,
+    make_routing_decide_response,
     make_text_response,
 )
 
@@ -558,149 +557,85 @@ class TestUnifiedNode:
 
 
 @pytest.mark.unit
-class TestV3ToolOrderings:
-    """Tests for V3 3-tool dispatch: reflect, decide, and 4 orderings."""
+class TestRoutingFlow:
+    """Tests for routing dispatch: routine, reflect, force_reflect, edge cases."""
 
     @pytest.fixture(autouse=True)
     def _patch_deps(self):
         with _PATCHES[0], _PATCHES[1], _PATCHES[2]:
             yield
 
-    def test_reflect_then_decide(self, mock_services, make_frame):
-        """V3: reflect() then decide() → world_model from reflect, action from decide."""
-        call_count = 0
-
-        def reflect_then_decide(messages, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                return make_reflect_response(
-                    reason="new observation",
-                    goal="Reach blue target at (10,20)",
-                    goal_status="in_progress",
-                    actions=["1=UP (confirmed)"],
-                    mechanics=["Player moves up [HIGH]"],
-                    tactical=["Move toward blue"],
-                )
-            return make_decide_v3_response(action_id=2, expectation="player moves up")
-
+    # ------------------------------------------------------------------ #
+    # 1. Routine path: need_reflect=false + action_id → immediate return
+    # ------------------------------------------------------------------ #
+    def test_routine_path(self, mock_services, make_frame):
+        """Routing: decide(need_reflect=false, action_id=2) → returns action=2, needs_reflection=False."""
         cfg = UnifiedAgentConfig(use_routing=True)
         services = mock_services(config=cfg)
-        services.planner_call = MagicMock(side_effect=reflect_then_decide)
+        services.planner_call = MagicMock(
+            return_value=make_routing_decide_response(action_id=2, expectation="move right")
+        )
 
         with patch("agents.langgraph_unified_agent.nodes.unified.log_node"):
             node = make_unified_node(services)
-            state = _base_state(make_frame, goal="Old goal", goal_status="discovering")
+            state = _base_state(make_frame)
             result = node(state)
 
+        assert isinstance(result, dict)
         assert result["action"] == GameAction.from_id(2)
-        assert result["expectation"] == "player moves up"
-        assert result["goal"] == "Reach blue target at (10,20)"
-        assert result["goal_status"] == "in_progress"
-        assert result["mechanics"] == ["Player moves up [HIGH]"]
-        assert result["reflect_reason"] == "new observation"
+        assert result["expectation"] == "move right"
         assert result["needs_reflection"] is False
+        # Verify planner_call was called with thinking=False for routine decide
+        call_kwargs = services.planner_call.call_args
+        assert call_kwargs.kwargs.get("thinking") is False
 
-    def test_decide_only_carry_forward(self, mock_services, make_frame):
-        """V3: decide() only (no reflect) → world_model carries forward from prev state."""
-        cfg = UnifiedAgentConfig(use_routing=True)
-        services = mock_services(
-            unified_return=make_decide_v3_response(action_id=1, expectation="moving"),
-            config=cfg,
-        )
-
-        with patch("agents.langgraph_unified_agent.nodes.unified.log_node"):
-            node = make_unified_node(services)
-            state = _base_state(
-                make_frame,
-                mechanics=["Player moves [HIGH]"],
-                goal="Old goal",
-                goal_status="in_progress",
-                reflect_reason="previous reason",
-            )
-            result = node(state)
-
-        assert result["action"] == GameAction.from_id(1)
-        assert result["mechanics"] == ["Player moves [HIGH]"]
-        assert result["goal"] == "Old goal"
-        assert result["goal_status"] == "in_progress"
-        assert result["reflect_reason"] == "previous reason"
-        assert result["needs_reflection"] is False
-
-    def test_decide_before_reflect_ignored(self, mock_services, make_frame):
-        """V3: decide() before reflect() → decide terminates, reflect ignored."""
-        cfg = UnifiedAgentConfig(use_routing=True)
-
-        response = ChatResponse(
-            content="",
-            finish_reason="stop",
-            tool_calls=[
-                {
-                    "id": "call_decide_1",
-                    "function": {
-                        "name": "decide",
-                        "arguments": json.dumps({"action_id": 3, "expectation": "moving left"}),
-                    },
-                    "type": "function",
-                },
-                {
-                    "id": "call_reflect_1",
-                    "function": {
-                        "name": "reflect",
-                        "arguments": json.dumps({
-                            "reason": "should be ignored",
-                            "goal": "Ignored goal",
-                            "goal_status": "blocked",
-                            "actions": ["5=unknown"],
-                            "mechanics": ["Ignored"],
-                            "tactical": ["Ignored"],
-                        }),
-                    },
-                    "type": "function",
-                },
-            ],
-        )
-
-        services = mock_services(unified_return=response, config=cfg)
-
-        with patch("agents.langgraph_unified_agent.nodes.unified.log_node"):
-            node = make_unified_node(services)
-            state = _base_state(
-                make_frame,
-                mechanics=["Old mechanics"],
-                goal="Old goal",
-                goal_status="in_progress",
-                reflect_reason="old reason",
-            )
-            result = node(state)
-
-        assert result["action"] == GameAction.from_id(3)
-        assert result["expectation"] == "moving left"
-        assert result["mechanics"] == ["Old mechanics"]
-        assert result["goal"] == "Old goal"
-        assert result["reflect_reason"] == "old reason"
-
-    def test_reflect_only_continues(self, mock_services, make_frame):
-        """V3: reflect() only (no decide) → loop continues, agent must decide next."""
+    # ------------------------------------------------------------------ #
+    # 2. Reflect path: need_reflect=true → call 3 with thinking=True → reflect+decide
+    # ------------------------------------------------------------------ #
+    def test_reflect_path(self, mock_services, make_frame):
+        """Routing: decide(need_reflect=true) → reflect+decide with action_id=4."""
         call_count = 0
 
-        def reflect_then_decide(messages, **kwargs):
+        def routing_then_reflect(messages, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return make_reflect_response(
-                    reason="updated understanding",
-                    goal="New goal",
-                    goal_status="in_progress",
-                    actions=["1=UP (confirmed)"],
-                    mechanics=["New mechanics"],
-                    tactical=["New tactical"],
-                )
-            return make_decide_v3_response(action_id=1, expectation="acting now")
+                # Call 1: routing decide (need_reflect=true)
+                return make_routing_decide_response(need_reflect=True)
+            # Call 2: reflect+decide with thinking=True
+            return ChatResponse(
+                content="",
+                finish_reason="stop",
+                tool_calls=[
+                    {
+                        "id": "call_reflect_1",
+                        "function": {
+                            "name": "reflect",
+                            "arguments": json.dumps({
+                                "reason": "unexpected move",
+                                "goal": "New goal",
+                                "goal_status": "in_progress",
+                                "actions": ["1=UP (confirmed)"],
+                                "mechanics": ["New mechanics"],
+                                "tactical": ["New tactical"],
+                            }),
+                        },
+                        "type": "function",
+                    },
+                    {
+                        "id": "call_decide_1",
+                        "function": {
+                            "name": "decide",
+                            "arguments": json.dumps({"action_id": 4, "expectation": "after reflect"}),
+                        },
+                        "type": "function",
+                    },
+                ],
+            )
 
         cfg = UnifiedAgentConfig(use_routing=True)
         services = mock_services(config=cfg)
-        services.planner_call = MagicMock(side_effect=reflect_then_decide)
+        services.planner_call = MagicMock(side_effect=routing_then_reflect)
 
         with patch("agents.langgraph_unified_agent.nodes.unified.log_node"):
             node = make_unified_node(services)
@@ -708,46 +643,222 @@ class TestV3ToolOrderings:
             result = node(state)
 
         assert call_count == 2
-        assert result["action"] == GameAction.from_id(1)
+        assert isinstance(result, dict)
+        assert result["action"] == GameAction.from_id(4)
+        assert result["needs_reflection"] is True
         assert result["goal"] == "New goal"
         assert result["mechanics"] == ["New mechanics"]
-        assert result["reflect_reason"] == "updated understanding"
-        assert result["needs_reflection"] is False
+        assert result["reflect_reason"] == "unexpected move"
+        # Verify call 2 had thinking=True
+        second_call = services.planner_call.call_args_list[1]
+        assert second_call.kwargs.get("thinking") is True
 
-    def test_reflect_reason_returned(self, mock_services, make_frame):
-        """V3: reflect() reason field appears in result dict."""
-        call_count = 0
+    # ------------------------------------------------------------------ #
+    # 3. Force reflect: needs_reflection=True in state → prompt contains REFLECTION REQUIRED
+    # ------------------------------------------------------------------ #
+    def test_force_reflect(self, mock_services, make_frame):
+        """Routing: needs_reflection=True in state → prompt contains REFLECTION REQUIRED."""
+        captured_messages = []
 
-        def reflect_then_decide(messages, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                return make_reflect_response(reason="expectation not met")
-            return make_decide_v3_response(action_id=2, expectation="trying different approach")
+        def capture_and_decide(messages, **kwargs):
+            captured_messages.append((list(messages), dict(kwargs)))
+            return make_routing_decide_response(need_reflect=True)
 
         cfg = UnifiedAgentConfig(use_routing=True)
         services = mock_services(config=cfg)
-        services.planner_call = MagicMock(side_effect=reflect_then_decide)
+        services.planner_call = MagicMock(side_effect=capture_and_decide)
+
+        with patch("agents.langgraph_unified_agent.nodes.unified.log_node"):
+            node = make_unified_node(services)
+            state = _base_state(make_frame, needs_reflection=True)
+            node(state)
+
+        # Verify the prompt included REFLECTION REQUIRED
+        first_messages, first_kwargs = captured_messages[0]
+        user_content = first_messages[1]["content"]
+        if isinstance(user_content, list):
+            text_parts = [b for b in user_content if isinstance(b, dict) and b.get("type") == "text"]
+            combined_text = " ".join(b.get("text", "") for b in text_parts)
+        else:
+            combined_text = str(user_content)
+        assert "REFLECTION REQUIRED" in combined_text
+
+    # ------------------------------------------------------------------ #
+    # 4. Empty decide: decide({}) → treated as need_reflect=true
+    # ------------------------------------------------------------------ #
+    def test_empty_decide(self, mock_services, make_frame):
+        """Routing: decide({}) with no fields → falls through to reflect path."""
+        call_count = 0
+
+        def empty_then_reflect(messages, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # Call 1: empty decide {}
+                return ChatResponse(
+                    content="",
+                    finish_reason="stop",
+                    tool_calls=[
+                        {
+                            "id": "call_empty_1",
+                            "function": {
+                                "name": "decide",
+                                "arguments": json.dumps({}),
+                            },
+                            "type": "function",
+                        },
+                    ],
+                )
+            # Call 2: reflect+decide
+            return ChatResponse(
+                content="",
+                finish_reason="stop",
+                tool_calls=[
+                    {
+                        "id": "call_reflect_2",
+                        "function": {
+                            "name": "reflect",
+                            "arguments": json.dumps({
+                                "reason": "empty decide",
+                                "goal": "Recovery goal",
+                                "goal_status": "blocked",
+                                "actions": ["1=UP (confirmed)"],
+                                "mechanics": ["Recovery mechanics"],
+                                "tactical": ["Recovery tactical"],
+                            }),
+                        },
+                        "type": "function",
+                    },
+                    {
+                        "id": "call_decide_2",
+                        "function": {
+                            "name": "decide",
+                            "arguments": json.dumps({"action_id": 3, "expectation": "recovery move"}),
+                        },
+                        "type": "function",
+                    },
+                ],
+            )
+
+        cfg = UnifiedAgentConfig(use_routing=True)
+        services = mock_services(config=cfg)
+        services.planner_call = MagicMock(side_effect=empty_then_reflect)
 
         with patch("agents.langgraph_unified_agent.nodes.unified.log_node"):
             node = make_unified_node(services)
             state = _base_state(make_frame)
             result = node(state)
 
-        assert result["reflect_reason"] == "expectation not met"
+        assert call_count == 2
+        assert result["action"] == GameAction.from_id(3)
+        assert result["goal"] == "Recovery goal"
+        assert result["mechanics"] == ["Recovery mechanics"]
 
-    def test_reflect_reason_carry_forward(self, mock_services, make_frame):
-        """V3: no reflect → prev reflect_reason carries forward."""
+    # ------------------------------------------------------------------ #
+    # 5. Repeat guard: 5 consecutive same action → needs_reflection=True
+    # ------------------------------------------------------------------ #
+    def test_repeat_guard(self, mock_services, make_frame):
+        """Routing: 5x same action in history → needs_reflection=True."""
         cfg = UnifiedAgentConfig(use_routing=True)
-        services = mock_services(
-            unified_return=make_decide_v3_response(action_id=1, expectation="routine move"),
-            config=cfg,
+        services = mock_services(config=cfg)
+        services.planner_call = MagicMock(
+            return_value=make_routing_decide_response(action_id=1, expectation="same move")
         )
 
         with patch("agents.langgraph_unified_agent.nodes.unified.log_node"):
             node = make_unified_node(services)
-            state = _base_state(make_frame, reflect_reason="previous observation")
+            history = [
+                "frame=0: action=1, 5 cells changed",
+                "frame=1: action=1, 3 cells changed",
+                "frame=2: action=1, 2 cells changed",
+                "frame=3: action=1, 1 cells changed",
+                "frame=4: action=1, 0 cells changed",
+            ]
+            state = _base_state(make_frame, history=history)
             result = node(state)
 
-        assert result["reflect_reason"] == "previous observation"
-        assert result["needs_reflection"] is False
+        assert isinstance(result, dict)
+        assert result["action"] == GameAction.from_id(1)
+        assert result["needs_reflection"] is True
+
+    # ------------------------------------------------------------------ #
+    # 6. Reflect-only call 3: reflect() only (no decide) → forces 4th call
+    # ------------------------------------------------------------------ #
+    def test_reflect_only_call3(self, mock_services, make_frame):
+        """Routing: call 1=decide(need_reflect=true), call 2=reflect-only → forces 4th call."""
+        call_count = 0
+
+        def routing_reflect_only_then_decide(messages, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # Call 1: routing decide with need_reflect=true
+                return make_routing_decide_response(need_reflect=True)
+            if call_count == 2:
+                # Call 2 (call 3 in code): reflect-only, no decide
+                return ChatResponse(
+                    content="",
+                    finish_reason="stop",
+                    tool_calls=[
+                        {
+                            "id": "call_reflect_3",
+                            "function": {
+                                "name": "reflect",
+                                "arguments": json.dumps({
+                                    "reason": "need to think",
+                                    "goal": "Reflect-only goal",
+                                    "goal_status": "in_progress",
+                                    "actions": ["1=UP (confirmed)"],
+                                    "mechanics": ["Reflect mechanics"],
+                                    "tactical": ["Reflect tactical"],
+                                }),
+                            },
+                            "type": "function",
+                        },
+                    ],
+                )
+            # Call 3 (call 4 in code): forced decide
+            return make_routing_decide_response(action_id=5, expectation="forced decide")
+
+        cfg = UnifiedAgentConfig(use_routing=True, decide_thinking=True)
+        services = mock_services(config=cfg)
+        services.planner_call = MagicMock(side_effect=routing_reflect_only_then_decide)
+
+        with patch("agents.langgraph_unified_agent.nodes.unified.log_node"):
+            node = make_unified_node(services)
+            state = _base_state(make_frame)
+            result = node(state)
+
+        assert call_count == 3
+        assert result["action"] == GameAction.from_id(5)
+        assert result["goal"] == "Reflect-only goal"
+        assert result["mechanics"] == ["Reflect mechanics"]
+        assert result["reflect_reason"] == "need to think"
+        # Verify call 2 had thinking=True, call 3 had thinking=config.decide_thinking=True
+        assert services.planner_call.call_args_list[1].kwargs.get("thinking") is True
+        assert services.planner_call.call_args_list[2].kwargs.get("thinking") is True
+
+    # ------------------------------------------------------------------ #
+    # 7. Max iterations: inspect 12 times → fallback
+    # ------------------------------------------------------------------ #
+    def test_max_iterations(self, mock_services, make_frame):
+        """Routing: 12 inspect calls → random fallback."""
+        cfg = UnifiedAgentConfig(use_routing=True)
+        services = mock_services(config=cfg)
+        services.planner_call = MagicMock(return_value=make_inspect_response("len(objects)"))
+
+        with (
+            patch("agents.langgraph_unified_agent.nodes.unified.run_sandboxed", return_value="7"),
+            patch("agents.langgraph_unified_agent.nodes.unified.log_node"),
+        ):
+            node = make_unified_node(services)
+            state = _base_state(make_frame, available_actions=[1, 2, 4])
+            result = node(state)
+
+        assert isinstance(result, dict)
+        assert result["action"] in [
+            GameAction.from_id(1),
+            GameAction.from_id(2),
+            GameAction.from_id(4),
+        ]
+        assert "fallback" in result["plan"]
