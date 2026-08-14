@@ -30,7 +30,7 @@ from agents.langgraph_vision_agent.sandbox import (
 from agents.langgraph_vision_agent.services import AgentServices
 
 from ..config import UnifiedAgentConfig
-from ..prompts import UNIFIED_SYSTEM_PROMPT
+from ..prompts import ROUTING_SYSTEM_PROMPT, UNIFIED_SYSTEM_PROMPT
 from ..tools import UNIFIED_TOOLS_V2, UNIFIED_TOOLS_V3
 
 REFLECT_TOOL_NAME = "reflect"
@@ -97,7 +97,7 @@ def _build_user_content(
         if reflect_reason:
             parts.append(f"Reason: {reflect_reason}")
         if config.use_routing:
-            parts.append("You MUST call reflect() this frame before decide().")
+            parts.append("REFLECTION REQUIRED THIS FRAME. You MUST set need_reflect=true in your decide() call.")
         else:
             parts.append("You MUST set reflect=true in your decide() call and include mechanics and tactical observations.")
         parts.append("")
@@ -174,7 +174,8 @@ def make_unified_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
         action_history: list[str] = state.get("history", [])
 
         # ---- Build messages ----
-        system_message = {"role": "system", "content": UNIFIED_SYSTEM_PROMPT}
+        system_prompt = ROUTING_SYSTEM_PROMPT if config.use_routing else UNIFIED_SYSTEM_PROMPT
+        system_message = {"role": "system", "content": system_prompt}
         user_content = _build_user_content(
             state, config, objects, adjacency, force_reflect, reflect_reason,
         )
@@ -204,6 +205,7 @@ def make_unified_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
             try:
                 response = services.planner_call(
                     messages, tools=tools, tool_choice="auto",
+                    thinking=False if config.use_routing else None,
                 )
             except Exception:
                 break  # LLM error → fallback below
@@ -278,46 +280,20 @@ def make_unified_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
                 continue
 
             # ============================================================
-            # V3 3-tool dispatch: reflect and/or decide
+            # Routing dispatch: inspect→decide(routing)→reflect+decide
             # ============================================================
             if config.use_routing:
-                # Determine order of reflect/decide calls
                 has_reflect = REFLECT_TOOL_NAME in function_names
                 has_decide = "decide" in function_names
 
-                reflect_before_decide = False
-                if has_reflect and has_decide:
-                    # Check order: does reflect appear before decide?
-                    for tc in tool_calls_list:
-                        name = tc["function"]["name"]
-                        if name == REFLECT_TOOL_NAME:
-                            reflect_before_decide = True
-                            break
-                        if name == "decide":
-                            break
-
-                # --- Extract reflect data if present and relevant ---
-                reflect_reason_out: str = prev_reflect_reason
-                new_mechanics: list[str] = prev_mechanics
-                new_mechanics_summary: str = prev_mechanics_summary
-                new_tactical: list[str] = prev_tactical
-                new_tactical_summary: str = prev_tactical_summary
-                new_actions: list[str] = prev_actions
-                new_goal: str = prev_goal
-                new_goal_status: str = prev_goal_status
-
-                if has_reflect and (not has_decide or reflect_before_decide):
-                    # Process reflect: extract world model fields
+                # reflect-only: extract data, continue loop
+                if has_reflect and not has_decide:
                     reflect_tc = next(tc for tc in tool_calls_list if tc["function"]["name"] == REFLECT_TOOL_NAME)
                     try:
                         r_args = json.loads(reflect_tc["function"]["arguments"])
                     except (json.JSONDecodeError, AttributeError):
-                        # Bad reflect args → if no decide, continue loop
-                        if not has_decide:
-                            continue
-                        r_args = {}
+                        continue
 
-                    # Extract reflect fields
                     r_reason = r_args.get("reason", "")
                     r_goal = r_args.get("goal", "")
                     r_goal_status = r_args.get("goal_status", "")
@@ -327,7 +303,203 @@ def make_unified_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
                     r_tactical = r_args.get("tactical", [])
                     r_tactical_summary = r_args.get("tactical_summary", "")
 
-                    # Apply with max-entry limits
+                    if r_reason:
+                        prev_reflect_reason = r_reason
+                    if r_goal:
+                        prev_goal = r_goal
+                    if r_goal_status:
+                        prev_goal_status = r_goal_status
+                    if r_actions:
+                        prev_actions = r_actions[-config.max_action_entries:] if len(r_actions) > config.max_action_entries else r_actions
+                    if r_mechanics:
+                        prev_mechanics = r_mechanics[-config.max_mechanics:] if len(r_mechanics) > config.max_mechanics else r_mechanics
+                    if r_mechanics_summary:
+                        prev_mechanics_summary = r_mechanics_summary
+                    if r_tactical:
+                        prev_tactical = r_tactical[-config.max_tactical:] if len(r_tactical) > config.max_tactical else r_tactical
+                    if r_tactical_summary:
+                        prev_tactical_summary = r_tactical_summary
+
+                    messages = messages + [
+                        {"role": "assistant", "content": raw_content, "tool_calls": raw_tool_calls},
+                        {"role": "tool", "tool_call_id": reflect_tc["id"], "content": "Reflection recorded. Now call decide() with your action."},
+                    ]
+                    continue
+
+                # reflect+decide in same call: extract reflect data only if routing to reflect
+                if has_reflect and has_decide:
+                    # We need to parse decide first to know the routing decision
+                    decide_tc_peek = next(tc for tc in tool_calls_list if tc["function"]["name"] == "decide")
+                    try:
+                        d_args_peek = json.loads(decide_tc_peek["function"]["arguments"])
+                    except (json.JSONDecodeError, AttributeError):
+                        d_args_peek = {}
+                    need_reflect_peek = d_args_peek.get("need_reflect", False)
+                    action_id_peek = d_args_peek.get("action_id")
+                    if not need_reflect_peek and action_id_peek is None:
+                        need_reflect_peek = True
+
+                    # Only extract reflect data if routing to reflect path
+                    # Routine decide: reflect alongside is ignored
+                    if need_reflect_peek or action_id_peek is None:
+                        reflect_tc = next(tc for tc in tool_calls_list if tc["function"]["name"] == REFLECT_TOOL_NAME)
+                        try:
+                            r_args = json.loads(reflect_tc["function"]["arguments"])
+                        except (json.JSONDecodeError, AttributeError):
+                            r_args = {}
+
+                        r_reason = r_args.get("reason", "")
+                        r_goal = r_args.get("goal", "")
+                        r_goal_status = r_args.get("goal_status", "")
+                        r_actions = r_args.get("actions", [])
+                        r_mechanics = r_args.get("mechanics", [])
+                        r_mechanics_summary = r_args.get("mechanics_summary", "")
+                        r_tactical = r_args.get("tactical", [])
+                        r_tactical_summary = r_args.get("tactical_summary", "")
+
+                        if r_reason:
+                            prev_reflect_reason = r_reason
+                        if r_goal:
+                            prev_goal = r_goal
+                        if r_goal_status:
+                            prev_goal_status = r_goal_status
+                        if r_actions:
+                            prev_actions = r_actions[-config.max_action_entries:] if len(r_actions) > config.max_action_entries else r_actions
+                        if r_mechanics:
+                            prev_mechanics = r_mechanics[-config.max_mechanics:] if len(r_mechanics) > config.max_mechanics else r_mechanics
+                        if r_mechanics_summary:
+                            prev_mechanics_summary = r_mechanics_summary
+                        if r_tactical:
+                            prev_tactical = r_tactical[-config.max_tactical:] if len(r_tactical) > config.max_tactical else r_tactical
+                        if r_tactical_summary:
+                            prev_tactical_summary = r_tactical_summary
+
+                # --- Routing decide: parse need_reflect and action_id ---
+                decide_tc = next(tc for tc in tool_calls_list if tc["function"]["name"] == "decide")
+                try:
+                    d_args = json.loads(decide_tc["function"]["arguments"])
+                except (json.JSONDecodeError, AttributeError):
+                    break  # Bad JSON → fallback
+
+                need_reflect = d_args.get("need_reflect", False)
+                action_id = d_args.get("action_id")
+                expectation = d_args.get("expectation", "")
+
+                # Empty decide {} → treat as need_reflect=true
+                if not need_reflect and action_id is None:
+                    need_reflect = True
+
+                # --- Routine path: no reflection needed, action present ---
+                if not need_reflect and action_id is not None:
+                    # Validate action_id
+                    if action_id not in available_actions:
+                        break  # Invalid action → fallback
+
+                    # 5-repeat action guard
+                    needs_reflection = False
+                    consecutive = 0
+                    for h in reversed(action_history):
+                        if f"action={action_id}" in h:
+                            consecutive += 1
+                        else:
+                            break
+                    if consecutive >= 5:
+                        needs_reflection = True
+                        logger.info(
+                            "frame=%s action=%s repeated %d times; forcing reflection",
+                            frame_index,
+                            action_id,
+                            consecutive,
+                        )
+
+                    log_node(frame_index, "unified", action=action_id, tool_calls=call_idx + 1)
+                    history_cache.append({
+                        "action": action_id,
+                        "objects": objects,
+                        "adjacency": adjacency,
+                    })
+
+                    return {
+                        "action": GameAction.from_id(action_id),
+                        "plan": f"Action {action_id}: {expectation}",
+                        "expectation": expectation,
+                        "needs_reflection": needs_reflection,
+                        "mechanics": prev_mechanics,
+                        "mechanics_summary": prev_mechanics_summary,
+                        "tactical": prev_tactical,
+                        "tactical_summary": prev_tactical_summary,
+                        "actions": prev_actions,
+                        "goal": prev_goal,
+                        "goal_status": prev_goal_status,
+                        "reflect_reason": prev_reflect_reason,
+                    }
+
+                # --- Reflect path: need_reflect=true or empty decide ---
+                # Append the routing decide as assistant message + tool response
+                messages = messages + [
+                    {"role": "assistant", "content": raw_content, "tool_calls": raw_tool_calls},
+                    {"role": "tool", "tool_call_id": decide_tc["id"], "content": "Routing: reflection requested. Call reflect() to update your world model, then decide() with your action."},
+                ]
+
+                # Phase 3: reflect+decide call with thinking=True
+                try:
+                    response3 = services.planner_call(
+                        messages, tools=UNIFIED_TOOLS_V3, tool_choice="auto",
+                        thinking=True,
+                    )
+                except Exception:
+                    break  # LLM error → fallback
+
+                # Extract response from call 3
+                raw_tool_calls3: list[dict[str, Any]] | None = None
+                raw_content3: str = ""
+                if isinstance(response3, str):
+                    raw_content3 = response3
+                else:
+                    raw_content3 = getattr(response3, "content", "") or ""
+                    raw_tool_calls3 = getattr(response3, "tool_calls", None)
+
+                if not raw_tool_calls3:
+                    break  # No tool calls → fallback
+
+                tc3_list = _deduplicate_tool_calls(raw_tool_calls3)
+                names3 = {tc["function"]["name"] for tc in tc3_list}
+
+                # If inspect in call 3, skip — only process reflect/decide
+                if "inspect" in names3:
+                    tc3_list = [tc for tc in tc3_list if tc["function"]["name"] != "inspect"]
+                    names3 = {tc["function"]["name"] for tc in tc3_list}
+
+                # Extract reflect data from call 3
+                reflect_reason_out: str = prev_reflect_reason
+                new_mechanics: list[str] = prev_mechanics
+                new_mechanics_summary: str = prev_mechanics_summary
+                new_tactical: list[str] = prev_tactical
+                new_tactical_summary: str = prev_tactical_summary
+                new_actions: list[str] = prev_actions
+                new_goal: str = prev_goal
+                new_goal_status: str = prev_goal_status
+
+                has_reflect3 = REFLECT_TOOL_NAME in names3
+                has_decide3 = "decide" in names3
+
+                reflect_tc3: dict[str, Any] | None = None
+                if has_reflect3:
+                    reflect_tc3 = next(tc for tc in tc3_list if tc["function"]["name"] == REFLECT_TOOL_NAME)
+                    try:
+                        r_args = json.loads(reflect_tc3["function"]["arguments"])
+                    except (json.JSONDecodeError, AttributeError):
+                        r_args = {}
+
+                    r_reason = r_args.get("reason", "")
+                    r_goal = r_args.get("goal", "")
+                    r_goal_status = r_args.get("goal_status", "")
+                    r_actions = r_args.get("actions", [])
+                    r_mechanics = r_args.get("mechanics", [])
+                    r_mechanics_summary = r_args.get("mechanics_summary", "")
+                    r_tactical = r_args.get("tactical", [])
+                    r_tactical_summary = r_args.get("tactical_summary", "")
+
                     max_mechanics = config.max_mechanics
                     max_tactical = config.max_tactical
                     max_action_entries = config.max_action_entries
@@ -348,85 +520,103 @@ def make_unified_node(services: AgentServices) -> Callable[[dict[str, Any]], dic
                     if r_tactical_summary:
                         new_tactical_summary = r_tactical_summary
 
-                # --- reflect-only: loop continues ---
-                if has_reflect and not has_decide:
-                    # Persist reflect data so decide() on the next iteration
-                    # can use it instead of stale prev_* values
-                    prev_mechanics = new_mechanics
-                    prev_mechanics_summary = new_mechanics_summary
-                    prev_tactical = new_tactical
-                    prev_tactical_summary = new_tactical_summary
-                    prev_actions = new_actions
-                    prev_goal = new_goal
-                    prev_goal_status = new_goal_status
-                    prev_reflect_reason = reflect_reason_out
-
-                    # Append reflect tool result and continue loop
-                    # The LLM will call decide() on the next iteration
+                # --- reflect-only in call 3: force 4th call (decide) ---
+                if has_reflect3 and not has_decide3 and reflect_tc3 is not None:
+                    # Append reflect tool result, then make 4th call
                     messages = messages + [
-                        {"role": "assistant", "content": raw_content, "tool_calls": raw_tool_calls},
-                        {"role": "tool", "tool_call_id": reflect_tc["id"], "content": "Reflection recorded. Now call decide() with your action."},
+                        {"role": "assistant", "content": raw_content3, "tool_calls": raw_tool_calls3},
+                        {"role": "tool", "tool_call_id": reflect_tc3["id"], "content": "World model updated. Now call decide() with your action."},
                     ]
-                    continue
 
-                # --- decide (with or without prior reflect) → terminate ---
-                if has_decide:
-                    decide_tc = next(tc for tc in tool_calls_list if tc["function"]["name"] == "decide")
                     try:
-                        d_args = json.loads(decide_tc["function"]["arguments"])
+                        response4 = services.planner_call(
+                            messages, tools=UNIFIED_TOOLS_V3, tool_choice="auto",
+                            thinking=config.decide_thinking,
+                        )
+                    except Exception:
+                        break  # LLM error → fallback
+
+                    # Extract response from call 4
+                    raw_tool_calls4: list[dict[str, Any]] | None = None
+                    if isinstance(response4, str):
+                        pass
+                    else:
+                        raw_tool_calls4 = getattr(response4, "tool_calls", None)
+
+                    if not raw_tool_calls4:
+                        break  # No tool calls → fallback
+
+                    tc4_list = _deduplicate_tool_calls(raw_tool_calls4)
+                    names4 = {tc["function"]["name"] for tc in tc4_list}
+
+                    if "decide" not in names4:
+                        break  # No decide → fallback
+
+                    # Use call 4's decide
+                    decide_tc_final = next(tc for tc in tc4_list if tc["function"]["name"] == "decide")
+                    try:
+                        final_args = json.loads(decide_tc_final["function"]["arguments"])
                     except (json.JSONDecodeError, AttributeError):
                         break  # Bad JSON → fallback
 
-                    action_id = d_args.get("action_id")
-                    expectation = d_args.get("expectation", "")
+                    action_id = final_args.get("action_id")
+                    expectation = final_args.get("expectation", "")
+                elif has_decide3:
+                    # reflect+decide in same call 3
+                    decide_tc_final = next(tc for tc in tc3_list if tc["function"]["name"] == "decide")
+                    try:
+                        final_args = json.loads(decide_tc_final["function"]["arguments"])
+                    except (json.JSONDecodeError, AttributeError):
+                        break  # Bad JSON → fallback
 
-                    # Validate action_id
-                    if action_id is None or action_id not in available_actions:
-                        break  # Invalid action → fallback
+                    action_id = final_args.get("action_id")
+                    expectation = final_args.get("expectation", "")
+                else:
+                    # No reflect and no decide in call 3 → fallback
+                    break
 
-                    # 5-repeat action guard
-                    needs_reflection = has_reflect  # reflect was called → needs_reflection
-                    consecutive = 0
-                    for h in reversed(action_history):
-                        if f"action={action_id}" in h:
-                            consecutive += 1
-                        else:
-                            break
-                    if consecutive >= 5:
-                        needs_reflection = True
-                        logger.info(
-                            "frame=%s action=%s repeated %d times; forcing reflection",
-                            frame_index,
-                            action_id,
-                            consecutive,
-                        )
+                # Validate final action_id
+                if action_id is None or action_id not in available_actions:
+                    break  # Invalid action → fallback
 
-                    log_node(frame_index, "unified", action=action_id, tool_calls=call_idx + 1)
+                # 5-repeat action guard
+                needs_reflection = True
+                consecutive = 0
+                for h in reversed(action_history):
+                    if f"action={action_id}" in h:
+                        consecutive += 1
+                    else:
+                        break
+                if consecutive >= 5:
+                    needs_reflection = True
+                    logger.info(
+                        "frame=%s action=%s repeated %d times; forcing reflection",
+                        frame_index,
+                        action_id,
+                        consecutive,
+                    )
 
-                    # Cache this frame for next turn's history
-                    history_cache.append({
-                        "action": action_id,
-                        "objects": objects,
-                        "adjacency": adjacency,
-                    })
+                log_node(frame_index, "unified", action=action_id, tool_calls=call_idx + 1)
+                history_cache.append({
+                    "action": action_id,
+                    "objects": objects,
+                    "adjacency": adjacency,
+                })
 
-                    return {
-                        "action": GameAction.from_id(action_id),
-                        "plan": f"Action {action_id}: {expectation}",
-                        "expectation": expectation,
-                        "needs_reflection": needs_reflection,
-                        "mechanics": new_mechanics,
-                        "mechanics_summary": new_mechanics_summary,
-                        "tactical": new_tactical,
-                        "tactical_summary": new_tactical_summary,
-                        "actions": new_actions,
-                        "goal": new_goal,
-                        "goal_status": new_goal_status,
-                        "reflect_reason": reflect_reason_out,
-                    }
-
-                # No inspect, reflect, or decide → nudge
-                continue
+                return {
+                    "action": GameAction.from_id(action_id),
+                    "plan": f"Action {action_id}: {expectation}",
+                    "expectation": expectation,
+                    "needs_reflection": needs_reflection,
+                    "mechanics": new_mechanics,
+                    "mechanics_summary": new_mechanics_summary,
+                    "tactical": new_tactical,
+                    "tactical_summary": new_tactical_summary,
+                    "actions": new_actions,
+                    "goal": new_goal,
+                    "goal_status": new_goal_status,
+                    "reflect_reason": reflect_reason_out,
+                }
 
             # ============================================================
             # V2 2-tool dispatch: decide (original logic)
