@@ -106,8 +106,7 @@ def extract_world_model(content: str) -> dict[str, str]:
     Uses the 7 canonical labels plus 3 fallback mappings.
     Returns a dict with all 7 keys; missing labels map to empty strings.
     """
-    # First pass: extract with canonical labels
-    canonical_lookup = {label: label.lower() for label in ALL_LABELS}
+    # First pass: extract with canonical + fallback labels
     all_search_labels = list(ALL_LABELS) + list(FALLBACK_LABELS.keys())
     raw_blocks = extract_labeled_blocks(content, all_search_labels)
 

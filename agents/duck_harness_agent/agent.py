@@ -34,9 +34,9 @@ from agents.duck_harness_agent.sandbox import DuckSandbox
 from agents.duck_harness_agent.services import DuckServices, create_services
 from agents.duck_harness_agent.world_model import (
     ALL_KEYS,
+    clear_world_model,
     extract_world_model,
     format_world_model,
-    clear_world_model,
 )
 from agents.langgraph_vision_agent.sandbox import atoms_to_dicts, compute_adjacency
 from optitrack.atoms import extract_atoms

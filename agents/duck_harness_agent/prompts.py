@@ -7,8 +7,6 @@ following the Duck's proven single-tool pattern.
 
 from __future__ import annotations
 
-from agents.duck_harness_agent.world_model import CANONICAL_LABELS
-
 # ── Color legend derived from vision/palette.py ────────────────────────────
 
 COLOR_LEGEND: str = "\n".join(
