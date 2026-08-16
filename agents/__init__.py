@@ -3,6 +3,8 @@ from typing import Type, cast
 from dotenv import load_dotenv
 
 from .agent import Agent, Playback
+from .duck_harness_agent.agent import DuckHarnessAgent
+from .duck_harness_agent.base import DirectStepAgent
 from .langgraph_unified_agent.agent import LangGraphUnifiedAgent
 from .langgraph_vision_agent.agent import LangGraphVisionAgent
 from .llm_client import LLMCallError, LLMClient
@@ -26,11 +28,12 @@ load_dotenv()
 AVAILABLE_AGENTS: dict[str, Type[Agent]] = {
     cls.__name__.lower(): cast(Type[Agent], cls)
     for cls in Agent.__subclasses__()
-    if cls.__name__ not in ("Playback", "LlmCuriosity")
+    if cls.__name__ not in ("Playback", "LlmCuriosity", "DirectStepAgent")
 }
 
 AVAILABLE_AGENTS["langgraphvision"] = cast(Type[Agent], LangGraphVisionAgent)
 AVAILABLE_AGENTS["langgraphunified"] = cast(Type[Agent], LangGraphUnifiedAgent)
+AVAILABLE_AGENTS["duckharness"] = cast(Type[Agent], DuckHarnessAgent)
 
 # add all the recording files as valid agent names
 for rec in Recorder.list():
