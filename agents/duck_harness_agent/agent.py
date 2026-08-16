@@ -105,6 +105,7 @@ class DuckHarnessAgent(DirectStepAgent):
 
         # ── 1. Iteration-0 guard: empty placeholder → RESET ────────────
         if not getattr(frames[-1], "frame", None):
+            self.step_env(GameAction.RESET)
             self._frame_index += 1
             return GameAction.RESET
 
@@ -249,6 +250,7 @@ class DuckHarnessAgent(DirectStepAgent):
             else:
                 fallback_id = 0
             action_taken = GameAction.from_id(fallback_id)
+            self.step_env(action_taken)
             logger.warning(
                 f"duckharness: tool loop exhausted, falling back to "
                 f"random action {action_taken.name} (id={fallback_id})"
