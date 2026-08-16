@@ -104,7 +104,7 @@ class DuckHarnessAgent(DirectStepAgent):
         """Run one turn: render, segment, prompt, tool-loop, act."""
 
         # ── 1. Iteration-0 guard: empty placeholder → RESET ────────────
-        if getattr(frames[-1], "frame", None) is None:
+        if not getattr(frames[-1], "frame", None):
             self._frame_index += 1
             return GameAction.RESET
 
