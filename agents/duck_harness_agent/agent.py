@@ -114,7 +114,7 @@ class DuckHarnessAgent(DirectStepAgent):
         self._current_grid = [list(row) for row in grid]
 
         # Previous grid (for diff / sandbox)
-        if len(frames) >= 2 and getattr(frames[-2], "frame", None) is not None:
+        if len(frames) >= 2 and getattr(frames[-2], "frame", None):
             prev_raw = frames[-2].frame
             self._previous_grid = [list(row) for row in prev_raw[0]]
         else:
