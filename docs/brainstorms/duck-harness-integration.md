@@ -118,14 +118,17 @@ Same concept as our `optitrack/atoms.py` + `sandbox.py` but standalone.
 
 | Aspect | Duck Harness | Our Unified Agent |
 |--------|-------------|-------------------|
-| Tools | 1 (`python()`) | 2 (`inspect()` + `decide()`) |
-| State format | Free-text labeled blocks | Structured JSON in `world_model` object |
+| Tools | 1 (`python()`) | V2: 2 (`inspect()` + `decide()`); V3: 3 (`inspect()` + `reflect()` + `decide()`) |
+| State format | Free-text labeled blocks | V2: structured JSON in nested `world_model` object; V3: `reflect()` tool + slim `decide()` |
 | Action | Called inside sandbox code | Separate `decide()` tool call |
-| World model sections | 7 (World, Goal, Action, Findings, Questions, Plan, Cross-level) | 2 (mechanics, tactical) |
+| World model sections | 7 (World, Goal, Action, Findings, Questions, Plan, Cross-level) | 4 (mechanics, tactical, goal, actions) — split across `world_model` (V2) or `reflect()` fields (V3) |
+| Reflection | Always (world model revised every turn) | V2: `reflect` boolean inside `decide()`; V3: `need_reflect` routing — routine path skips reflection, reflect path gets a 2nd LLM call with extended thinking |
+| LLM calls per frame | 1 (single tool loop) | V2 routine: 1; V3 routine: 1; V3 reflect path: up to 4 (routing decide → reflect+decide → optional 4th decide) |
 | Segmentation | Own stdlib CC labeling | `optitrack/atoms.py` |
-| Temperature | 0.6 | 0.5 (recently set) |
+| Temperature | 0.6 | 0.5 |
+| Extended thinking | No | V3 reflect path: `thinking=True` on the reflect LLM call |
 | Grid boundary info | Not explicit | Not explicit |
-| Stuck detection | Relies on LLM noticing | 5-repeat guard + flowchart prompt |
+| Stuck detection | Relies on LLM noticing | 5-repeat action guard (forces `needs_reflection=True`) + flowchart prompt |
 
 ## Lessons Learned (from our experiments)
 
@@ -137,7 +140,10 @@ Same concept as our `optitrack/atoms.py` + `sandbox.py` but standalone.
 2. **The LLM doesn't consistently compare frames** — it often lists
    objects without checking if they moved vs last frame. The flowchart
    prompt helps but isn't 100% reliable. Temperature 0.5 improved
-   consistency.
+   consistency. V3 routing mode (`use_routing=True`) was the structural
+   response: `decide(need_reflect=true)` forces a second LLM call with
+   extended thinking when the expectation was not met, so the LLM cannot
+   skip reflection on a failed prediction.
 
 3. **Grid boundaries are not obvious to the LLM** — it sees column 63
    but doesn't always connect that to "can't move further right." The
@@ -151,4 +157,8 @@ Same concept as our `optitrack/atoms.py` + `sandbox.py` but standalone.
 5. **Free-text vs structured state** — the Duck's free-text approach
    gives flexibility but risks the LLM omitting sections. Our structured
    `world_model` object enforces fields but adds schema complexity. For
-   small models (Gemma 4), fewer required fields is better.
+   small models (Gemma 4), fewer required fields is better. V3 routing
+   mode splits the world model into a separate `reflect()` tool with its
+   own fields, letting the `decide()` tool stay slim (just `action_id` +
+   `expectation` + `need_reflect`) — this reduces the per-call schema
+   burden at the cost of an extra LLM call on the reflect path.
