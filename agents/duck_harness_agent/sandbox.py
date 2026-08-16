@@ -4,8 +4,10 @@ Uses multiprocessing.Process + Pipe for parent-child communication so that
 `action()` calls inside sandbox code propagate to the parent process and
 invoke the step_env_callback, with the result fed back to the child.
 
-This is the highest-risk component — prove IPC works before building the
-full agent around it.
+After each ``action()`` call the child refreshes its ``objects``,
+``adjacency``, ``history``, ``current_frame``, ``previous_frame``,
+``valid_actions``, and ``last_action_result`` globals from the parent's
+state response, so subsequent sandbox code sees the updated world state.
 """
 
 from __future__ import annotations
@@ -49,17 +51,24 @@ def _child_process(  # noqa: C901 – isolated subprocess, complexity acceptable
     objects: tuple[dict, ...],
     adjacency: frozenset[tuple[int, int]],
     history: list[dict],
+    current_frame: list[list[int]],
+    previous_frame: list[list[int]],
+    valid_actions: list[int],
+    last_action_result: str,
     pipe_conn: multiprocessing.connection.Connection,  # type: ignore[attr-defined]
 ) -> None:
     """Execute *code* in a restricted namespace; communicate via *pipe_conn*.
 
     IPC protocol (child → parent → child):
-      1. Child calls ``action(action_id)`` → sends ``{"type": "action",
-         "action_id": action_id}`` on pipe.
-      2. Parent receives, calls ``step_env_callback(action_id)``, sends back
-         ``{"type": "state", ...}``.  (For this PoC the state payload is an
-         acknowledgement dict; full state refresh comes in Task 7.)
-      3. Child receives response and continues.
+      1. Child calls ``action(action_id)`` or ``action(action_id, **kwargs)``
+         → sends ``{"type": "action", "action_id": action_id,
+         "action_data": {...} | None}`` on pipe.
+      2. Parent receives, calls ``step_env_callback(action_id, action_data)``,
+         sends back a state dict containing refreshed ``objects``,
+         ``adjacency``, ``history``, ``grid``, ``last_action_result``,
+         ``valid_actions``.
+      3. Child receives response and refreshes all sandbox globals so
+         subsequent code sees the updated world state.
       4. On completion (or error), child sends ``{"type": "result", "output":
          ..., "action_taken": ..., "error": ...}`` and exits.
     """
@@ -71,15 +80,53 @@ def _child_process(  # noqa: C901 – isolated subprocess, complexity acceptable
     # Mutable container so the nested action() can write back the action_id
     _action_taken: list[int | None] = [None]
 
-    def action(action_id: int) -> dict:
+    def action(action_id: int, **kwargs: int) -> dict:  # type: ignore[override]
         """Called by sandbox code to take an action in the environment.
 
-        Sends the action_id to the parent, waits for a state response,
-        and returns the state dict so sandbox code can inspect it.
+        Supports three calling conventions:
+          - ``action(action_id)`` — simple action, action_data is None
+          - ``action(action_id, x=30, y=40)`` — complex action with kwargs
+          - ``action({"id": 6, "x": 30, "y": 40})`` — dict form
+
+        Sends the action to the parent, waits for a state response, refreshes
+        all sandbox globals from the response, and returns the state dict.
         """
-        _action_taken[0] = action_id
-        pipe_conn.send({"type": "action", "action_id": action_id})
+        # Dict form: action({"id": 6, "x": 30, "y": 40})
+        if isinstance(action_id, dict):
+            action_data = {k: v for k, v in action_id.items() if k != "id"}
+            action_id = action_id["id"]  # type: ignore[assignment]
+
+        # Kwargs form: action(6, x=30, y=40)
+        elif kwargs:
+            action_data = dict(kwargs)
+        else:
+            action_data = None
+
+        _action_taken[0] = action_id  # type: ignore[assignment]
+        pipe_conn.send({
+            "type": "action",
+            "action_id": action_id,
+            "action_data": action_data,
+        })
         state_response = pipe_conn.recv()
+
+        # ── Refresh sandbox globals from state response ──────────────
+        if isinstance(state_response, dict) and "objects" in state_response:
+            namespace["objects"] = state_response["objects"]
+            namespace["adjacency"] = state_response["adjacency"]
+            namespace["history"] = state_response["history"]
+            # previous_frame becomes what current_frame was before this action
+            namespace["previous_frame"] = namespace["current_frame"]
+            namespace["current_frame"] = state_response.get(
+                "grid", namespace["current_frame"]
+            )
+            namespace["valid_actions"] = state_response.get(
+                "valid_actions", namespace["valid_actions"]
+            )
+            namespace["last_action_result"] = state_response.get(
+                "last_action_result", namespace["last_action_result"]
+            )
+
         return state_response
 
     namespace: dict = {
@@ -87,6 +134,10 @@ def _child_process(  # noqa: C901 – isolated subprocess, complexity acceptable
         "objects": objects,
         "adjacency": adjacency,
         "history": history,
+        "current_frame": current_frame,
+        "previous_frame": previous_frame,
+        "valid_actions": valid_actions,
+        "last_action_result": last_action_result,
         "action": action,
     }
 
@@ -120,12 +171,17 @@ def _child_process(  # noqa: C901 – isolated subprocess, complexity acceptable
 class DuckSandbox:
     """Run untrusted code in a subprocess with bidirectional IPC.
 
-    When sandbox code calls ``action(action_id)``, the parent's
-    ``step_env_callback`` is invoked and the result is fed back to the
-    child process.
+    When sandbox code calls ``action(action_id)`` or
+    ``action(action_id, x=..., y=...)``, the parent's
+    ``step_env_callback`` is invoked with the action_id and optional
+    action_data dict, and the result is fed back to the child process.
     """
 
-    def __init__(self, step_env_callback: Callable[[int], dict], timeout: float = 30.0) -> None:
+    def __init__(
+        self,
+        step_env_callback: Callable[[int, dict | None], dict],
+        timeout: float = 30.0,
+    ) -> None:
         self.step_env_callback = step_env_callback
         self.timeout = timeout
 
@@ -135,6 +191,10 @@ class DuckSandbox:
         objects: tuple[dict, ...],
         adjacency: frozenset[tuple[int, int]],
         history: list[dict],
+        current_frame: list[list[int]] | None = None,
+        previous_frame: list[list[int]] | None = None,
+        valid_actions: list[int] | None = None,
+        last_action_result: str = "",
     ) -> SandboxResult:
         """Execute *code* in a sandboxed subprocess.
 
@@ -145,10 +205,22 @@ class DuckSandbox:
         if _DUNDER_PATTERN.search(code):
             return SandboxResult(error="Error: dunder attributes are not allowed")
 
+        # Default mutable containers — empty but valid
+        if current_frame is None:
+            current_frame = []
+        if previous_frame is None:
+            previous_frame = []
+        if valid_actions is None:
+            valid_actions = []
+
         parent_conn, child_conn = multiprocessing.Pipe(duplex=True)
         proc = multiprocessing.Process(
             target=_child_process,
-            args=(code, objects, adjacency, history, child_conn),
+            args=(
+                code, objects, adjacency, history,
+                current_frame, previous_frame, valid_actions,
+                last_action_result, child_conn,
+            ),
             daemon=True,
         )
         proc.start()
@@ -171,9 +243,10 @@ class DuckSandbox:
                 if msg["type"] == "action":
                     # Child called action() — invoke callback and send state back
                     action_id = msg["action_id"]
+                    action_data = msg.get("action_data")
                     action_taken = action_id
                     try:
-                        state_response = self.step_env_callback(action_id)
+                        state_response = self.step_env_callback(action_id, action_data)
                     except Exception as exc:
                         state_response = {"type": "state", "error": str(exc)}
                     parent_conn.send(state_response)
