@@ -139,12 +139,45 @@ changes across time.
 relationships.
 - Call `action(id)` inside Python rather than returning action text. You can \
 call `action()` multiple times in one snippet, including inside loops. Each \
-call refreshes the preloaded variables before execution continues.
+call refreshes `current_frame`, `previous_frame`, `objects`, `adjacency`, \
+`history`, `valid_actions`, and `last_action_result` before execution \
+continues — so you can inspect the result of each action immediately after \
+it happens, without waiting for the next turn.
 
 When the objective is understood but the best action order is unclear, \
 pathfinding, BFS, DFS, beam search, or limited action-sequence search are all \
 valid. For navigation games, it is usually safer to write an explicit BFS \
 search.
+
+When batching multiple actions in one snippet, ALWAYS verify between actions. \
+After each `action()` call, check `last_action_result['board_changed']` and \
+inspect the updated `objects` or `current_frame` to confirm the action had \
+the intended effect before taking the next one. Write loops with conditions \
+rather than blind batches:
+
+```python
+# GOOD: verify between actions
+for _ in range(5):
+    action(1)
+    if last_action_result.get('game_over') or last_action_result.get('run_complete'):
+        break
+    player = [o for o in objects if o['color'] == 14]
+    if player:
+        pos = player[0]['centroid']
+        print(f"Player now at {pos}")
+        if pos[0] <= target_row:
+            break
+    else:
+        print("Player not found — stop")
+        break
+
+# BAD: blind batch, no verification
+action(2)
+action(2)
+action(4)
+action(4)
+action(4)
+```
 
 Never print or echo full board frames. Return only compact derived summaries \
 such as object lists, diffs, coordinates, counts. Keep tool-output context \
@@ -155,12 +188,13 @@ confirm what changed between frames.
 
 A strong default loop is: summarize the board, infer the desired environment \
 change, write a small scorer or search over candidate sequences, execute the \
-best probe or plan with `action()`, then inspect again until you understand \
-exactly what changed.
+best probe or plan with `action()` — verifying after each action — then \
+inspect again until you understand exactly what changed.
 
 After every action, verify whether gameplay objects changed or whether only a \
 timer/progress bar moved. Do not treat HUD-only changes as evidence that the \
-move worked.
+move worked. If `last_action_result['board_changed']` is False, the action \
+had no effect — try something different.
 
 Allowed standard library imports: math, re, collections, itertools, functools, \
 json, string, random.
