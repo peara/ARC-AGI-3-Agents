@@ -9,6 +9,7 @@ import pytest
 from agents.duck_harness_agent.sandbox import (
     DuckSandbox,
     SandboxResult,
+    _ALLOWED_IMPORTS,
     _DANGEROUS_BUILTINS,
     _DUNDER_PATTERN,
     _MAX_OUTPUT_CHARS,
@@ -173,7 +174,7 @@ def test_action6_complex_action():
 
 
 def test_restricted_builtins():
-    """Dangerous builtins (open, __import__, exec) are blocked in sandbox."""
+    """Dangerous builtins (open, exec) are blocked in sandbox."""
     sandbox = _make_sandbox()
     # open should be unavailable
     result = sandbox.run(
@@ -196,5 +197,58 @@ def test_restricted_builtins():
 
     # Verify _DANGEROUS_BUILTINS contains expected names
     assert "open" in _DANGEROUS_BUILTINS
-    assert "__import__" in _DANGEROUS_BUILTINS
+    assert "__import__" not in _DANGEROUS_BUILTINS
     assert "exec" in _DANGEROUS_BUILTINS
+
+
+def test_allowed_imports():
+    """import math works in the sandbox."""
+    sandbox = _make_sandbox()
+    result = sandbox.run(
+        code="import math; print(round(math.pi, 2))",
+        objects=(),
+        adjacency=frozenset(),
+        history=[],
+    )
+    assert result.error is None, f"Unexpected error: {result.error}"
+    assert "3.14" in result.output
+
+
+def test_from_import():
+    """from collections import Counter works in the sandbox."""
+    sandbox = _make_sandbox()
+    result = sandbox.run(
+        code="from collections import Counter; print(Counter([1,1,2]))",
+        objects=(),
+        adjacency=frozenset(),
+        history=[],
+    )
+    assert result.error is None, f"Unexpected error: {result.error}"
+    assert "1" in result.output
+
+
+def test_blocked_import():
+    """import os raises ImportError with 'not allowed' message."""
+    sandbox = _make_sandbox()
+    result = sandbox.run(
+        code="import os",
+        objects=(),
+        adjacency=frozenset(),
+        history=[],
+    )
+    assert result.error is not None
+    assert "not allowed" in result.error
+    assert "Allowed modules" in result.error
+
+
+def test_submodule_import():
+    """import collections.abc works (checks top-level collections only)."""
+    sandbox = _make_sandbox()
+    result = sandbox.run(
+        code="import collections.abc; print('ok')",
+        objects=(),
+        adjacency=frozenset(),
+        history=[],
+    )
+    assert result.error is None, f"Unexpected error: {result.error}"
+    assert "ok" in result.output

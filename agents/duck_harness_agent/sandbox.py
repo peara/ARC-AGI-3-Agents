@@ -12,6 +12,7 @@ state response, so subsequent sandbox code sees the updated world state.
 
 from __future__ import annotations
 
+import logging
 import multiprocessing
 import multiprocessing.connection
 import re
@@ -20,10 +21,17 @@ from dataclasses import dataclass
 from io import StringIO
 from typing import Callable
 
+logger = logging.getLogger(__name__)
+
 # ── Reuse from vision agent sandbox ──────────────────────────────────────
 
+_ALLOWED_IMPORTS = frozenset({
+    "math", "re", "collections", "itertools", "functools",
+    "json", "string", "random",
+})
+
 _DANGEROUS_BUILTINS = frozenset({
-    "__import__", "open", "compile", "eval", "exec",
+    "open", "compile", "eval", "exec",
     "getattr", "setattr", "delattr", "globals", "locals",
     "vars", "dir", "type", "object",
 })
@@ -72,10 +80,25 @@ def _child_process(  # noqa: C901 – isolated subprocess, complexity acceptable
       4. On completion (or error), child sends ``{"type": "result", "output":
          ..., "action_taken": ..., "error": ...}`` and exits.
     """
+    # Capture the real __import__ before we filter builtins
+    _real_import = __builtins__["__import__"] if isinstance(__builtins__, dict) else __builtins__.__import__  # type: ignore[attr-defined]
+
     safe_builtins = {
         k: v for k, v in __builtins__.items()  # type: ignore[attr-defined]
         if k not in _DANGEROUS_BUILTINS
     }
+
+    def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
+        top_level = name.split(".")[0]
+        if top_level not in _ALLOWED_IMPORTS:
+            allowed = ", ".join(sorted(_ALLOWED_IMPORTS))
+            raise ImportError(
+                f"import of '{name}' is not allowed. "
+                f"Allowed modules: {allowed}"
+            )
+        return _real_import(name, globals, locals, fromlist, level)
+
+    safe_builtins["__import__"] = _safe_import
 
     # Mutable container so the nested action() can write back the action_id
     _action_taken: list[int | None] = [None]
@@ -236,6 +259,7 @@ class DuckSandbox:
                     # Timeout waiting for a message
                     proc.terminate()
                     proc.join(timeout=2.0)
+                    logger.warning(f"sandbox: timed out after {self.timeout}s")
                     return SandboxResult(error="Error: sandbox timed out")
 
                 msg = parent_conn.recv()
@@ -273,11 +297,13 @@ class DuckSandbox:
             # Pipe closed unexpectedly
             proc.terminate()
             proc.join(timeout=2.0)
+            logger.warning("sandbox: process closed unexpectedly")
             return SandboxResult(error="Error: sandbox process closed unexpectedly")
 
         except Exception as exc:
             proc.terminate()
             proc.join(timeout=2.0)
+            logger.warning(f"sandbox: error: {exc}")
             return SandboxResult(error=f"Error: {exc}")
 
         finally:
