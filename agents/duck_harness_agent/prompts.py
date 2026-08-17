@@ -53,7 +53,9 @@ GAME_OVERVIEW_ADDENDUM: str = (
     "frame, it won't appear this frame unless your action caused it.\n"
     "- If an action produced no change (flatline), repeating the same action from "
     "the same position will also produce no change. You MUST try something "
-    "different."
+    "different.\n"
+    "\n"
+    "Optimize for as few in-game actions as possible while still being reliable."
 )
 
 RUNTIME_STATE_ADDENDUM: str = """\
@@ -72,11 +74,18 @@ NOT a list of objects. To find objects in a past frame, scan the grid for \
 cells matching a color: `[(r, c) for r in range(64) for c in range(64) if frame[r][c] == 14]`.
   Use `history[-1]` for the most recent past frame.
 - `valid_actions`: A list of action IDs available this turn (e.g. [0, 1, 2, 3]).
-- `last_action_result`: A string describing what happened after the last \
-action, or None on the first frame.
-- `action(actions)`: A function that takes an action ID and commits it as \
-your move. Calling `action(id)` ends your turn — no further code runs after \
-this call. You MUST call `action()` exactly once per turn.
+- `last_action_result`: A dict with fields: `board_changed` (bool — did the \
+grid change), `done` (bool — is the game over), `level_completed` (bool — \
+did a level complete), `game_over` (bool — is state GAME_OVER), \
+`run_complete` (bool — is state WIN), `reward` (int — levels completed \
+delta), `valid_actions` (list[int] — available action IDs). Empty dict on the \
+first frame.
+- `action(actions)`: Call `action(id)` to execute a real environment action. \
+You can call `action()` multiple times in one Python snippet, including inside \
+loops. Each call refreshes `current_frame`, `previous_frame`, `history`, \
+`objects`, `adjacency`, `valid_actions`, and `last_action_result` before \
+execution continues. If `last_action_result` reports `game_over` or \
+`run_complete`, stop acting immediately and re-ground on the next turn.
 
 Do NOT attempt to modify these variables. They are read-only.
 """
@@ -94,6 +103,18 @@ How to read the grid image:
 - Use the segmentation data available via `objects` in the sandbox to get \
 precise coordinates, sizes, and adjacency — do NOT estimate positions or \
 distances from the image alone.
+
+Some games are logic or layout puzzles with no explicit player avatar or \
+controllable sprite on the board. Do not assume a player exists; the relevant \
+state may be an object, region, cursor, selector, or whole-board configuration.
+
+A long horizontal or vertical line near an edge is a timer or remaining-steps \
+bar. It often shrinks or changes each step. Do not get distracted by it or \
+treat it as core gameplay state unless there is concrete evidence that it \
+interacts with the puzzle mechanics.
+
+Re-ground on the newest frame after any score increase or abrupt scene change; \
+the returned board may already be the next level.
 
 The image is for visual understanding of the scene layout and object \
 identification. For any quantitative spatial reasoning (positions, distances, \
@@ -116,7 +137,30 @@ an edge.
 changes across time.
 - Compute distances, directions, movement vectors, and other spatial \
 relationships.
-- Call `action(id)` to commit your move. This ends the turn.
+- Call `action(id)` inside Python rather than returning action text. You can \
+call `action()` multiple times in one snippet, including inside loops. Each \
+call refreshes the preloaded variables before execution continues.
+
+When the objective is understood but the best action order is unclear, \
+pathfinding, BFS, DFS, beam search, or limited action-sequence search are all \
+valid. For navigation games, it is usually safer to write an explicit BFS \
+search.
+
+Never print or echo full board frames. Return only compact derived summaries \
+such as object lists, diffs, coordinates, counts. Keep tool-output context \
+size minimal and decision-oriented.
+
+Do not ration tool calls when the state is unclear. Spend extra tool calls to \
+confirm what changed between frames.
+
+A strong default loop is: summarize the board, infer the desired environment \
+change, write a small scorer or search over candidate sequences, execute the \
+best probe or plan with `action()`, then inspect again until you understand \
+exactly what changed.
+
+After every action, verify whether gameplay objects changed or whether only a \
+timer/progress bar moved. Do not treat HUD-only changes as evidence that the \
+move worked.
 
 Allowed standard library imports: math, re, collections, itertools, functools, \
 json, string, random.
@@ -130,7 +174,6 @@ Important:
 Objects are ordered by scan position (top-left first) and the order changes \
 when objects move. Identify objects by color, position, and shape, not by \
 index.
-- `action(id)` is a terminal call — no code after it executes.
 """
 
 WORLD_MODEL_ADDENDUM: str = """\
@@ -199,7 +242,7 @@ PYTHON_TOOL_SCHEMA: dict = {
         "description": (
             "Execute Python code in a sandbox with preloaded game state. "
             "Use objects, adjacency, and history for spatial reasoning. "
-            "Call action(id) to commit your move."
+            "Call action(id) to execute environment actions."
         ),
         "parameters": {
             "type": "object",
@@ -208,7 +251,8 @@ PYTHON_TOOL_SCHEMA: dict = {
                     "type": "string",
                     "description": (
                         "Python code to execute in the sandbox. "
-                        "Use print() for output. Call action(id) to commit."
+                        "Use print() for output. Call action(id) to execute "
+                        "environment actions."
                     ),
                 },
             },
