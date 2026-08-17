@@ -206,6 +206,7 @@ class DuckHarnessAgent(DirectStepAgent):
                         if sandbox_result.output:
                             tool_result_parts.append(sandbox_result.output)
                         if sandbox_result.error:
+                            logger.warning(f"duckharness: sandbox error: {sandbox_result.error}")
                             tool_result_parts.append(f"Error: {sandbox_result.error}")
 
                         tool_result_text = "\n".join(tool_result_parts) if tool_result_parts else "(no output)"
@@ -274,6 +275,7 @@ class DuckHarnessAgent(DirectStepAgent):
         self._history_turns.append({
             "action": action_taken.value,
             "frame_index": self._frame_index,
+            "frame": [list(row) for row in grid] if grid else [],
         })
 
         # Trim history
