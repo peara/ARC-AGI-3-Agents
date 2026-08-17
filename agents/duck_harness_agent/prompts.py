@@ -151,7 +151,11 @@ confirmations, surprises.
 objects, unsolved mechanics.
 - **Plan**: The current best plan — what to try next and why.
 - **Cross-level notes**: Mechanics that may transfer across levels — rules \
-that held in previous levels.
+    that held in previous levels.
+
+If a block has no content yet (e.g. no cross-level notes on the first level), \
+write "None" as its value. Do NOT omit any block — every block must be present \
+in every response, even if its value is "None".
 
 BEFORE EXECUTING NEW ACTIONS YOU MUST ALWAYS GIVE THE REVISED VERSION OF THE \
 WORLD MODEL. Even if nothing changed, restate the current model to confirm it \

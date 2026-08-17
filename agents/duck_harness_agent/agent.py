@@ -35,7 +35,7 @@ from agents.duck_harness_agent.services import DuckServices, create_services
 from agents.duck_harness_agent.world_model import (
     ALL_KEYS,
     clear_world_model,
-    extract_world_model,
+    extract_world_model_strict,
     format_world_model,
 )
 from agents.langgraph_vision_agent.sandbox import atoms_to_dicts, compute_adjacency
@@ -266,9 +266,70 @@ class DuckHarnessAgent(DirectStepAgent):
                 break
 
         if last_assistant_text:
-            parsed = extract_world_model(last_assistant_text)
+            parsed, missing = extract_world_model_strict(last_assistant_text)
+            if missing and action_taken is None:
+                logger.warning(f"duckharness: world model missing blocks: {missing}")
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        f"Your response is missing these required world model blocks: "
+                        f"{', '.join(missing)}. Please include ALL 7 blocks: "
+                        f"World model, Goal model, Action model, Recent findings, "
+                        f"Open questions, Plan, Cross-level notes. "
+                        f"You can write 'None' for blocks that have no content yet."
+                    ),
+                })
+                try:
+                    response = self._services.llm_chat(
+                        messages=messages,
+                        tools=[PYTHON_TOOL_SCHEMA],
+                        tool_choice="auto",
+                    )
+                    if response.tool_calls:
+                        for tc in response.tool_calls:
+                            if tc["function"]["name"] == "python":
+                                args = json.loads(tc["function"]["arguments"])
+                                code = args.get("code", "")
+                                messages.append({
+                                    "role": "assistant",
+                                    "content": response.content or None,
+                                    "tool_calls": [tc],
+                                })
+                                sandbox_result = self._sandbox.run(
+                                    code=code,
+                                    objects=self._objects,
+                                    adjacency=self._adjacency,
+                                    history=self._history_turns,
+                                    current_frame=self._current_grid,
+                                    previous_frame=self._previous_grid or [],
+                                    valid_actions=self._valid_actions,
+                                    last_action_result=self._last_action_result,
+                                )
+                                tool_result_parts: list[str] = []
+                                if sandbox_result.output:
+                                    tool_result_parts.append(sandbox_result.output)
+                                if sandbox_result.error:
+                                    logger.warning(f"duckharness: sandbox error: {sandbox_result.error}")
+                                    tool_result_parts.append(f"Error: {sandbox_result.error}")
+                                tool_result_text = "\n".join(tool_result_parts) if tool_result_parts else "(no output)"
+                                messages.append({
+                                    "role": "tool",
+                                    "tool_call_id": tc["id"],
+                                    "content": tool_result_text,
+                                })
+                                if sandbox_result.action_taken is not None:
+                                    action_taken = GameAction.from_id(sandbox_result.action_taken)
+                                    break
+                    elif response.content:
+                        parsed_retry, missing_retry = extract_world_model_strict(response.content)
+                        if not missing_retry:
+                            parsed = parsed_retry
+                        else:
+                            logger.warning(f"duckharness: world model still missing blocks after re-prompt: {missing_retry}")
+                except Exception as exc:
+                    logger.warning(f"duckharness: re-prompt LLM call failed: {exc}")
             for key, value in parsed.items():
-                if value:  # only update non-empty values
+                if value:
                     self._world_model[key] = value
 
         # Append this turn to history
