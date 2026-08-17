@@ -150,35 +150,46 @@ valid. For navigation games, it is usually safer to write an explicit BFS \
 search.
 
 Batch actions when you are confident about the sequence, but analyze the \
-result at checkpoints where the outcome is uncertain. Do NOT fire actions \
-blindly — and do NOT waste an entire LLM round-trip on a single action when \
-you already know what comes next. Use your judgment:
+result after each action. Do NOT fire actions blindly — and do NOT waste an \
+entire LLM round-trip on a single action when you already know what comes \
+next. Use bounded loops with a max iteration count and analyze after every \
+action:
 
 ```python
+# GOOD: bounded loop with analysis after every action
+for _ in range(20):
+    action(1)
+    if last_action_result.get('game_over') or last_action_result.get('run_complete'):
+        break
+    if not last_action_result.get('board_changed'):
+        print("Action had no effect — stop")
+        break
+    player = [o for o in objects if o['color'] == 14]
+    if not player:
+        print("Player disappeared — re-ground")
+        break
+    pos = player[0]['centroid']
+    print(f"Player at {pos}")
+    if pos[0] <= target_row:
+        print("Reached target — switching direction")
+        action(4)
+        break
+
 # GOOD: batch a known sequence, analyze at the end
 action(1)
 action(1)
 action(1)
-# Analyze after the batch — did we arrive? What changed?
 player = [o for o in objects if o['color'] == 14]
 if player:
     pos = player[0]['centroid']
     print(f"Player at {pos}, target at {target}")
-    if pos[0] <= target_row:
-        print("Arrived — switching to horizontal movement")
-        action(4)
-    else:
-        print("Not there yet — continue up next turn")
 else:
     print("Player not found — re-ground needed")
 
-# GOOD: conditional loop when the path length is unknown
+# BAD: unbounded loop — never use while True with action()
 while True:
     action(1)
-    if last_action_result.get('game_over') or last_action_result.get('run_complete'):
-        break
-    player = [o for o in objects if o['color'] == 14]
-    if not player or player[0]['centroid'][0] <= target_row:
+    if player['centroid'][0] <= target_row:
         break
 
 # BAD: blind batch with no analysis at all
