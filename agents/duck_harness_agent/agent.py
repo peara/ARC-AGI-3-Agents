@@ -73,7 +73,7 @@ class DuckHarnessAgent(DirectStepAgent):
         self._current_grid: list[list[int]] | None = None
         self._previous_grid: list[list[int]] | None = None
         self._valid_actions: list[int] = []
-        self._last_action_result: str = ""
+        self._last_action_result: dict[str, Any] = {}
 
         # Sandbox — self.step_env is the callback
         self._sandbox = DuckSandbox(
@@ -397,14 +397,19 @@ class DuckHarnessAgent(DirectStepAgent):
             curr = self.frames[-1]
             prev_levels = prev.levels_completed if hasattr(prev, "levels_completed") else 0
             curr_levels = curr.levels_completed if hasattr(curr, "levels_completed") else 0
-            if curr_levels > prev_levels:
-                self._last_action_result = "Level completed! Moving to next level."
-            elif curr.state is GameState.GAME_OVER:
-                self._last_action_result = "Game over."
-            else:
-                self._last_action_result = f"Action {game_action.name} taken."
+            prev_grid = prev.frame[0] if prev.frame else None
+            curr_grid = curr.frame[0] if curr.frame else None
+            self._last_action_result = {
+                "board_changed": prev_grid != curr_grid,
+                "done": curr.state is GameState.GAME_OVER or curr.state is GameState.WIN,
+                "level_completed": curr_levels > prev_levels,
+                "game_over": curr.state is GameState.GAME_OVER,
+                "run_complete": curr.state is GameState.WIN,
+                "reward": curr_levels - prev_levels,
+                "valid_actions": list(curr.available_actions) if curr.available_actions else [],
+            }
         else:
-            self._last_action_result = f"Action {game_action.name} taken."
+            self._last_action_result = {}
 
         # Clear world model on level transitions
         if frame is not None and frame.state in (GameState.WIN, GameState.GAME_OVER):
