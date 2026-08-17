@@ -22,6 +22,8 @@ class DuckAgentConfig:
     render_scale: int = 8
     max_history_turns: int = 30
     context_window: int = 32768
+    reply_reserve_tokens: int = 4096
+    request_safety_margin_tokens: int = 512
 
 
 def load_config(path: str | None = None) -> DuckAgentConfig:
