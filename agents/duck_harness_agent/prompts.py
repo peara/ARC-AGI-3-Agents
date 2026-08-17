@@ -149,17 +149,17 @@ pathfinding, BFS, DFS, beam search, or limited action-sequence search are all \
 valid. For navigation games, it is usually safer to write an explicit BFS \
 search.
 
-Batch actions when you are confident about the sequence, but verify at \
-checkpoints where the outcome is uncertain. Do NOT fire actions blindly — \
-and do NOT waste an entire LLM round-trip on a single action when you \
-already know what comes next. Use your judgment:
+Batch actions when you are confident about the sequence, but analyze the \
+result at checkpoints where the outcome is uncertain. Do NOT fire actions \
+blindly — and do NOT waste an entire LLM round-trip on a single action when \
+you already know what comes next. Use your judgment:
 
 ```python
-# GOOD: batch a known sequence, verify at the end
+# GOOD: batch a known sequence, analyze at the end
 action(1)
 action(1)
 action(1)
-# Check after the batch — did we arrive?
+# Analyze after the batch — did we arrive? What changed?
 player = [o for o in objects if o['color'] == 14]
 if player:
     pos = player[0]['centroid']
@@ -181,7 +181,7 @@ while True:
     if not player or player[0]['centroid'][0] <= target_row:
         break
 
-# BAD: blind batch with no verification at all
+# BAD: blind batch with no analysis at all
 action(2)
 action(2)
 action(4)
@@ -198,10 +198,10 @@ confirm what changed between frames.
 
 A strong default loop is: summarize the board, infer the desired environment \
 change, write a small scorer or search over candidate sequences, execute the \
-best probe or plan with `action()` — verifying at checkpoints — then \
-inspect again until you understand exactly what changed.
+best probe or plan with `action()` — analyzing the result at checkpoints — \
+then inspect again until you understand exactly what changed.
 
-After every action, verify whether gameplay objects changed or whether only a \
+After every action, analyze whether gameplay objects changed or whether only a \
 timer/progress bar moved. Do not treat HUD-only changes as evidence that the \
 move worked. If `last_action_result['board_changed']` is False, the action \
 had no effect — try something different.
