@@ -244,20 +244,7 @@ class DuckHarnessAgent(DirectStepAgent):
             # Loop exhausted without action
             pass
 
-        # ── 10. Fallback: random action ─────────────────────────────────
-        if action_taken is None:
-            if self._valid_actions:
-                fallback_id = random.choice(self._valid_actions)
-            else:
-                fallback_id = 0
-            action_taken = GameAction.from_id(fallback_id)
-            self.step_env(action_taken)
-            logger.warning(
-                f"duckharness: tool loop exhausted, falling back to "
-                f"random action {action_taken.name} (id={fallback_id})"
-            )
-
-        # ── 11-13. Parse world model & update history ───────────────────
+        # ── 10. Parse world model & re-prompt if blocks missing ──────────
         # Find the last assistant message with content
         last_assistant_text = ""
         for msg in reversed(messages):
@@ -331,6 +318,19 @@ class DuckHarnessAgent(DirectStepAgent):
             for key, value in parsed.items():
                 if value:
                     self._world_model[key] = value
+
+        # ── 11. Fallback: random action ─────────────────────────────────
+        if action_taken is None:
+            if self._valid_actions:
+                fallback_id = random.choice(self._valid_actions)
+            else:
+                fallback_id = 0
+            action_taken = GameAction.from_id(fallback_id)
+            self.step_env(action_taken)
+            logger.warning(
+                f"duckharness: tool loop exhausted, falling back to "
+                f"random action {action_taken.name} (id={fallback_id})"
+            )
 
         # Append this turn to history
         self._history_turns.append({
