@@ -149,29 +149,39 @@ pathfinding, BFS, DFS, beam search, or limited action-sequence search are all \
 valid. For navigation games, it is usually safer to write an explicit BFS \
 search.
 
-When batching multiple actions in one snippet, ALWAYS verify between actions. \
-After each `action()` call, check `last_action_result['board_changed']` and \
-inspect the updated `objects` or `current_frame` to confirm the action had \
-the intended effect before taking the next one. Write loops with conditions \
-rather than blind batches:
+Batch actions when you are confident about the sequence, but verify at \
+checkpoints where the outcome is uncertain. Do NOT fire actions blindly — \
+and do NOT waste an entire LLM round-trip on a single action when you \
+already know what comes next. Use your judgment:
 
 ```python
-# GOOD: verify between actions
-for _ in range(5):
+# GOOD: batch a known sequence, verify at the end
+action(1)
+action(1)
+action(1)
+# Check after the batch — did we arrive?
+player = [o for o in objects if o['color'] == 14]
+if player:
+    pos = player[0]['centroid']
+    print(f"Player at {pos}, target at {target}")
+    if pos[0] <= target_row:
+        print("Arrived — switching to horizontal movement")
+        action(4)
+    else:
+        print("Not there yet — continue up next turn")
+else:
+    print("Player not found — re-ground needed")
+
+# GOOD: conditional loop when the path length is unknown
+while True:
     action(1)
     if last_action_result.get('game_over') or last_action_result.get('run_complete'):
         break
     player = [o for o in objects if o['color'] == 14]
-    if player:
-        pos = player[0]['centroid']
-        print(f"Player now at {pos}")
-        if pos[0] <= target_row:
-            break
-    else:
-        print("Player not found — stop")
+    if not player or player[0]['centroid'][0] <= target_row:
         break
 
-# BAD: blind batch, no verification
+# BAD: blind batch with no verification at all
 action(2)
 action(2)
 action(4)
@@ -188,7 +198,7 @@ confirm what changed between frames.
 
 A strong default loop is: summarize the board, infer the desired environment \
 change, write a small scorer or search over candidate sequences, execute the \
-best probe or plan with `action()` — verifying after each action — then \
+best probe or plan with `action()` — verifying at checkpoints — then \
 inspect again until you understand exactly what changed.
 
 After every action, verify whether gameplay objects changed or whether only a \
