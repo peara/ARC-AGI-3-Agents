@@ -455,9 +455,27 @@ class DuckHarnessAgent(DirectStepAgent):
 
     # ── Context trimming ──────────────────────────────────────────────────
 
+    _IMAGE_TOKEN_COST = 1024
+
     @staticmethod
     def _estimate_tokens(messages: list[dict[str, Any]]) -> int:
-        return max(1, len(json.dumps(messages, default=str)) // 3)
+        """Estimate token count — text via char heuristic, images via fixed cost."""
+        total = 0
+        for msg in messages:
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict):
+                        if part.get("type") == "image_url":
+                            total += DuckHarnessAgent._IMAGE_TOKEN_COST
+                        elif part.get("type") == "text":
+                            total += len(part.get("text", "")) // 3
+            elif isinstance(content, str):
+                total += len(content) // 3
+            tool_calls = msg.get("tool_calls")
+            if tool_calls:
+                total += len(json.dumps(tool_calls, default=str)) // 3
+        return max(1, total)
 
     @staticmethod
     def _drop_oldest_history_block(history: list[dict[str, Any]], *, preserve_recent: int) -> bool:
@@ -530,7 +548,30 @@ class DuckHarnessAgent(DirectStepAgent):
             prev_idx = len(trimmed_history) - len(history) - 1
             if prev_idx >= 0 and trimmed_history[prev_idx].get("role") == "user":
                 history = [trimmed_history[prev_idx], *history]
-        return self._drop_until_first_user_message(history)
+        history = self._drop_until_first_user_message(history)
+        self._strip_old_images(history, keep_last_n_user=2)
+        return history
+
+    @staticmethod
+    def _strip_old_images(history: list[dict[str, Any]], *, keep_last_n_user: int) -> None:
+        """Remove image_url blocks from all but the last N user messages.
+
+        Vision models tokenize images as hundreds/thousands of tokens
+        regardless of file size. Carrying old frame images in persistent
+        history quickly exhausts the context window. Only the most recent
+        frames need images — older ones are text-only.
+        """
+        user_indices = [i for i, m in enumerate(history) if m.get("role") == "user"]
+        cutoff_indices = set(user_indices[-keep_last_n_user:]) if keep_last_n_user > 0 else set()
+        for i in user_indices:
+            if i in cutoff_indices:
+                continue
+            content = history[i].get("content")
+            if not isinstance(content, list):
+                continue
+            history[i]["content"] = [
+                p for p in content if not (isinstance(p, dict) and p.get("type") == "image_url")
+            ]
 
     # ── Helpers ────────────────────────────────────────────────────────────
 
