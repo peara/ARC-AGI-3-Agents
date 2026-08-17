@@ -45,9 +45,14 @@ ALL_KEYS: list[str] = [key for _, key in CANONICAL_LABELS]
 #   "World model: some text"
 #   "- Goal model: some text"
 #   "* Action model: some text"
-# The leading dash/star and whitespace before the label are stripped.
+#   "**World model**: some text"   (markdown bold — two leading stars)
+#   "- **World model**: some text" (list + markdown bold)
+# The leading dashes/stars and whitespace before the label are stripped.
+# Using [-*]* (not [-*]?) so "**label**:" is parsed correctly: both
+# leading stars are consumed, and the trailing "**" before the colon
+# is stripped by the \s*:\s* boundary.
 _LABEL_LINE_RE = re.compile(
-    r"^\s*[-*]?\s*"            # optional leading - or * plus whitespace
+    r"^\s*[-*]*\s*"             # leading - or * characters (greedy) plus whitespace
     r"(.+?)"                    # capture group 1: the label name
     r"\s*:\s*"                  # colon separator (with optional whitespace)
     r"(.*)"                     # capture group 2: rest of the first line
@@ -79,7 +84,7 @@ def extract_labeled_blocks(content: str, labels: list[str]) -> dict[str, str]:
     matches = list(_LABEL_LINE_RE.finditer(content))
 
     for idx, match in enumerate(matches):
-        raw_label = match.group(1).strip()
+        raw_label = match.group(1).strip().strip("*")
         first_line_content = match.group(2).strip()
         normalised = raw_label.lower()
 
@@ -125,6 +130,52 @@ def extract_world_model(content: str) -> dict[str, str]:
             result[target_key] = raw_blocks[fallback_label]
 
     return result
+
+
+def extract_world_model_strict(content: str) -> tuple[dict[str, str], list[str]]:
+    """Extract world model and report which canonical labels were missing.
+
+    Like :func:`extract_world_model` but returns a ``(parsed, missing)`` tuple:
+
+    * ``parsed`` — dict with all 7 canonical keys.  Values come from the
+      response; the literal string ``"None"`` is preserved as-is (the LLM
+      sometimes writes ``None`` instead of leaving a block empty); blocks
+      absent from the response map to ``""``.
+    * ``missing`` — list of canonical *display* labels (e.g. ``"World model"``)
+      that were not found in the response at all — neither via their canonical
+      label nor via a fallback label.
+    """
+    parsed = extract_world_model(content)
+
+    # Determine which labels actually appeared in the text by scanning matches
+    all_search_labels = list(ALL_LABELS) + list(FALLBACK_LABELS.keys())
+    label_set = {label.lower(): label for label in all_search_labels}
+    matches = list(_LABEL_LINE_RE.finditer(content))
+
+    found_keys: set[str] = set()
+    for match in matches:
+        raw_label = match.group(1).strip().strip("*").lower()
+        if raw_label not in label_set:
+            continue
+        matched_key = label_set[raw_label].lower()
+        # Map to canonical key
+        for display_label, key in CANONICAL_LABELS:
+            if display_label.lower() == matched_key:
+                found_keys.add(key)
+                break
+        else:
+            # Check fallback mappings
+            for fb_label, target_key in FALLBACK_LABELS.items():
+                if fb_label == matched_key:
+                    found_keys.add(target_key)
+                    break
+
+    missing: list[str] = [
+        display_label for display_label, key in CANONICAL_LABELS
+        if key not in found_keys
+    ]
+
+    return parsed, missing
 
 
 def format_world_model(model: dict[str, str]) -> str:

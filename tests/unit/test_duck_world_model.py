@@ -2,19 +2,15 @@
 
 from __future__ import annotations
 
-import pytest
-
 from agents.duck_harness_agent.world_model import (
     ALL_KEYS,
-    ALL_LABELS,
     CANONICAL_LABELS,
-    FALLBACK_LABELS,
     clear_world_model,
     extract_labeled_blocks,
     extract_world_model,
+    extract_world_model_strict,
     format_world_model,
 )
-
 
 # ── Tests ──────────────────────────────────────────────────────────────────
 
@@ -172,3 +168,107 @@ def test_format_world_model_empty():
     # Each label should appear with just a colon (no trailing content)
     for label, _ in CANONICAL_LABELS:
         assert f"{label}:" in text
+
+
+# ── Markdown bold stripping tests ────────────────────────────────────────────
+
+
+def test_markdown_bold_label():
+    """**World model**: content → label='World model', not 'World model**'."""
+    content = "**World model**: Grid is 64x64\n**Plan**: Go right"
+    result = extract_world_model(content)
+    assert result["world_model"] == "Grid is 64x64"
+    assert result["current_plan"] == "Go right"
+
+
+def test_list_markdown_bold_label():
+    """- **World model**: content → label='World model'."""
+    content = "- **World model**: Grid is 64x64\n- **Plan**: Go right"
+    result = extract_world_model(content)
+    assert result["world_model"] == "Grid is 64x64"
+    assert result["current_plan"] == "Go right"
+
+
+def test_plain_label_still_works():
+    """World model: content (no markdown) still parsed correctly."""
+    content = "World model: Grid is 64x64\nPlan: Go right"
+    result = extract_world_model(content)
+    assert result["world_model"] == "Grid is 64x64"
+    assert result["current_plan"] == "Go right"
+
+
+def test_dash_label_still_works():
+    """- World model: content (dash prefix) still parsed correctly."""
+    content = "- World model: Grid is 64x64\n- Plan: Go right"
+    result = extract_world_model(content)
+    assert result["world_model"] == "Grid is 64x64"
+    assert result["current_plan"] == "Go right"
+
+
+def test_star_label_still_works():
+    """* World model: content (star prefix) still parsed correctly."""
+    content = "* World model: Grid is 64x64\n* Plan: Go right"
+    result = extract_world_model(content)
+    assert result["world_model"] == "Grid is 64x64"
+    assert result["current_plan"] == "Go right"
+
+
+# ── extract_world_model_strict tests ─────────────────────────────────────────
+
+
+def test_strict_all_present():
+    """All 7 labels found → parsed dict full, missing empty."""
+    content = """\
+World model: The grid has a 3x3 pattern
+Goal model: Reach the green square
+Action model: Move right when path is clear
+Recent findings: Blue entity moved left
+Open questions: What does the red switch do?
+Plan: Move right 3 times
+Cross-level notes: Shares mechanics with level 1"""
+    parsed, missing = extract_world_model_strict(content)
+    assert parsed["world_model"] == "The grid has a 3x3 pattern"
+    assert parsed["goal_model"] == "Reach the green square"
+    assert missing == []
+
+
+def test_strict_missing_labels():
+    """Missing labels reported in missing list with display labels."""
+    content = "World model: Grid is 64x64\nPlan: Go right"
+    parsed, missing = extract_world_model_strict(content)
+    assert parsed["world_model"] == "Grid is 64x64"
+    assert parsed["current_plan"] == "Go right"
+    assert parsed["goal_model"] == ""
+    assert "Goal model" in missing
+    assert "Action model" in missing
+    assert "Recent findings" in missing
+    assert "Open questions" in missing
+    assert "Cross-level notes" in missing
+    assert "World model" not in missing
+    assert "Plan" not in missing
+
+
+def test_strict_none_preserved_as_string():
+    """LLM writes 'None' → preserved as 'None' string, not missing."""
+    content = "World model: None\nPlan: Go right"
+    parsed, missing = extract_world_model_strict(content)
+    assert parsed["world_model"] == "None"
+    assert "World model" not in missing
+
+
+def test_strict_empty_block_not_missing():
+    """Label present with empty value is not missing (value may include next block)."""
+    content = "World model: None\nPlan: Go right"
+    parsed, missing = extract_world_model_strict(content)
+    assert parsed["world_model"] == "None"
+    assert "World model" not in missing
+
+
+def test_strict_fallback_found_not_missing():
+    """Fallback label found → canonical key not in missing list."""
+    content = "Hypothesis: Entities rotate\nNext test: Try action 5"
+    parsed, missing = extract_world_model_strict(content)
+    assert parsed["world_model"] == "Entities rotate"
+    assert parsed["current_plan"] == "Try action 5"
+    assert "World model" not in missing
+    assert "Plan" not in missing
