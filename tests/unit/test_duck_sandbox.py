@@ -2,19 +2,13 @@
 
 from __future__ import annotations
 
-import time
-
-import pytest
+import logging
 
 from agents.duck_harness_agent.sandbox import (
-    DuckSandbox,
-    SandboxResult,
-    _ALLOWED_IMPORTS,
     _DANGEROUS_BUILTINS,
-    _DUNDER_PATTERN,
     _MAX_OUTPUT_CHARS,
+    DuckSandbox,
 )
-
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -252,3 +246,48 @@ def test_submodule_import():
     )
     assert result.error is None, f"Unexpected error: {result.error}"
     assert "ok" in result.output
+
+
+def test_dunder_import_still_blocked():
+    """__import__ is removed from builtins, and dunder source is rejected."""
+    sandbox = _make_sandbox()
+    result = sandbox.run(
+        code="__import__('os')",
+        objects=(),
+        adjacency=frozenset(),
+        history=[],
+    )
+    assert result.error is not None
+    assert "dunder" in result.error.lower()
+    assert "__import__" not in _DANGEROUS_BUILTINS
+
+
+def test_history_frame_key():
+    """History entries with 'frame' key are accessible in sandbox."""
+    sandbox = _make_sandbox()
+    code = "result = history[-1]['frame']; print(result, len(result))"
+    result = sandbox.run(
+        code=code,
+        objects=(),
+        adjacency=frozenset(),
+        history=[
+            {"action": 1, "frame_index": 0, "frame": [[0] * 4 for _ in range(4)]}
+        ],
+    )
+    assert result.error is None, f"Unexpected error: {result.error}"
+    assert "[[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]" in result.output
+    assert " 4" in result.output
+
+
+def test_sandbox_error_logged(caplog):
+    """Sandbox child-process errors are surfaced as result.error."""
+    sandbox = _make_sandbox()
+    with caplog.at_level(logging.WARNING, logger="agents.duck_harness_agent.sandbox"):
+        result = sandbox.run(
+            code="1/0",
+            objects=(),
+            adjacency=frozenset(),
+            history=[],
+        )
+    assert result.error is not None
+    assert "division by zero" in result.error.lower()
