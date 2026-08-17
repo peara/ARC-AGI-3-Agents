@@ -363,9 +363,15 @@ class DuckHarnessAgent(DirectStepAgent):
     # ── step_env override ─────────────────────────────────────────────────
 
     def step_env(self, action: GameAction) -> FrameData | None:
-        """Step the environment, then re-segment for the next sandbox call."""
+        """Step the environment, then re-segment for the next sandbox call.
+
+        ``action_counter`` is incremented by the base ``DirectStepAgent.step_env``
+        so multi-action batching (``for _ in range(5): action(1)``) is counted
+        correctly — one increment per action, not one per ``choose_action()``.
+        """
         frame = self.take_action(action)
         if frame is not None:
+            self.action_counter += 1
             self.append_frame(frame, action)
             logger.info(
                 f"{self.game_id} - {action.name}: count {self.action_counter}, "

@@ -1,9 +1,10 @@
-"""DirectStepAgent — base class for agents that step the environment from choose_action().
+"""DirectStepAgent — base class for agents that step the environment from within choose_action().
 
 Unlike the default Agent.main() loop which calls take_action() after choose_action(),
-DirectStepAgent.main() only calls choose_action() and increments the counter. The
-concrete subclass is expected to call step_env() from within choose_action() (or from
-a sandbox callback) to advance the environment.
+DirectStepAgent.main() only calls choose_action() in a loop. The concrete subclass
+controls when actions are taken by calling step_env() — typically from a sandbox
+action callback. ``action_counter`` is incremented in ``step_env()``, not ``main()``,
+so multi-action batching (e.g. ``for _ in range(5): action(1)``) is counted correctly.
 """
 
 import logging
@@ -20,18 +21,18 @@ logger = logging.getLogger()
 
 
 class DirectStepAgent(Agent, ABC):
-    """Agent whose main loop does NOT call take_action().
+    """Agent whose main loop delegates all action-taking to ``choose_action``.
 
-    The loop body is:
-        action = choose_action(frames, latest_frame)
-        action_counter += 1
+    The loop body is just:
+        choose_action(frames, latest_frame)
 
-    Subclasses call step_env(action) when they are ready to advance the
-    environment — typically from within choose_action() or from a sandbox
-    action callback.
+    ``action_counter`` is NOT incremented in ``main()`` — it is incremented
+    in ``step_env()`` each time an action is actually taken. This correctly
+    handles multi-action batching where the sandbox calls ``action()``
+    multiple times in a single ``choose_action()`` turn.
 
-    step_env(action) wraps take_action() + append_frame() and returns the
-    resulting FrameData, so the subclass never needs to call those directly.
+    Subclasses call ``step_env(action)`` to advance the environment.
+    The return value of ``choose_action`` is unused by ``main()``.
     """
 
     @trace_agent_session
@@ -51,7 +52,6 @@ class DirectStepAgent(Agent, ABC):
                     self.arc_env.observation_space if self.arc_env else None
                 ),
             )
-            self.action_counter += 1
 
         self.cleanup()
 
@@ -60,9 +60,15 @@ class DirectStepAgent(Agent, ABC):
 
         Calls take_action() then append_frame(), returning the new frame.
         Returns ``None`` if the frame data failed validation.
+
+        ``action_counter`` is incremented here (not in ``main()``) because
+        the sandbox may call ``action()`` multiple times in a single
+        ``choose_action()`` (multi-action batching). Each action must be
+        counted for accurate tracking and ``MAX_ACTIONS`` enforcement.
         """
         frame = self.take_action(action)
         if frame is not None:
+            self.action_counter += 1
             self.append_frame(frame, action)
             logger.info(
                 f"{self.game_id} - {action.name}: count {self.action_counter}, "
