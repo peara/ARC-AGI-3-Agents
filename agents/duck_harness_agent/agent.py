@@ -74,6 +74,11 @@ class DuckHarnessAgent(DirectStepAgent):
         self._previous_grid: list[list[int]] | None = None
         self._valid_actions: list[int] = []
         self._last_action_result: dict[str, Any] = {}
+        self._history_messages: list[dict[str, Any]] = []
+        self._context_budget_tokens = max(
+            1024,
+            config.context_window - config.reply_reserve_tokens - config.request_safety_margin_tokens,
+        )
 
         # Sandbox — self.step_env is the callback
         self._sandbox = DuckSandbox(
@@ -102,6 +107,9 @@ class DuckHarnessAgent(DirectStepAgent):
         self, frames: list[FrameData], latest_frame: FrameData
     ) -> GameAction:
         """Run one turn: render, segment, prompt, tool-loop, act."""
+
+        previous_history = list(self._history_messages)
+        preserve_history = True
 
         # ── 1. Iteration-0 guard: empty placeholder → RESET ────────────
         if not getattr(frames[-1], "frame", None):
@@ -148,12 +156,9 @@ class DuckHarnessAgent(DirectStepAgent):
         )
         system_prompt = build_system_prompt(include_vision=True)
 
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": system_prompt},
-        ]
-        # Add user prompt (build_user_prompt returns a list containing
-        # one user message dict)
-        messages.extend(user_content)
+        messages: list[dict[str, Any]] = self._trim_messages_for_context(
+            [{"role": "system", "content": system_prompt}, *self._history_messages, *user_content],
+        )
 
         # ── 9. Tool loop ───────────────────────────────────────────────
         action_taken: GameAction | None = None
@@ -163,13 +168,22 @@ class DuckHarnessAgent(DirectStepAgent):
             turn_count = step + 1
 
             try:
+                messages = self._trim_messages_for_context(messages)
                 response = self._services.llm_chat(
                     messages=messages,
                     tools=[PYTHON_TOOL_SCHEMA],
                     tool_choice="auto",
                 )
             except Exception as exc:
+                exc_str = str(exc).lower()
+                if "context_length" in exc_str or "context length" in exc_str or "too long" in exc_str:
+                    trimmed = self._trim_messages_for_context(messages, extra_safety_tokens=512)
+                    if len(trimmed) < len(messages):
+                        messages = trimmed
+                        logger.warning("duckharness: context overflow — trimmed history, retrying")
+                        continue
                 logger.warning(f"duckharness: LLM call failed: {exc}")
+                preserve_history = False
                 break
 
             # Check for tool calls
@@ -358,6 +372,11 @@ class DuckHarnessAgent(DirectStepAgent):
         self._frame_index += 1
 
         # ── 16. Return action ──────────────────────────────────────────
+        if preserve_history:
+            self._history_messages = self._persistent_history_messages(messages)
+        else:
+            self._history_messages = previous_history
+
         return action_taken
 
     # ── step_env override ─────────────────────────────────────────────────
@@ -433,6 +452,85 @@ class DuckHarnessAgent(DirectStepAgent):
         state_response["last_action_result"] = self._last_action_result
 
         return state_response
+
+    # ── Context trimming ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _estimate_tokens(messages: list[dict[str, Any]]) -> int:
+        return max(1, len(json.dumps(messages, default=str)) // 3)
+
+    @staticmethod
+    def _drop_oldest_history_block(history: list[dict[str, Any]], *, preserve_recent: int) -> bool:
+        removable = len(history) - preserve_recent
+        if removable <= 0:
+            return False
+        history.pop(0)
+        while history and history[0].get("role") == "tool" and len(history) > preserve_recent:
+            history.pop(0)
+        while history and history[0].get("role") != "user" and len(history) > preserve_recent:
+            history.pop(0)
+        return True
+
+    @staticmethod
+    def _keep_recent_assistant_turns(messages: list[dict[str, Any]], *, max_turns: int) -> list[dict[str, Any]]:
+        if max_turns <= 0 or not messages:
+            return []
+        kept_reversed: list[dict[str, Any]] = []
+        assistant_turns = 0
+        for message in reversed(messages):
+            kept_reversed.append(message)
+            if message.get("role") == "assistant":
+                assistant_turns += 1
+                if assistant_turns >= max_turns:
+                    break
+        kept = list(reversed(kept_reversed))
+        while kept and kept[0].get("role") == "tool":
+            kept.pop(0)
+        return kept
+
+    @staticmethod
+    def _drop_until_first_user_message(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        trimmed = list(history)
+        while trimmed and trimmed[0].get("role") != "user":
+            trimmed.pop(0)
+        return trimmed
+
+    def _trim_messages_for_context(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        preserve_recent: int = 1,
+        extra_safety_tokens: int = 0,
+    ) -> list[dict[str, Any]]:
+        if not messages:
+            return []
+        system_message = messages[0]
+        history = list(messages[1:])
+        budget = max(1, self._context_budget_tokens - extra_safety_tokens)
+        while history and self._estimate_tokens([system_message, *history]) > budget:
+            if not self._drop_oldest_history_block(history, preserve_recent=preserve_recent):
+                break
+        history = self._drop_until_first_user_message(history)
+        return [system_message, *history]
+
+    def _persistent_history_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        trimmed = self._trim_messages_for_context(messages)
+        if not trimmed:
+            return []
+        trimmed_history = trimmed[1:]
+        history = self._keep_recent_assistant_turns(
+            trimmed_history,
+            max_turns=self._config.max_history_turns,
+        )
+        if (
+            history
+            and history[0].get("role") != "user"
+            and len(trimmed_history) > len(history)
+        ):
+            prev_idx = len(trimmed_history) - len(history) - 1
+            if prev_idx >= 0 and trimmed_history[prev_idx].get("role") == "user":
+                history = [trimmed_history[prev_idx], *history]
+        return self._drop_until_first_user_message(history)
 
     # ── Helpers ────────────────────────────────────────────────────────────
 
