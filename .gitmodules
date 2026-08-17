@@ -1,0 +1,3 @@
+[submodule "reference/duck-harness"]
+	path = reference/duck-harness
+	url = https://github.com/Tufalabs/duck-harness.git
