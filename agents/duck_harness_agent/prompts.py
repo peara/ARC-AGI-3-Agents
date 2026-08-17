@@ -66,7 +66,10 @@ The following variables are preloaded in the Python sandbox each turn:
 the first frame.
 - `history`: A list of past frames and actions. Each entry is a dict with:
   - `action`: int — the action ID that was taken.
-  - `frame`: list of lists — the grid after that action.
+  - `frame`: list[list[int]] — the 64×64 grid (color indices 0–15) after that \
+action. This is the same format as `current_frame` — a 2D array of integers, \
+NOT a list of objects. To find objects in a past frame, scan the grid for \
+cells matching a color: `[(r, c) for r in range(64) for c in range(64) if frame[r][c] == 14]`.
   Use `history[-1]` for the most recent past frame.
 - `valid_actions`: A list of action IDs available this turn (e.g. [0, 1, 2, 3]).
 - `last_action_result`: A string describing what happened after the last \
