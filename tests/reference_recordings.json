@@ -2,7 +2,7 @@
   "recordings": [
     {
       "name": "ls20-random-legal",
-      "path": "recordings/ls20-9607627b.random.80.4778fe67-d8c5-4853-90d8-36aff85bb079.recording.jsonl",
+      "path": "recordings/ls20-9607627b.random.80.a4c1812d-d46e-4f04-bc3b-3cd4bb812247.recording.jsonl",
       "plan_cases": [
         {"entity_id": 0, "start_frame": 0, "goal_frame": 10},
         {"entity_id": 0, "start_frame": 0, "goal_frame": 40}
@@ -25,6 +25,34 @@
         "controllable_entity_id": 0,
         "min_counters": 1,
         "min_animation_events": 1
+      },
+      "effects": {
+        "expect_terminal_rule": true,
+        "expect_counter_rule": true
+      }
+    },
+    {
+      "name": "ls20-gameover",
+      "path": "recordings/ls20-9607627b.llmcuriosity.978d496a-e522-47b3-b422-cafb764e56c2.recording.jsonl",
+      "plan_cases": [],
+      "perception": {
+        "controllable_entity_id": 0,
+        "min_counters": 0,
+        "min_animation_events": 0
+      },
+      "effects": {
+        "expect_terminal_rule": true,
+        "expect_counter_rule": true
+      }
+    },
+    {
+      "name": "wa30-human-reset",
+      "path": "recordings/wa30.human.697d5e3e-6233-492b-9678-d5e0d5800ef6.recording.jsonl",
+      "plan_cases": [],
+      "perception": {
+        "controllable_entity_id": 0,
+        "min_counters": 0,
+        "min_animation_events": 0
       },
       "effects": {
         "expect_terminal_rule": true,
