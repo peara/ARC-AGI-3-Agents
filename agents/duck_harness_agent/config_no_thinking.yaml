@@ -1,0 +1,11 @@
+llm_thinking: false
+llm_temperature: 0.6
+llm_top_p: 0.95
+max_tool_steps: 12
+tool_timeout: 30.0
+tool_output_tokens: 1024
+render_scale: 8
+max_history_turns: 30
+context_window: 16384
+reply_reserve_tokens: 4096
+request_safety_margin_tokens: 512
