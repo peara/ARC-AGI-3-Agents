@@ -1,7 +1,7 @@
 # Duck Harness Agent - Design Document
 
 > Architecture and data flow for the DuckHarnessAgent (duckharness).
-> Last updated: 2026-08-16
+> Last updated: 2026-08-18
 
 ---
 
@@ -175,14 +175,35 @@ Child Process                        Parent Process
 
 ```python
 _DANGEROUS_BUILTINS = frozenset({
-    "__import__", "open", "compile", "eval", "exec",
+    "open", "compile", "eval", "exec",
     "getattr", "setattr", "delattr", "globals", "locals",
     "vars", "dir", "type", "object",
 })
 ```
 
+Note: `__import__` was removed from this set and replaced with a safe
+`_safe_import` wrapper that allows only whitelisted modules (see below).
+
 **Dunder rejection:** Before spawning the process, any code matching `__\w+__`
 is rejected with `SandboxResult(error="Error: dunder attributes are not allowed")`.
+
+**Whitelisted imports**
+
+The `import` statement compiles to `__import__()` calls, so blocking it
+entirely prevented all stdlib imports. The safe replacement checks the
+top-level module name against a whitelist:
+
+```python
+_ALLOWED_IMPORTS = frozenset({
+    "math", "re", "collections", "itertools",
+    "functools", "json", "string", "random",
+})
+```
+
+Non-whitelisted imports raise `ImportError` with a message listing allowed
+modules. The dunder guard (`__\w+__` regex) remains as a separate,
+complementary security layer. It rejects source code containing explicit
+`__import__('os')` calls.
 
 **Output cap:** `print()` output is capped at `_MAX_OUTPUT_CHARS = 4096`
 (approximately 1024 tokens). Excess is truncated with "... (truncated)".
@@ -212,8 +233,16 @@ When the parent sends the state response back, the child updates:
 - `previous_frame` — becomes what `current_frame` was before the action.
 - `current_frame` — the new grid.
 - `valid_actions` — updated available actions.
-- `last_action_result` — human-readable result string ("Level completed!",
-  "Game over.", or "Action X taken.").
+- `last_action_result` — structured dict with keys:
+  - `board_changed` (bool)
+  - `done` (bool)
+  - `level_completed` (bool)
+  - `game_over` (bool)
+  - `run_complete` (bool)
+  - `reward` (float or int)
+  - `valid_actions` (list)
+
+On the first frame this dict is empty `{}` because no prior action was taken.
 
 ---
 
@@ -359,8 +388,27 @@ The function returns `[{"role": "user", "content": [...]}]`.
 | `render_scale` | `8` | Grid upscale factor (64x64 -> 512x512) |
 | `max_history_turns` | `30` | History entries carried across turns |
 | `context_window` | `32768` | LLM context window size |
+| `reply_reserve_tokens` | `4096` | Tokens reserved for the LLM's reply |
+| `request_safety_margin_tokens` | `512` | Safety margin for context trimming |
 
 Override via YAML file (`DUCK_HARNESS_CONFIG` env var) or constructor.
+
+### No-thinking configuration
+
+Production runs use a no-thinking config to avoid context explosion:
+
+```yaml
+llm_thinking: false
+context_window: 16384  # half the default
+reply_reserve_tokens: 4096
+request_safety_margin_tokens: 512
+```
+
+Run with:
+
+```bash
+DUCK_HARNESS_CONFIG=agents/duck_harness_agent/config_no_thinking.yaml uv run main.py --agent=duckharness --game=<game_id>
+```
 
 ### LLM server
 
@@ -423,9 +471,15 @@ See `docs/reports/recording-format.md` for the full recording format reference.
   is chosen repeatedly. It relies on the LLM noticing stuck behavior in its own
   world model.
 
-- **Sandbox process overhead:** Each `python()` call spawns a new
-  `multiprocessing.Process`. At 12 calls per turn, process creation overhead adds
-  up. There is no process reuse.
+- **Thinking mode context explosion:** With `llm_thinking=true`, chain-of-thought
+  tokens consume the context budget within approximately 5 turns, causing overflow
+  errors or forcing history truncation that drops critical state. Use the no-thinking
+  config for all gameplay runs.
+
+- **Context growth on long games:** Even without thinking, persistent history grows
+  each turn. The agent trims history via `_estimate_tokens` and
+  `_drop_oldest_history_block`, but can still exhaust the context window on games
+  with many turns.
 
 - **Grid boundary blindness:** The LLM sees column 63 but doesn't always connect
   that to "can't move further right." No explicit boundary info is in the prompt.
@@ -435,6 +489,10 @@ See `docs/reports/recording-format.md` for the full recording format reference.
 
 - **Tactical momentum:** Once the LLM writes a plan like "keep moving right," the
   carry-forward can reinforce stuck behavior because the model is fed back verbatim.
+
+- **No hypothesis-driven exploration:** The agent doesn't systematically test
+  hypotheses about game mechanics. It observes and acts, but rarely designs
+  experiments to confirm or reject competing theories.
 
 ---
 
@@ -457,6 +515,67 @@ See `docs/reports/recording-format.md` for the full recording format reference.
 | `agents/recorder.py` | `Recorder` — `*.recording.jsonl`, `*.llm.jsonl`, `*.logs.log`, `*.images/` sidecars |
 | `agents/agent.py` | `Agent` base class — `main()` loop (not used by DirectStepAgent), `choose_action` contract, `append_frame` |
 | `agents/__init__.py` | `AVAILABLE_AGENTS` registry — `duckharness` entry |
+
+---
+
+## 11. Evolution & Lessons Learned
+
+### What we tried
+
+1. **Initial implementation:** DirectStepAgent pattern, sandbox with restricted builtins, single-tool `python()` loop, world model with 7 labeled blocks.
+
+2. **World model strict parsing:** regex strips markdown bold (`**Label**:`), `extract_world_model_strict()` returns a `(parsed, missing)` tuple, and the agent re-prompts once if blocks are missing. The prompt says "None" is valid for empty blocks. Bug fix: world model parsing was moved before the fallback random action so the re-prompt can fire.
+
+3. **Prompt alignment with original Duck Harness:** multi-action guidance, search algorithms (BFS/DFS/pathfinding), compact output, tool session encouragement, visual game addendums (no-player assumption, timer bars, re-ground after score change). Removed "terminal call"/"exactly once" language.
+
+4. **Structured `last_action_result`:** changed from a plain string to a dict with `board_changed`, `done`, `level_completed`, `game_over`, `run_complete`, `reward`, and `valid_actions`.
+
+5. **Action counter bug fix:** moved `action_counter` increment from `main()` to `step_env()` so multi-action batching counts correctly.
+
+6. **Prompt wording:** "verify" changed to "analyze".
+
+7. **Bounded loops:** removed the `while True` example, replaced with `for _ in range(20)` plus per-action analysis and a `board_changed` check.
+
+8. **Persistent conversation history (`_history_messages`):** 6 trimming methods, context budget of 28160 tokens, context overflow recovery.
+
+9. **Image stripping:** `_strip_old_images()` removes `image_url` blocks from all but the last 2 user messages.
+
+10. **Sandbox import whitelist:** `_ALLOWED_IMPORTS = frozenset({"math", "re", "collections", "itertools", "functools", "json", "string", "random"})` with a safe `__import__` replacement. The dunder guard is preserved as a complementary layer.
+
+11. **History `frame` key:** grid stored as `list[list[int]]` in history entries, matching the prompt spec.
+
+12. **Sandbox error logging:** `logger.warning()` for timeout, EOF, or crash in `sandbox.py`, and for `sandbox_result.error` in `agent.py`.
+
+### Why thinking mode doesn't work
+
+The `llm_thinking` config flag defaults to `True`, but we run with a no-thinking config (`config_no_thinking.yaml`) that sets `llm_thinking: false` and `context_window: 16384` (half the default 32768).
+
+With thinking enabled, the LLM's chain-of-thought tokens consume a massive context budget. The agent uses persistent conversation history across turns. Each turn adds a system prompt, an image, a user message, an assistant response (with thinking tokens), tool calls, and tool results. After approximately 5 turns, the accumulated thinking tokens exceed the context window. This causes context overflow errors or forces aggressive history trimming that drops critical state.
+
+With thinking on, latency grew from 40 seconds to 125 seconds per LLM call over 25 frames as the context expanded. At 0.04 fps overall, the agent couldn't act fast enough.
+
+The no-thinking config (16384 context window) forces the model to be compact. Responses contain only code and world model blocks, with no hidden reasoning. This keeps context growth bounded and history useful for longer runs.
+
+`reply_reserve_tokens=4096` and `request_safety_margin_tokens=512` in the config ensure the LLM always has room to reply even when history is near the budget.
+
+### What it's good at
+
+- **Single-frame pattern recognition:** The LLM can identify objects, colors, and spatial relationships from the grid image plus segmentation data.
+- **Action discovery:** It correctly identifies what actions do by testing them and observing `last_action_result` and grid diffs.
+- **Multi-action batching:** It can execute sequences of the same action inside a bounded loop, checking `board_changed` after each step.
+- **Compact state tracking:** World model carry-forward lets it maintain hypotheses across turns.
+- **Sandbox Python execution:** It can compute distances, run BFS paths, count objects, and diff frames, all inside the sandbox.
+- **Re-grounding after level transitions:** The world model clears on `WIN` or `GAME_OVER`.
+
+### What it still cannot do
+
+- **Strategic hypothesis testing:** The agent identifies game mechanics (for example, "action 5 attaches blue objects") but doesn't test delivery hypotheses early. In a collection game it went "collect all, then deliver" instead of "collect one, deliver, repeat," never testing whether delivering actually works.
+- **Breaking out of stuck plans:** The carry-forward world model can reinforce bad plans. Once the agent writes "keep moving right," it tends to repeat that plan verbatim.
+- **Understanding implicit game mechanics:** Timer bars, score displays, and HUD elements are described in the prompt, but the agent still sometimes treats them as gameplay objects.
+- **Handling ACTION6 complex actions well:** The sandbox supports dict-form complex actions, but the LLM rarely uses them effectively.
+- **Efficient exploration:** There is no built-in repeat-action guard. The agent can waste many turns repeating the same action that had no effect.
+- **Cross-level learning:** State resets between games and levels, so no knowledge accumulates.
+- **Context window discipline:** Even without thinking, the agent can still exhaust context on long games if it writes verbose world model blocks or long Python code.
 
 ---
 
