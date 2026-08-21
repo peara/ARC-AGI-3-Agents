@@ -174,7 +174,7 @@ class SimulatorSandbox:
             if fn is None:
                 print("No simulate function set. Call set_simulate(func) first.")
                 return {"error": "no simulate function"}
-            return run_check(fn, self._grids, self._actions, verbose=True)  # type: ignore[no-any-return]
+            return run_check(fn, self._grids, self._actions, verbose=True)
 
         ns["check"] = check
 
@@ -192,7 +192,7 @@ class SimulatorSandbox:
             if fn is None:
                 print("No simulate function set. Call set_simulate(func) first.")
                 return {"error": "no simulate function"}
-            return diagnose_fn(fn, self._grids, self._actions)  # type: ignore[no-any-return]
+            return diagnose_fn(fn, self._grids, self._actions)
 
         ns["diagnose"] = diagnose
 
