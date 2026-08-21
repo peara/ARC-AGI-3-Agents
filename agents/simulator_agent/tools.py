@@ -16,7 +16,7 @@ from perception.motion import compute_delta
 
 
 def grid_to_np(grid: list[list[int]]) -> np.ndarray:
-    return np.array(grid, dtype=int)  # type: ignore[no-any-return]
+    return np.array(grid, dtype=int)
 
 
 def grid_diff(

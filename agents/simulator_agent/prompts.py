@@ -60,6 +60,9 @@ PYTHON_TOOL_SCHEMA: dict[str, Any] = {
 SYSTEM_PROMPT: str = """\
 You are building a grid simulator for an ARC-AGI-3 game.
 
+You have {max_turns} turns total to build a correct simulator. Each tool call \
+counts as one turn. Use them wisely.
+
 You have access to a recording of {n_frames} frames. Each frame is a 64x64 grid \
 of color indices (0-15). Between each pair of consecutive frames, an action was \
 taken (integer 0-7).
@@ -104,8 +107,8 @@ Column 0 is the left, column 63 is the right.
 - The most common color is usually the background/floor. Objects sit ON it.
 - Some colors may be walls/obstacles — objects cannot move into wall cells.
 - Actions move or transform objects. Each action ID typically does one thing.
-- Some games have a HUD (at the edge of the grid) that changes every frame \
-regardless of the action — like a timer or progress bar.
+- If you identify cells that are unimportant and should not count toward your \
+accuracy, call set_ignore(cells) to exclude them from check() and diagnose().
 - The game is deterministic: the same (state, action) always produces the \
 same next state.
 
@@ -144,12 +147,19 @@ UTILITIES:
 SIMULATOR CONTROL:
   set_simulate(func)    -> register your simulate function
   simulate(i, action)   -> run the current simulate function (for self-testing)
+  set_ignore(cells, colors) -> declare cells to skip in check()/diagnose(). \
+Pass cells as [(row, col), ...] or colors as [color_id, ...] or both.
 
 CHECK AND DIAGNOSE:
   check(simulate_fn)    -> test on ALL frames, print per-frame accuracy
   diagnose(simulate_fn) -> test on ALL frames, print semantic error analysis
 
 ## Workflow
+
+You have {max_turns} turns total. Each tool call (python) is one turn. The tool \
+response will tell you which turn you just completed (e.g. "Turn 3/{max_turns} \
+completed. {max_turns} - 3 turns remaining."). Plan accordingly: explore early, \
+then commit to writing simulate, then debug.
 
 Turn 1: LOOK at the first few frames. Call show_frame(0), show_frame(1), \
 show_frame(2) to see the game visually. Then use compute_delta() to see what \

@@ -136,7 +136,10 @@ def run_experiment(
     # Set up LLM client
     client = LLMClient()
 
-    system_prompt = SYSTEM_PROMPT.format(n_frames=sandbox.namespace["n_frames"])
+    system_prompt = SYSTEM_PROMPT.format(
+        n_frames=sandbox.namespace["n_frames"],
+        max_turns=max_turns,
+    )
 
     # Build first user message with initial frame images so the LLM can SEE the game
     initial_content: list[dict[str, Any]] = [
@@ -267,6 +270,10 @@ def run_experiment(
 
             # Build tool response message
             tool_parts: list[str] = []
+            remaining = max_turns - (turn + 1)
+            tool_parts.append(
+                f"Turn {turn + 1}/{max_turns} completed. {remaining} turns remaining."
+            )
             if output:
                 tool_parts.append(output)
             if error:
@@ -324,12 +331,13 @@ def run_experiment(
                 print("LLM declared DONE")
                 break
 
-        # Nudge: if no simulate function was set after 2 turns, push the LLM
-        if sandbox._simulate is None and turn >= 1:  # noqa: SLF001
+        # Deadline nudge: if 3 turns remain and no simulate registered, push the LLM
+        remaining = max_turns - (turn + 1)
+        if remaining <= 3 and sandbox._simulate is None:  # noqa: SLF001
             nudge = (
-                "STOP EXPLORING. Write simulate(frame_index, action) NOW. "
-                "Call set_simulate(func) with your best guess, then call "
-                "check(simulate) to test it. A rough guess is fine — "
+                f"You have {remaining} turns left and no simulate function yet. "
+                "Write simulate(frame_index, action) NOW. Call set_simulate(func) "
+                "then check(simulate) to test it. A rough guess is fine — "
                 "you can revise after seeing check() results."
             )
             messages.append({"role": "user", "content": nudge})

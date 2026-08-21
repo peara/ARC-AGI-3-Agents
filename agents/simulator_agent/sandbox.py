@@ -86,6 +86,7 @@ class SimulatorSandbox:
 
         # Current simulator state
         self._simulate: Callable[[int, int], list[list[int]]] | None = None
+        self._ignore_mask: set[tuple[int, int]] = set()
         self._prev_correct_frames: set[int] = set()
         self.pending_images: list[dict[str, Any]] = []
 
@@ -118,6 +119,31 @@ class SimulatorSandbox:
             return self._simulate(i, action)
 
         ns["simulate"] = simulate
+
+        # ── Ignore mask ───────────────────────────────────────────────
+        def set_ignore(
+            cells: list[tuple[int, int]] | None = None,
+            colors: list[int] | None = None,
+        ) -> None:
+            """Declare cells to skip in check() and diagnose().
+
+            Pass cells as a list of (row, col) positions, or colors as a list
+            of color indices, or both. All matching cells are excluded from
+            accuracy metrics.
+            """
+            mask: set[tuple[int, int]] = set()
+            if cells:
+                mask.update(cells)
+            if colors:
+                for grid in self._grids:
+                    for r in range(len(grid)):
+                        for c in range(len(grid[0])):
+                            if grid[r][c] in colors:
+                                mask.add((r, c))
+            self._ignore_mask = mask
+            print(f"[set_ignore] {len(self._ignore_mask)} cells will be ignored in check()/diagnose()")
+
+        ns["set_ignore"] = set_ignore
 
         # ── Inspection tools (delegated to tools.py) ───────────────────
         ns["atoms"] = segment_atoms
@@ -174,7 +200,7 @@ class SimulatorSandbox:
             if fn is None:
                 print("No simulate function set. Call set_simulate(func) first.")
                 return {"error": "no simulate function"}
-            return run_check(fn, self._grids, self._actions, verbose=True)
+            return run_check(fn, self._grids, self._actions, verbose=True, ignore_mask=self._ignore_mask)
 
         ns["check"] = check
 
@@ -192,7 +218,7 @@ class SimulatorSandbox:
             if fn is None:
                 print("No simulate function set. Call set_simulate(func) first.")
                 return {"error": "no simulate function"}
-            return diagnose_fn(fn, self._grids, self._actions)
+            return diagnose_fn(fn, self._grids, self._actions, ignore_mask=self._ignore_mask)
 
         ns["diagnose"] = diagnose
 
@@ -288,7 +314,8 @@ class SimulatorSandbox:
             }
 
         result = run_check(
-            self._simulate, self._grids, self._actions, verbose=False
+            self._simulate, self._grids, self._actions, verbose=False,
+            ignore_mask=self._ignore_mask,
         )
 
         if "error" in result:

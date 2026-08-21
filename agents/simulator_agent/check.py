@@ -14,6 +14,7 @@ def run_check(
     actions: list[int],
     *,
     verbose: bool = True,
+    ignore_mask: set[tuple[int, int]] | None = None,
 ) -> dict[str, Any]:
     """Test *simulate_fn* against all recorded frame transitions.
 
@@ -25,6 +26,10 @@ def run_check(
       - **changed**: cells where grid_before != grid_after (what the game changed)
       - **correct**: of changed cells, how many simulate predicted right
       - **spurious**: cells simulate changed that shouldn't have changed
+
+    If *ignore_mask* is provided, those cells are excluded from wrong/changed/
+    spurious counts — use ``set_ignore()`` to skip HUD cells that change every
+    frame regardless of the action.
 
     Returns aggregate + per-frame metrics.  Prints a summary when *verbose*.
     """
@@ -60,12 +65,20 @@ def run_check(
         wrong = grid_diff(predicted, grid_after)
         changed = grid_diff(grid_before, grid_after)
 
+        if ignore_mask:
+            wrong = [d for d in wrong if (d[0], d[1]) not in ignore_mask]
+            changed = [d for d in changed if (d[0], d[1]) not in ignore_mask]
+
         changed_set = {(r, c) for r, c, _, _ in changed}
         wrong_set = {(r, c) for r, c, _, _ in wrong}
         correct = len(changed_set - wrong_set)
 
         # Spurious: simulate changed a cell that didn't actually change
         pred_changed = grid_diff(grid_before, predicted)
+        if ignore_mask:
+            pred_changed = [
+                d for d in pred_changed if (d[0], d[1]) not in ignore_mask
+            ]
         pred_changed_set = {(r, c) for r, c, _, _ in pred_changed}
         spurious = len(pred_changed_set - changed_set)
 
@@ -127,12 +140,15 @@ def diagnose(
     simulate_fn: Callable[[int, int], list[list[int]]],
     grids: list[list[list[int]]],
     actions: list[int],
+    ignore_mask: set[tuple[int, int]] | None = None,
 ) -> dict[str, Any]:
     """Run simulate on all frames and print semantic error analysis.
 
     Classifies each wrong cell as MISSED, SPURIOUS, or WRONG_VALUE,
     then clusters errors spatially to identify which object region
     is causing problems.
+
+    If *ignore_mask* is provided, those cells are excluded from the analysis.
     """
     print("=== Diagnosis ===")
     total_wrong = 0
@@ -157,6 +173,10 @@ def diagnose(
 
         actual_diff = grid_diff(grid_before, grid_after)
         pred_diff = grid_diff(grid_before, predicted)
+
+        if ignore_mask:
+            actual_diff = [d for d in actual_diff if (d[0], d[1]) not in ignore_mask]
+            pred_diff = [d for d in pred_diff if (d[0], d[1]) not in ignore_mask]
 
         actual_set = {(r, c) for r, c, _, _ in actual_diff}
         pred_set = {(r, c) for r, c, _, _ in pred_diff}
