@@ -19,6 +19,7 @@ from typing import Any
 from agents.llm_client import LLMClient
 from agents.simulator_agent.prompts import PYTHON_TOOL_SCHEMA, SYSTEM_PROMPT
 from agents.simulator_agent.sandbox import SimulatorSandbox
+from agents.simulator_agent.world_model import extract_notes, format_notes
 from replay.harness import ReplayHarness
 from vision.render import grid_to_image, image_to_base64
 
@@ -173,6 +174,7 @@ def run_experiment(
     )
 
     convergence_threshold = 90.0  # first turn where accuracy >= 90%
+    notes_state: dict[str, str] = {"notes": "", "plan": ""}
 
     for turn in range(max_turns):
         print(f"--- Turn {turn + 1}/{max_turns} ---")
@@ -330,6 +332,18 @@ def run_experiment(
             if response.content and "DONE" in response.content.upper():
                 print("LLM declared DONE")
                 break
+
+        # Parse Notes/Plan from LLM response and carry forward
+        if response.content:
+            parsed = extract_notes(response.content)
+            for key in ("notes", "plan"):
+                if parsed[key]:
+                    notes_state[key] = parsed[key]
+
+        # Inject carried-forward notes before next turn
+        if notes_state["notes"] or notes_state["plan"]:
+            notes_text = format_notes(notes_state)
+            messages.append({"role": "user", "content": notes_text})
 
         # Deadline nudge: if 3 turns remain and no simulate registered, push the LLM
         remaining = max_turns - (turn + 1)

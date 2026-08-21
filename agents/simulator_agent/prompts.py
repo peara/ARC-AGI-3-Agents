@@ -172,6 +172,23 @@ you understood from the images. Call set_simulate(func) then check(simulate).
 Turn 3+: If frames are wrong, LOOK at them: call show_frame(i) on failing \
 frames. Call diagnose(simulate) to see error types. Fix and re-test.
 
+## Notes and Plan (REQUIRED every turn)
+
+Every response MUST end with two labeled blocks:
+
+Notes: what you learned this turn — objects, colors, action effects, \
+elements to ignore (use set_ignore), anything that helps next turn.
+Plan: what you will do next turn — keep it short.
+
+Example:
+Notes: Block is orange(12)+blue(9) at rows 45-49. Moves 5 cells per action. \
+Action 3=left, 4=right, 1=up, 2=down. Sometimes blocked by walls. Yellow bar \
+rows 61-62 shrinks every frame regardless of action — unimportant, will set_ignore.
+Plan: Write simulate with block movement. set_ignore(colors=[11]). check().
+
+These blocks are carried forward so you don't forget between turns. If you \
+learned nothing new, write "Notes: same as before" and "Plan: same as before".
+
 When your simulator is correct (check() shows 0 wrong cells on all frames), \
 say "DONE" in your response.
 """
