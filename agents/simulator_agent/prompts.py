@@ -229,13 +229,23 @@ understanding and planning. Use simulate() to think before you act.
 """
 
 AGENT_WORLD_MODEL_ADDENDUM: str = """\
-Notes and Plan (REQUIRED every turn)
+Notes and Plan
 
-You have a dedicated `update_notes` tool. Call it at the end of each turn
-(after your python code) to record what you learned and what you plan next.
-These are carried forward to the next turn.
+You have an `update_notes` tool. The notes you record are carried forward to \
+the next turn so you don't forget what you discovered. They appear at the top \
+of your prompt each turn as "Notes carried from earlier turns".
 
-notes: what you learned this turn — objects, colors, action effects, things to ignore
+Call `update_notes` whenever you discover something worth remembering:
+- A game mechanic (what each action does, how objects move, collision rules)
+- The target or goal of the level (what to reach, what to avoid)
+- Object properties (colors, positions, shapes, which ones are important)
+- Things to ignore (timers, HUD, decorative elements — use set_ignore for these)
+- What you are currently working on (building simulate, debugging, planning)
+
+You don't need to call it every turn — only when you learn something new or \
+change your plan. If your notes are already up to date, skip it.
+
+notes: what you discovered or what you're working on right now
 plan: what you will do next turn — keep it short
 
 Example: call update_notes with
