@@ -135,10 +135,10 @@ You have a single tool: `python()`. It executes Python code in a sandbox with \
 preloaded game state and a simulator registration system.
 
 Use the sandbox to:
-- Phase 1: take a few actions, inspect grids with atoms()/diff()/show_frame()
-- Phase 2: write simulate(grid, action), call set_simulate(), call check()
-- Phase 3: BFS with simulate() to find a winning action sequence
-- Phase 4: execute the planned sequence with action()
+- Explore: take a few actions, inspect grids with atoms()/diff()/show_frame()
+- Build: write simulate(grid, action), call set_simulate(), call check()
+- Plan: use simulate() for short lookaheads to pick the best action
+- Act: execute the best action with action(), observe the result
 
 When writing a simulator, start from the images and diffs, then encode the rules \
 precisely. Do NOT try to understand the game from raw cell coordinates alone.
@@ -209,44 +209,23 @@ grid (list of lists of ints) and an action ID. It does NOT accept a frame index.
 """
 
 AGENT_WORKFLOW_ADDENDUM: str = """\
-Workflow — 4 phases with a checklist
+How to work
 
-You MUST work through these phases in order. Track your current phase in the Plan \
-block each turn. Do NOT skip ahead.
+1. Explore: take a few actions, observe what changes. Use Notes to record what you \
+learn. You don't need to understand everything — just enough to start building.
+2. Build: write simulate(grid, action). Test with check(). You don't need 100% \
+accuracy — good enough to reason about is fine.
+3. Plan: use simulate() for lookahead. Full BFS may not work on a 64×64 grid — \
+use short lookaheads (1-3 steps) to pick the best action. If something unexpected \
+happens, go back to exploring.
+4. Act: take the best action you found. Observe. If the result differs from \
+simulation, your simulator is wrong — go back to step 1 or 2.
 
-Phase 1 — EXPLORE (goal: understand what each action does)
-  [ ] Call show_frame(0) or look at the grid image to see the game visually
-  [ ] Call atoms(current_frame) to list all objects (color, size, bbox)
-  [ ] Take 1-2 actions with action(id) to observe movement — use diff(previous_frame, \
-current_frame) to see exactly what changed
-  [ ] Repeat for each action ID until you can describe what every action does
-  Exit when: you can write "Action 1=left, 2=right, 3=up, 4=down" (or equivalent) in Notes
-  IMPORTANT: do NOT write simulate yet. Just explore.
+These aren't sequential — you'll cycle between them. Use Notes/Plan to track where \
+you are and what you know.
 
-Phase 2 — BUILD SIMULATOR (goal: simulate(grid, action) passes check())
-  [ ] Write a simulate(grid, action) function based on what you learned in Phase 1
-  [ ] Call set_simulate(func) to register it
-  [ ] Call check(simulate) to test accuracy on all recorded frames
-  [ ] If wrong cells: call diagnose(simulate) to see error types, fix, re-check
-  [ ] Call set_ignore(cells/colors) for unimportant cells (timers, HUD flicker)
-  Exit when: check() shows 0 wrong cells (100% accuracy)
-
-Phase 3 — PLAN (goal: find a winning action sequence using simulate)
-  [ ] Use BFS with simulate() to search for an action sequence that reaches WIN
-  [ ] Start from current_frame, try all valid_actions, simulate each, expand frontier
-  [ ] Keep track of visited states (convert grid to tuple of tuples for hashing)
-  Exit when: you have a sequence of actions that reaches WIN in simulation
-
-Phase 4 — EXECUTE (goal: run the plan in the real environment)
-  [ ] Execute the planned action sequence with action(id)
-  [ ] After each action, check last_action_result — if game_over or run_complete, stop
-  [ ] If the real result differs from simulation, go back to Phase 2
-  Exit when: last_action_result shows run_complete (level solved)
-
-You can call action() in Phase 1 (explore) and Phase 4 (execute). In Phase 2 and 3, \
-use simulate() instead — that is the whole point of being simulator-first. Do NOT \
-call action() in Phase 2 or 3 unless you are re-entering Phase 1 because the \
-simulator is wrong.
+The key idea: action() is for exploring and executing. simulate() is for \
+understanding and planning. Use simulate() to think before you act.
 """
 
 AGENT_WORLD_MODEL_ADDENDUM: str = """\
@@ -262,8 +241,7 @@ Example:
 Notes: Block is orange(12)+blue(9) at rows 45–49. Moves 5 cells per action. \
 Action 3=left, 4=right, 1=up, 2=down. Sometimes blocked by walls. Yellow bar \
 rows 61–62 shrinks every frame regardless of action — unimportant, will set_ignore.
-Plan: Phase 2 — write simulate with block movement. set_ignore(colors=[11]). \
-check().
+Plan: Write simulate with block movement. set_ignore(colors=[11]). check().
 
 These blocks are carried forward so you don't forget between turns. If you \
 learned nothing new, write "Notes: same as before" and "Plan: same as before".
