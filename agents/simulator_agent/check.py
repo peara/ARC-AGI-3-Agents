@@ -9,7 +9,7 @@ from agents.simulator_agent.tools import grid_diff
 
 
 def run_check(
-    simulate_fn: Callable[[int, int], list[list[int]]],
+    simulate_fn: Callable[[list[list[int]], int], list[list[int]]],
     grids: list[list[list[int]]],
     actions: list[int],
     *,
@@ -18,8 +18,8 @@ def run_check(
 ) -> dict[str, Any]:
     """Test *simulate_fn* against all recorded frame transitions.
 
-    For each frame *i*, runs ``simulate_fn(i, actions[i])`` and compares the
-    result to ``grids[i + 1]`` (the actual next grid).
+    For each frame *i*, runs ``simulate_fn(grids[i], actions[i])`` and compares
+    the result to ``grids[i + 1]`` (the actual next grid).
 
     Metrics:
       - **wrong**: cells where predicted != actual
@@ -47,7 +47,7 @@ def run_check(
         grid_after = grids[i + 1]
 
         try:
-            predicted = simulate_fn(i, action)
+            predicted = simulate_fn(grid_before, action)
         except Exception as exc:
             if verbose:
                 print(f"Frame {i}: ERROR — {type(exc).__name__}: {exc}")
@@ -137,7 +137,7 @@ def run_check(
 
 
 def diagnose(
-    simulate_fn: Callable[[int, int], list[list[int]]],
+    simulate_fn: Callable[[list[list[int]], int], list[list[int]]],
     grids: list[list[list[int]]],
     actions: list[int],
     ignore_mask: set[tuple[int, int]] | None = None,
@@ -163,7 +163,7 @@ def diagnose(
         grid_after = grids[i + 1]
 
         try:
-            predicted = simulate_fn(i, action)
+            predicted = simulate_fn(grid_before, action)
         except Exception as exc:
             print(f"Frame {i} Action {action}: ERROR — {type(exc).__name__}: {exc}")
             continue
