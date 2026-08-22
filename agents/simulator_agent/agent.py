@@ -277,6 +277,16 @@ class SimulatorFirstAgent(DirectStepAgent):
                             action_taken = GameAction.from_id(action_taken_id)
                             break
 
+                        # Nudge: remind LLM to record notes if it discovered something
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                "If you discovered something new about the game "
+                                "(mechanics, targets, object properties), call "
+                                "update_notes to record it before continuing."
+                            ),
+                        })
+
                         # If sandbox errored, continue loop (tool result
                         # already appended)
                         continue
