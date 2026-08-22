@@ -238,7 +238,7 @@ def run_experiment(
                 print("\n".join(code_lines[-10:]))
 
             # Execute in sandbox
-            output, error = sandbox.run_code(code)
+            output, error, _action_taken = sandbox.run_code(code)
 
             # Measure accuracy after this turn
             metrics = sandbox.measure()
@@ -350,7 +350,7 @@ def run_experiment(
         if remaining <= 3 and sandbox._simulate is None:  # noqa: SLF001
             nudge = (
                 f"You have {remaining} turns left and no simulate function yet. "
-                "Write simulate(frame_index, action) NOW. Call set_simulate(func) "
+                "Write simulate(grid, action) NOW. Call set_simulate(func) "
                 "then check(simulate) to test it. A rough guess is fine — "
                 "you can revise after seeing check() results."
             )
