@@ -130,6 +130,9 @@ class SimulatorSandbox:
         self._prev_correct_frames: set[int] = set()
         self.pending_images: list[dict[str, Any]] = []
 
+        # Structured world model notes recorded via update_notes()
+        self._pending_notes: dict[str, str] = {}
+
         # Build persistent namespace
         self.namespace: dict[str, Any] = self._build_namespace()
 
@@ -296,6 +299,14 @@ class SimulatorSandbox:
 
         ns["show_grid"] = show_grid
 
+        # ── World model notes ───────────────────────────────────────────
+        def update_notes(notes: str, plan: str = "") -> None:
+            """Record your world model for next turn."""
+            self._pending_notes = {"notes": notes, "plan": plan}
+            print(f"[update_notes] recorded: notes={len(notes)} chars, plan={len(plan)} chars")
+
+        ns["update_notes"] = update_notes
+
         # ── Prebuilt check ─────────────────────────────────────────────
         def check(simulate_fn: Callable[[list[list[int]], int], list[list[int]]] | None = None) -> dict[str, Any]:
             """Test a simulate function against all recorded frames.
@@ -384,6 +395,8 @@ class SimulatorSandbox:
         """
         # Reset action tracker for this execution
         self._action_taken = None
+        # Only the latest run_code() call's notes persist
+        self._pending_notes = {}
 
         if _DUNDER_PATTERN.search(code):
             return ("", "Error: dunder attributes are not allowed", None)

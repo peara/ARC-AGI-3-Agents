@@ -204,6 +204,9 @@ CHECK AND DIAGNOSE:
   check(simulate_fn)    -> test on recorded frames, print per-frame accuracy
   diagnose(simulate_fn) -> test on recorded frames, print semantic error analysis
 
+WORLD MODEL:
+  update_notes(notes, plan) -> record what you learned (notes) and what you plan (plan) for next turn
+
 IMPORTANT: your simulator function MUST accept `(grid, action)` — that is, a \
 grid (list of lists of ints) and an action ID. It does NOT accept a frame index.
 """
@@ -231,23 +234,20 @@ understanding and planning. Use simulate() to think before you act.
 AGENT_WORLD_MODEL_ADDENDUM: str = """\
 Notes and Plan (REQUIRED every turn)
 
-Every response MUST end with two labeled blocks:
+At the end of each python() call, call update_notes(notes, plan) to record
+what you learned and what you plan next. These are carried forward to the
+next turn.
 
-Notes: what you learned this turn — objects, colors, action effects, things to \
-ignore (set_ignore), anything that helps next turn.
-Plan: your current phase + what you will do next turn — keep it short.
+notes: what you learned this turn — objects, colors, action effects, things to ignore
+plan: what you will do next turn — keep it short
 
 Example:
-Notes: Block is orange(12)+blue(9) at rows 45–49. Moves 5 cells per action. \
-Action 3=left, 4=right, 1=up, 2=down. Sometimes blocked by walls. Yellow bar \
-rows 61–62 shrinks every frame regardless of action — unimportant, will set_ignore.
-Plan: Write simulate with block movement. set_ignore(colors=[11]). check().
+update_notes(
+    notes="Block is orange(12)+blue(9) at rows 45-49. Moves 5 cells per action. Action 3=left, 4=right, 1=up, 2=down. Yellow bar rows 61-62 shrinks every frame — will set_ignore.",
+    plan="Write simulate with block movement. set_ignore(colors=[11]). check()."
+)
 
-These blocks are carried forward so you don't forget between turns. If you \
-learned nothing new, write "Notes: same as before" and "Plan: same as before".
-
-When your simulator is correct (check() shows 0 wrong cells on all frames) and \
-you have a winning plan, say "DONE" in your response.
+When your simulator is correct (check() shows 0 wrong cells on all frames) and you have a winning plan, say "DONE" in your response.
 """
 
 

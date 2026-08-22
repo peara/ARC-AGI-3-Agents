@@ -169,6 +169,7 @@ class SimulatorFirstAgent(DirectStepAgent):
             history=self._history_turns,
         )
         self._sandbox.reset_turn_counter()
+        self._sandbox._pending_notes = {}
 
         # ── 9. Tool loop ───────────────────────────────────────────────
         action_taken: GameAction | None = None
@@ -286,6 +287,13 @@ class SimulatorFirstAgent(DirectStepAgent):
         if last_assistant_text:
             parsed = extract_notes(last_assistant_text)
             for key, value in parsed.items():
+                if value:
+                    self._world_model[key] = value
+
+        # Read structured notes from sandbox (update_notes tool) as fallback/override
+        pending = self._sandbox._pending_notes
+        if pending:
+            for key, value in pending.items():
                 if value:
                     self._world_model[key] = value
 

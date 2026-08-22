@@ -324,6 +324,14 @@ result = check()
         output, error, action_taken = sandbox.run_code(code)
         assert error is None, f"Unexpected error: {error}"
 
+    def test_update_notes_sandbox(self):
+        """update_notes() records structured notes in the sandbox."""
+        sandbox = _make_live_sandbox()
+        assert sandbox._pending_notes == {}
+        output, error, _ = sandbox.run_code("update_notes(notes='test notes', plan='test plan')")
+        assert error is None, f"Unexpected error: {error}"
+        assert sandbox._pending_notes == {"notes": "test notes", "plan": "test plan"}
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 4. Sandbox — Offline Mode (using ReplayHarness)
