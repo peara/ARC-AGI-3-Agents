@@ -4,11 +4,12 @@ from dotenv import load_dotenv
 
 from .agent import Agent, Playback
 from .duck_harness_agent.agent import DuckHarnessAgent
-from .duck_harness_agent.base import DirectStepAgent
+from .duck_harness_agent.base import DirectStepAgent  # noqa: F401
 from .langgraph_unified_agent.agent import LangGraphUnifiedAgent
 from .langgraph_vision_agent.agent import LangGraphVisionAgent
 from .llm_client import LLMCallError, LLMClient
 from .recorder import Recorder
+from .simulator_agent.agent import SimulatorFirstAgent
 from .swarm import Swarm
 from .templates.curiosity_agent import Curiosity
 from .templates.langgraph_functional_agent import LangGraphFunc, LangGraphTextOnly
@@ -18,7 +19,7 @@ from .templates.llm_agents import LLM, FastLLM, GuidedLLM, ReasoningLLM
 from .templates.llm_curiosity_agent import LlmCuriosity
 from .templates.multimodal import MultiModalLLM
 from .templates.openclaw_agent import OpenClaw
-from .templates.probe_agent import Probe
+from .templates.probe_agent import Probe  # noqa: F401
 from .templates.random_agent import Random
 from .templates.reasoning_agent import ReasoningAgent
 from .templates.smolagents import SmolCodingAgent, SmolVisionAgent
@@ -34,6 +35,7 @@ AVAILABLE_AGENTS: dict[str, Type[Agent]] = {
 AVAILABLE_AGENTS["langgraphvision"] = cast(Type[Agent], LangGraphVisionAgent)
 AVAILABLE_AGENTS["langgraphunified"] = cast(Type[Agent], LangGraphUnifiedAgent)
 AVAILABLE_AGENTS["duckharness"] = cast(Type[Agent], DuckHarnessAgent)
+AVAILABLE_AGENTS["simulatorfirst"] = cast(Type[Agent], SimulatorFirstAgent)
 
 # add all the recording files as valid agent names
 for rec in Recorder.list():

@@ -1,5 +1,6 @@
 """Simulator agent module."""
 
+from agents.simulator_agent.agent import SimulatorFirstAgent
 from agents.simulator_agent.experiment import (
     ExperimentResult,
     TurnResult,
@@ -13,6 +14,7 @@ from agents.simulator_agent.prompts import (
 from agents.simulator_agent.sandbox import SimulatorSandbox
 
 __all__ = [
+    "SimulatorFirstAgent",
     "SimulatorSandbox",
     "run_experiment",
     "TurnResult",
