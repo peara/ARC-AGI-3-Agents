@@ -32,6 +32,7 @@ from agents.simulator_agent.prompts import (
 )
 from agents.simulator_agent.sandbox import SimulatorSandbox
 from agents.simulator_agent.world_model import extract_notes, format_notes
+from agents.templates.llm_logging import LlmCallLogger, wrap_llm_call
 from optitrack.atoms import extract_atoms
 from vision.render import grid_to_image, image_to_base64
 
@@ -64,7 +65,22 @@ class SimulatorFirstAgent(DirectStepAgent):
         self._context_budget_tokens = max(1024, 32768 - 4096 - 512)
 
         # LLM client (local gemma-4-31b via LM Studio by default)
-        self._llm = LLMClient()
+        llm_client = LLMClient()
+        llm_logger: LlmCallLogger | None = None
+        if self.recorder is not None:
+            llm_logger = LlmCallLogger(
+                guid=self.recorder.guid,
+                path=self.recorder.llm_log_path(),
+                frame_indexer=lambda: self._frame_index,
+            )
+        if llm_logger is None:
+            self._llm_chat = llm_client.chat
+        else:
+            self._llm_chat = wrap_llm_call(
+                llm_client.chat,
+                llm_logger,
+                kind="simulator",
+            )
 
         # Sandbox — in-process with step_env_callback
         self._sandbox = SimulatorSandbox(
@@ -164,7 +180,7 @@ class SimulatorFirstAgent(DirectStepAgent):
 
             try:
                 messages = self._trim_messages_for_context(messages)
-                response = self._llm.chat(
+                response = self._llm_chat(
                     messages=messages,
                     tools=[AGENT_PYTHON_TOOL_SCHEMA],
                     tool_choice="auto",
