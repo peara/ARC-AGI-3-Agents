@@ -58,13 +58,9 @@ PYTHON_TOOL_SCHEMA: dict[str, Any] = {
 # ── Agent-specific system prompt addendums ────────────────────────────────
 
 AGENT_GAME_OVERVIEW_ADDENDUM: str = (
-    "You are a simulator-first agent solving an ARC-AGI-3 grid game. Each level is a "
-    "64×64 grid of color indices (0–15) representing 16 fixed colors.\n"
-    "\n"
-    "Your workflow is: explore → write a correct `simulate(grid, action)` function "
-    "→ validate it with `check()` → use it inside a BFS search to plan a winning "
-    "action sequence. This means most of your thinking is done by simulating the game "
-    "in code before committing to real environment actions.\n"
+    "You are building a grid simulator for an ARC-AGI-3 game, then using it to solve "
+    "the level. Each level is a 64×64 grid of color indices (0–15) representing 16 "
+    "fixed colors.\n"
     "\n"
     "The color index mapping is fixed across all games:\n"
     + COLOR_LEGEND
@@ -80,8 +76,6 @@ AGENT_GAME_OVERVIEW_ADDENDUM: str = (
     "colors may be walls or obstacles.\n"
     "- If you identify cells that are unimportant (timers, HUD, decorative noise), "
     "use set_ignore() to exclude them from check() and diagnose().\n"
-    "\n"
-    "Optimize for as few in-game actions as possible while still being reliable."
 )
 
 AGENT_RUNTIME_STATE_ADDENDUM: str = """\
@@ -141,10 +135,10 @@ You have a single tool: `python()`. It executes Python code in a sandbox with \
 preloaded game state and a simulator registration system.
 
 Use the sandbox to:
-- Inspect grids, objects, and diffs to understand how actions change the board.
-- Test hypotheses by defining and calling small helper functions.
-- Register a simulator with `set_simulate(func)` and validate it with `check()`.
-- Search for a winning action sequence with BFS once your simulator is accurate.
+- Phase 1: take a few actions, inspect grids with atoms()/diff()/show_frame()
+- Phase 2: write simulate(grid, action), call set_simulate(), call check()
+- Phase 3: BFS with simulate() to find a winning action sequence
+- Phase 4: execute the planned sequence with action()
 
 When writing a simulator, start from the images and diffs, then encode the rules \
 precisely. Do NOT try to understand the game from raw cell coordinates alone.
@@ -161,9 +155,6 @@ for _ in range(10):
         break
     if not last_action_result.get('board_changed'):
         print("Action had no effect — stop")
-        break
-    if check(simulate_fn)['wrong'] == 0:
-        print("Simulator fully accurate")
         break
 ```
 
@@ -218,17 +209,44 @@ grid (list of lists of ints) and an action ID. It does NOT accept a frame index.
 """
 
 AGENT_WORKFLOW_ADDENDUM: str = """\
-Workflow
+Workflow — 4 phases with a checklist
 
-If you have no simulate function yet, explore by taking actions and observing \
-changes. Use show_frame(), atoms(), diff(), and compute_delta() to understand \
-objects, colors, and what each action does. Then write simulate(grid, action) \
-and test it with check().
+You MUST work through these phases in order. Track your current phase in the Plan \
+block each turn. Do NOT skip ahead.
 
-When your simulator is accurate, use BFS with simulate() to find a winning \
-action sequence. Use check() and diagnose() to measure accuracy and find edge \
-cases. Fix and re-test until your simulator predicts the recorded transitions \
-correctly.
+Phase 1 — EXPLORE (goal: understand what each action does)
+  [ ] Call show_frame(0) or look at the grid image to see the game visually
+  [ ] Call atoms(current_frame) to list all objects (color, size, bbox)
+  [ ] Take 1-2 actions with action(id) to observe movement — use diff(previous_frame, \
+current_frame) to see exactly what changed
+  [ ] Repeat for each action ID until you can describe what every action does
+  Exit when: you can write "Action 1=left, 2=right, 3=up, 4=down" (or equivalent) in Notes
+  IMPORTANT: do NOT write simulate yet. Just explore.
+
+Phase 2 — BUILD SIMULATOR (goal: simulate(grid, action) passes check())
+  [ ] Write a simulate(grid, action) function based on what you learned in Phase 1
+  [ ] Call set_simulate(func) to register it
+  [ ] Call check(simulate) to test accuracy on all recorded frames
+  [ ] If wrong cells: call diagnose(simulate) to see error types, fix, re-check
+  [ ] Call set_ignore(cells/colors) for unimportant cells (timers, HUD flicker)
+  Exit when: check() shows 0 wrong cells (100% accuracy)
+
+Phase 3 — PLAN (goal: find a winning action sequence using simulate)
+  [ ] Use BFS with simulate() to search for an action sequence that reaches WIN
+  [ ] Start from current_frame, try all valid_actions, simulate each, expand frontier
+  [ ] Keep track of visited states (convert grid to tuple of tuples for hashing)
+  Exit when: you have a sequence of actions that reaches WIN in simulation
+
+Phase 4 — EXECUTE (goal: run the plan in the real environment)
+  [ ] Execute the planned action sequence with action(id)
+  [ ] After each action, check last_action_result — if game_over or run_complete, stop
+  [ ] If the real result differs from simulation, go back to Phase 2
+  Exit when: last_action_result shows run_complete (level solved)
+
+You can call action() in Phase 1 (explore) and Phase 4 (execute). In Phase 2 and 3, \
+use simulate() instead — that is the whole point of being simulator-first. Do NOT \
+call action() in Phase 2 or 3 unless you are re-entering Phase 1 because the \
+simulator is wrong.
 """
 
 AGENT_WORLD_MODEL_ADDENDUM: str = """\
@@ -238,13 +256,14 @@ Every response MUST end with two labeled blocks:
 
 Notes: what you learned this turn — objects, colors, action effects, things to \
 ignore (set_ignore), anything that helps next turn.
-Plan: what you will do next turn — keep it short.
+Plan: your current phase + what you will do next turn — keep it short.
 
 Example:
 Notes: Block is orange(12)+blue(9) at rows 45–49. Moves 5 cells per action. \
 Action 3=left, 4=right, 1=up, 2=down. Sometimes blocked by walls. Yellow bar \
 rows 61–62 shrinks every frame regardless of action — unimportant, will set_ignore.
-Plan: Write simulate with block movement. set_ignore(colors=[11]). check().
+Plan: Phase 2 — write simulate with block movement. set_ignore(colors=[11]). \
+check().
 
 These blocks are carried forward so you don't forget between turns. If you \
 learned nothing new, write "Notes: same as before" and "Plan: same as before".
