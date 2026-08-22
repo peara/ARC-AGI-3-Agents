@@ -28,6 +28,7 @@ from agents.llm_client import LLMClient
 from agents.simulator_agent.prompts import (
     AGENT_PYTHON_TOOL_SCHEMA,
     AGENT_SYSTEM_PROMPT,
+    UPDATE_NOTES_TOOL_SCHEMA,
     build_agent_user_prompt,
 )
 from agents.simulator_agent.sandbox import SimulatorSandbox
@@ -183,7 +184,7 @@ class SimulatorFirstAgent(DirectStepAgent):
                 messages = self._trim_messages_for_context(messages)
                 response = self._llm_chat(
                     messages=messages,
-                    tools=[AGENT_PYTHON_TOOL_SCHEMA],
+                    tools=[AGENT_PYTHON_TOOL_SCHEMA, UPDATE_NOTES_TOOL_SCHEMA],
                     tool_choice="auto",
                 )
             except Exception as exc:
@@ -201,6 +202,28 @@ class SimulatorFirstAgent(DirectStepAgent):
             # Check for tool calls
             if response.tool_calls:
                 for tc in response.tool_calls:
+                    if tc["function"]["name"] == "update_notes":
+                        try:
+                            args = json.loads(tc["function"]["arguments"])
+                        except Exception:
+                            args = {}
+                        notes = args.get("notes", "")
+                        plan = args.get("plan", "")
+                        if notes:
+                            self._world_model["notes"] = notes
+                        if plan:
+                            self._world_model["plan"] = plan
+                        messages.append({
+                            "role": "assistant",
+                            "content": response.content or None,
+                            "tool_calls": [tc],
+                        })
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": f"Notes updated: notes={len(notes)} chars, plan={len(plan)} chars",
+                        })
+                        continue
                     if tc["function"]["name"] == "python":
                         try:
                             args = json.loads(tc["function"]["arguments"])

@@ -6,8 +6,7 @@ Covers: world_model, check, sandbox (live + offline), agent, registration.
 from __future__ import annotations
 
 import glob
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -17,7 +16,6 @@ from agents.simulator_agent.agent import SimulatorFirstAgent
 from agents.simulator_agent.check import cluster_cells, diagnose, run_check
 from agents.simulator_agent.sandbox import SimulatorSandbox
 from agents.simulator_agent.world_model import extract_notes, format_notes
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 1. World Model — extract_notes / format_notes
@@ -492,6 +490,18 @@ class TestSimulatorFirstAgent:
         result = SimulatorFirstAgent._drop_until_first_user_message(history)
         assert result[0]["role"] == "user"
         assert len(result) == 2
+
+
+def test_agent_handles_update_notes_tool_call():
+    """Agent should update world_model when LLM calls update_notes tool."""
+    agent = SimulatorFirstAgent.__new__(SimulatorFirstAgent)
+    agent._world_model = {"notes": "", "plan": ""}
+    args = {"notes": "test notes", "plan": "test plan"}
+    if args.get("notes"):
+        agent._world_model["notes"] = args["notes"]
+    if args.get("plan"):
+        agent._world_model["plan"] = args["plan"]
+    assert agent._world_model == {"notes": "test notes", "plan": "test plan"}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

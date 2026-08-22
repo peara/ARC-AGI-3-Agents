@@ -204,9 +204,6 @@ CHECK AND DIAGNOSE:
   check(simulate_fn)    -> test on recorded frames, print per-frame accuracy
   diagnose(simulate_fn) -> test on recorded frames, print semantic error analysis
 
-WORLD MODEL:
-  update_notes(notes, plan) -> record what you learned (notes) and what you plan (plan) for next turn
-
 IMPORTANT: your simulator function MUST accept `(grid, action)` — that is, a \
 grid (list of lists of ints) and an action ID. It does NOT accept a frame index.
 """
@@ -234,18 +231,16 @@ understanding and planning. Use simulate() to think before you act.
 AGENT_WORLD_MODEL_ADDENDUM: str = """\
 Notes and Plan (REQUIRED every turn)
 
-At the end of each python() call, call update_notes(notes, plan) to record
-what you learned and what you plan next. These are carried forward to the
-next turn.
+You have a dedicated `update_notes` tool. Call it at the end of each turn
+(after your python code) to record what you learned and what you plan next.
+These are carried forward to the next turn.
 
 notes: what you learned this turn — objects, colors, action effects, things to ignore
 plan: what you will do next turn — keep it short
 
-Example:
-update_notes(
-    notes="Block is orange(12)+blue(9) at rows 45-49. Moves 5 cells per action. Action 3=left, 4=right, 1=up, 2=down. Yellow bar rows 61-62 shrinks every frame — will set_ignore.",
-    plan="Write simulate with block movement. set_ignore(colors=[11]). check()."
-)
+Example: call update_notes with
+  notes="Block is orange(12)+blue(9) at rows 45-49. Moves 5 cells per action. Action 3=left, 4=right, 1=up, 2=down. Yellow bar rows 61-62 shrinks every frame — will set_ignore."
+  plan="Write simulate with block movement. set_ignore(colors=[11]). check()."
 
 When your simulator is correct (check() shows 0 wrong cells on all frames) and you have a winning plan, say "DONE" in your response.
 """
@@ -293,6 +288,39 @@ AGENT_PYTHON_TOOL_SCHEMA: dict[str, Any] = {
             },
             "required": ["code"],
         },
+    },
+}
+
+UPDATE_NOTES_TOOL_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "update_notes",
+        "description": (
+            "Record what you learned this turn and what you plan next. "
+            "These notes are carried forward to the next turn so you don't "
+            "forget. Call this at the end of each turn, after you've "
+            "finished exploring or acting with the python tool."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "notes": {
+                    "type": "string",
+                    "description": (
+                        "What you learned this turn — objects, colors, "
+                        "action effects, things to ignore, anything that "
+                        "helps next turn."
+                    ),
+                },
+                "plan": {
+                    "type": "string",
+                    "description": (
+                        "What you will do next turn — keep it short."
+                    ),
+                },
+            },
+        },
+        "required": ["notes", "plan"],
     },
 }
 
@@ -496,5 +524,6 @@ __all__ = [
     "SYSTEM_PROMPT",
     "AGENT_SYSTEM_PROMPT",
     "AGENT_PYTHON_TOOL_SCHEMA",
+    "UPDATE_NOTES_TOOL_SCHEMA",
     "build_agent_user_prompt",
 ]
