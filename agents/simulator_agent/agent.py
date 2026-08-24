@@ -100,7 +100,10 @@ class SimulatorFirstAgent(DirectStepAgent):
 
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
         """Return ``True`` when the level is won or action budget is spent."""
-        return latest_frame.state is GameState.WIN or self.action_counter >= self.MAX_ACTIONS
+        return (
+            latest_frame.state is GameState.WIN
+            or self.action_counter >= self.MAX_ACTIONS
+        )
 
     # ── choose_action (main per-turn logic) ────────────────────────────────
 
@@ -130,7 +133,9 @@ class SimulatorFirstAgent(DirectStepAgent):
             self._previous_grid = None
 
         # Available actions
-        self._valid_actions = list(frames[-1].available_actions) if frames[-1].available_actions else []
+        self._valid_actions = (
+            list(frames[-1].available_actions) if frames[-1].available_actions else []
+        )
 
         # ── 3. Render grid image ───────────────────────────────────────
         grid_img = grid_to_image(grid, scale=8)
@@ -158,7 +163,11 @@ class SimulatorFirstAgent(DirectStepAgent):
         )
 
         messages: list[dict[str, Any]] = self._trim_messages_for_context(
-            [{"role": "system", "content": AGENT_SYSTEM_PROMPT}, *self._history_messages, *user_content],
+            [
+                {"role": "system", "content": AGENT_SYSTEM_PROMPT},
+                *self._history_messages,
+                *user_content,
+            ],
         )
 
         # ── 7-8. Update sandbox state ─────────────────────────────────
@@ -183,6 +192,7 @@ class SimulatorFirstAgent(DirectStepAgent):
             turn_count = step + 1
 
             try:
+                self._trim_old_tool_results(messages, keep_last_n=3)
                 messages = self._trim_messages_for_context(messages)
                 response = self._llm_chat(
                     messages=messages,
@@ -191,11 +201,19 @@ class SimulatorFirstAgent(DirectStepAgent):
                 )
             except Exception as exc:
                 exc_str = str(exc).lower()
-                if "context_length" in exc_str or "context length" in exc_str or "too long" in exc_str:
-                    trimmed = self._trim_messages_for_context(messages, extra_safety_tokens=512)
+                if (
+                    "context_length" in exc_str
+                    or "context length" in exc_str
+                    or "too long" in exc_str
+                ):
+                    trimmed = self._trim_messages_for_context(
+                        messages, extra_safety_tokens=512
+                    )
                     if len(trimmed) < len(messages):
                         messages = trimmed
-                        logger.warning("simulatorfirst: context overflow — trimmed history, retrying")
+                        logger.warning(
+                            "simulatorfirst: context overflow — trimmed history, retrying"
+                        )
                         continue
                 logger.warning(f"simulatorfirst: LLM call failed: {exc}")
                 preserve_history = False
@@ -215,16 +233,20 @@ class SimulatorFirstAgent(DirectStepAgent):
                             self._world_model["notes"] = notes
                         if plan:
                             self._world_model["plan"] = plan
-                        messages.append({
-                            "role": "assistant",
-                            "content": response.content or None,
-                            "tool_calls": [tc],
-                        })
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tc["id"],
-                            "content": f"Notes updated: notes={len(notes)} chars, plan={len(plan)} chars",
-                        })
+                        messages.append(
+                            {
+                                "role": "assistant",
+                                "content": response.content or None,
+                                "tool_calls": [tc],
+                            }
+                        )
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tc["id"],
+                                "content": f"Notes updated: notes={len(notes)} chars, plan={len(plan)} chars",
+                            }
+                        )
                         continue
                     if tc["function"]["name"] == "python":
                         try:
@@ -234,17 +256,21 @@ class SimulatorFirstAgent(DirectStepAgent):
                         code = args.get("code", "")
 
                         # Add assistant message with tool call
-                        messages.append({
-                            "role": "assistant",
-                            "content": response.content or None,
-                            "tool_calls": [tc],
-                        })
+                        messages.append(
+                            {
+                                "role": "assistant",
+                                "content": response.content or None,
+                                "tool_calls": [tc],
+                            }
+                        )
 
                         # Run code in sandbox (in-process)
                         had_simulate = self._sandbox._simulate is not None
                         output, error, action_taken_id = self._sandbox.run_code(code)
                         if not had_simulate and self._sandbox._simulate is not None:
-                            logger.info(f"simulatorfirst: simulate function registered at frame {self._frame_index}")
+                            logger.info(
+                                f"simulatorfirst: simulate function registered at frame {self._frame_index}"
+                            )
 
                         # Build tool result
                         tool_result_parts: list[str] = []
@@ -254,28 +280,42 @@ class SimulatorFirstAgent(DirectStepAgent):
                             logger.warning(f"simulatorfirst: sandbox error: {error}")
                             tool_result_parts.append(f"Error: {error}")
 
-                        tool_result_text = "\n".join(tool_result_parts) if tool_result_parts else "(no output)"
+                        tool_result_text = (
+                            "\n".join(tool_result_parts)
+                            if tool_result_parts
+                            else "(no output)"
+                        )
 
                         # Append pending images from sandbox (show_frame, show_grid)
                         content_parts: list[dict[str, Any]] = [
                             {"type": "text", "text": tool_result_text},
                         ]
                         for img in self._sandbox.pending_images:
-                            content_parts.append({
-                                "type": "image_url",
-                                "image_url": {"url": f"data:image/png;base64,{img['b64']}"},
-                            })
-                            content_parts.append({
-                                "type": "text",
-                                "text": img.get("caption", ""),
-                            })
+                            content_parts.append(
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:image/png;base64,{img['b64']}"
+                                    },
+                                }
+                            )
+                            content_parts.append(
+                                {
+                                    "type": "text",
+                                    "text": img.get("caption", ""),
+                                }
+                            )
                         self._sandbox.pending_images.clear()
 
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tc["id"],
-                            "content": content_parts if len(content_parts) > 1 else tool_result_text,
-                        })
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tc["id"],
+                                "content": content_parts
+                                if len(content_parts) > 1
+                                else tool_result_text,
+                            }
+                        )
 
                         # If sandbox executed an action, we're done
                         if action_taken_id is not None:
@@ -283,14 +323,16 @@ class SimulatorFirstAgent(DirectStepAgent):
                             break
 
                         # Nudge: remind LLM to record notes if it discovered something
-                        messages.append({
-                            "role": "user",
-                            "content": (
-                                "If you discovered something new about the game "
-                                "(mechanics, targets, object properties), call "
-                                "update_notes to record it before continuing."
-                            ),
-                        })
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "If you discovered something new about the game "
+                                    "(mechanics, targets, object properties), call "
+                                    "update_notes to record it before continuing."
+                                ),
+                            }
+                        )
 
                         # If sandbox errored, continue loop (tool result
                         # already appended)
@@ -300,10 +342,12 @@ class SimulatorFirstAgent(DirectStepAgent):
                 assistant_text = response.content or ""
                 if assistant_text:
                     messages.append({"role": "assistant", "content": assistant_text})
-                messages.append({
-                    "role": "user",
-                    "content": "Please use the python tool to inspect state and call action().",
-                })
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": "Please use the python tool to inspect state and call action().",
+                    }
+                )
                 continue
 
             # If we broke out of the inner for-loop because an action was
@@ -349,11 +393,13 @@ class SimulatorFirstAgent(DirectStepAgent):
             )
 
         # Append this turn to history
-        self._history_turns.append({
-            "action": action_taken.value,
-            "frame_index": self._frame_index,
-            "frame": [list(row) for row in grid] if grid else [],
-        })
+        self._history_turns.append(
+            {
+                "action": action_taken.value,
+                "frame_index": self._frame_index,
+                "frame": [list(row) for row in grid] if grid else [],
+            }
+        )
 
         # Trim history
         max_hist = 30
@@ -404,7 +450,9 @@ class SimulatorFirstAgent(DirectStepAgent):
 
     # ── Sandbox callback ──────────────────────────────────────────────────
 
-    def _step_env_callback(self, action_id: int, action_data: dict[str, Any] | None) -> dict[str, Any]:
+    def _step_env_callback(
+        self, action_id: int, action_data: dict[str, Any] | None
+    ) -> dict[str, Any]:
         """Callback invoked by the sandbox when ``action()`` is called.
 
         This is wired into ``SimulatorSandbox.__init__`` as ``step_env_callback``.
@@ -422,18 +470,25 @@ class SimulatorFirstAgent(DirectStepAgent):
         if frame is not None and len(self.frames) >= 2:
             prev = self.frames[-2]
             curr = self.frames[-1]
-            prev_levels = prev.levels_completed if hasattr(prev, "levels_completed") else 0
-            curr_levels = curr.levels_completed if hasattr(curr, "levels_completed") else 0
+            prev_levels = (
+                prev.levels_completed if hasattr(prev, "levels_completed") else 0
+            )
+            curr_levels = (
+                curr.levels_completed if hasattr(curr, "levels_completed") else 0
+            )
             prev_grid = prev.frame[0] if prev.frame else None
             curr_grid = curr.frame[0] if curr.frame else None
             self._last_action_result = {
                 "board_changed": prev_grid != curr_grid,
-                "done": curr.state is GameState.GAME_OVER or curr.state is GameState.WIN,
+                "done": curr.state is GameState.GAME_OVER
+                or curr.state is GameState.WIN,
                 "level_completed": curr_levels > prev_levels,
                 "game_over": curr.state is GameState.GAME_OVER,
                 "run_complete": curr.state is GameState.WIN,
                 "reward": curr_levels - prev_levels,
-                "valid_actions": list(curr.available_actions) if curr.available_actions else [],
+                "valid_actions": list(curr.available_actions)
+                if curr.available_actions
+                else [],
             }
         else:
             self._last_action_result = {}
@@ -480,19 +535,31 @@ class SimulatorFirstAgent(DirectStepAgent):
         return max(1, total)
 
     @staticmethod
-    def _drop_oldest_history_block(history: list[dict[str, Any]], *, preserve_recent: int) -> bool:
+    def _drop_oldest_history_block(
+        history: list[dict[str, Any]], *, preserve_recent: int
+    ) -> bool:
         removable = len(history) - preserve_recent
         if removable <= 0:
             return False
         history.pop(0)
-        while history and history[0].get("role") == "tool" and len(history) > preserve_recent:
+        while (
+            history
+            and history[0].get("role") == "tool"
+            and len(history) > preserve_recent
+        ):
             history.pop(0)
-        while history and history[0].get("role") != "user" and len(history) > preserve_recent:
+        while (
+            history
+            and history[0].get("role") != "user"
+            and len(history) > preserve_recent
+        ):
             history.pop(0)
         return True
 
     @staticmethod
-    def _keep_recent_assistant_turns(messages: list[dict[str, Any]], *, max_turns: int) -> list[dict[str, Any]]:
+    def _keep_recent_assistant_turns(
+        messages: list[dict[str, Any]], *, max_turns: int
+    ) -> list[dict[str, Any]]:
         if max_turns <= 0 or not messages:
             return []
         kept_reversed: list[dict[str, Any]] = []
@@ -509,7 +576,9 @@ class SimulatorFirstAgent(DirectStepAgent):
         return kept
 
     @staticmethod
-    def _drop_until_first_user_message(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _drop_until_first_user_message(
+        history: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
         trimmed = list(history)
         while trimmed and trimmed[0].get("role") != "user":
             trimmed.pop(0)
@@ -528,12 +597,16 @@ class SimulatorFirstAgent(DirectStepAgent):
         history = list(messages[1:])
         budget = max(1, self._context_budget_tokens - extra_safety_tokens)
         while history and self._estimate_tokens([system_message, *history]) > budget:
-            if not self._drop_oldest_history_block(history, preserve_recent=preserve_recent):
+            if not self._drop_oldest_history_block(
+                history, preserve_recent=preserve_recent
+            ):
                 break
         history = self._drop_until_first_user_message(history)
         return [system_message, *history]
 
-    def _persistent_history_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _persistent_history_messages(
+        self, messages: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         trimmed = self._trim_messages_for_context(messages)
         if not trimmed:
             return []
@@ -555,7 +628,9 @@ class SimulatorFirstAgent(DirectStepAgent):
         return history
 
     @staticmethod
-    def _strip_old_images(history: list[dict[str, Any]], *, keep_last_n_user: int) -> None:
+    def _strip_old_images(
+        history: list[dict[str, Any]], *, keep_last_n_user: int
+    ) -> None:
         """Remove image_url blocks from all but the last N user messages.
 
         Vision models tokenize images as hundreds/thousands of tokens
@@ -564,7 +639,9 @@ class SimulatorFirstAgent(DirectStepAgent):
         frames need images — older ones are text-only.
         """
         user_indices = [i for i, m in enumerate(history) if m.get("role") == "user"]
-        cutoff_indices = set(user_indices[-keep_last_n_user:]) if keep_last_n_user > 0 else set()
+        cutoff_indices = (
+            set(user_indices[-keep_last_n_user:]) if keep_last_n_user > 0 else set()
+        )
         for i in user_indices:
             if i in cutoff_indices:
                 continue
@@ -572,8 +649,58 @@ class SimulatorFirstAgent(DirectStepAgent):
             if not isinstance(content, list):
                 continue
             history[i]["content"] = [
-                p for p in content if not (isinstance(p, dict) and p.get("type") == "image_url")
+                p
+                for p in content
+                if not (isinstance(p, dict) and p.get("type") == "image_url")
             ]
+
+    @staticmethod
+    def _trim_old_tool_results(
+        messages: list[dict[str, Any]], keep_last_n: int = 3
+    ) -> None:
+        """Replace old tool result content with placeholders, keeping only last N.
+
+        Mutates messages in-place. Never deletes messages (API pairing requirement).
+
+        Exemptions:
+        - update_notes results: always kept (tiny, ~50 chars)
+        - action() result: the last tool result that triggered an action is pinned
+        """
+        tool_indices = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+        if len(tool_indices) <= keep_last_n:
+            return
+
+        exempt_ids: set[str] = set()
+        for msg in messages:
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                for tc in msg["tool_calls"]:
+                    if tc.get("function", {}).get("name") == "update_notes":
+                        exempt_ids.add(tc["id"])
+
+        if tool_indices:
+            last_tool_id = messages[tool_indices[-1]].get("tool_call_id")
+            if last_tool_id:
+                exempt_ids.add(last_tool_id)
+
+        trimmable = [
+            i for i in tool_indices if messages[i].get("tool_call_id") not in exempt_ids
+        ]
+        to_trim = trimmable[:-keep_last_n] if len(trimmable) > keep_last_n else []
+
+        for i in to_trim:
+            msg = messages[i]
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                original_chars = len(content)
+            elif isinstance(content, list):
+                original_chars = sum(
+                    len(b.get("text", ""))
+                    for b in content
+                    if isinstance(b, dict) and b.get("type") == "text"
+                )
+            else:
+                original_chars = len(str(content))
+            msg["content"] = f"[Old output ({original_chars} chars, trimmed)]"
 
     # ── Helpers ────────────────────────────────────────────────────────────
 
@@ -587,7 +714,9 @@ class SimulatorFirstAgent(DirectStepAgent):
         atoms = extract_atoms(grid_np)
         self._objects = atoms_to_dicts(atoms)
         self._adjacency = compute_adjacency(atoms)
-        self._valid_actions = list(frame.available_actions) if frame.available_actions else []
+        self._valid_actions = (
+            list(frame.available_actions) if frame.available_actions else []
+        )
 
     def _build_history_summary(self) -> str:
         """Build a short text summary of recent history for the user prompt."""
@@ -612,7 +741,9 @@ class SimulatorFirstAgent(DirectStepAgent):
             correct = result.get("frames_correct", 0)
             total = result.get("frames_total", 0)
             if acc is not None:
-                lines.append(f"Last check(): {acc:.1f}% accuracy, {wrong} wrong cells, {correct}/{total} frames correct.")
+                lines.append(
+                    f"Last check(): {acc:.1f}% accuracy, {wrong} wrong cells, {correct}/{total} frames correct."
+                )
             else:
                 lines.append(f"Last check(): {correct}/{total} frames correct.")
         elif result and "error" in result:

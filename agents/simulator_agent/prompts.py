@@ -138,6 +138,7 @@ Python tool
 - Max 10 python() calls per turn.
 - Allowed imports: math, re, collections, itertools, functools, json, string, random.
 - Never print full 64×64 grids — output compact summaries only (object lists, diffs, coordinates, counts).
+- Print compact summaries only. Use atoms() for grid overview, find_color() for specific colors, print_region with sub-regions (max 20×20). Never print full 64×64 grids — they exceed the output cap.
 """
 
 AGENT_SIMULATOR_TOOLS_ADDENDUM: str = """\

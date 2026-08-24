@@ -648,7 +648,12 @@ class SimulatorSandbox:
 
         output = buf.getvalue()
         if len(output) > _MAX_OUTPUT_CHARS:
-            output = output[:_MAX_OUTPUT_CHARS] + "\n... (truncated)"
+            output = (
+                output[:_MAX_OUTPUT_CHARS]
+                + f"\n... (output capped at {_MAX_OUTPUT_CHARS} chars — you printed too much. "
+                "Use smaller queries: atoms() for overview, find_color() for specific colors, "
+                "print_region with max 20×20 areas.)"
+            )
 
         return (output, error, self._action_taken)
 

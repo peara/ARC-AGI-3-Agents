@@ -518,6 +518,128 @@ def test_agent_handles_update_notes_tool_call():
     assert agent._world_model == {"notes": "test notes", "plan": "test plan"}
 
 
+class TestTrimOldToolResults:
+    def test_replaces_old_results(self):
+        """6 python tool results → 3 oldest have placeholder."""
+        agent = SimulatorFirstAgent.__new__(SimulatorFirstAgent)
+        msgs = []
+        for i in range(6):
+            msgs.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": f"tc{i}",
+                            "function": {"name": "python", "arguments": "{}"},
+                        }
+                    ],
+                }
+            )
+            msgs.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": f"tc{i}",
+                    "content": f"output {i}" * 100,
+                }
+            )
+        agent._trim_old_tool_results(msgs, keep_last_n=3)
+        assert len(msgs) == 12
+        tool_msgs = [m for m in msgs if m.get("role") == "tool"]
+        placeholders = [m for m in tool_msgs if "[Old output" in m.get("content", "")]
+        assert len(placeholders) >= 1
+
+    def test_no_delete(self):
+        """Messages list length unchanged after trimming."""
+        agent = SimulatorFirstAgent.__new__(SimulatorFirstAgent)
+        msgs = []
+        for i in range(6):
+            msgs.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": f"tc{i}",
+                            "function": {"name": "python", "arguments": "{}"},
+                        }
+                    ],
+                }
+            )
+            msgs.append(
+                {"role": "tool", "tool_call_id": f"tc{i}", "content": f"output {i}"}
+            )
+        original_len = len(msgs)
+        agent._trim_old_tool_results(msgs, keep_last_n=3)
+        assert len(msgs) == original_len
+
+    def test_exempts_update_notes(self):
+        """update_notes results are NOT trimmed."""
+        agent = SimulatorFirstAgent.__new__(SimulatorFirstAgent)
+        msgs = []
+        for i in range(4):
+            name = "update_notes" if i % 2 == 1 else "python"
+            msgs.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": f"tc{i}", "function": {"name": name, "arguments": "{}"}}
+                    ],
+                }
+            )
+            msgs.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": f"tc{i}",
+                    "content": f"output {i}" * 50,
+                }
+            )
+        agent._trim_old_tool_results(msgs, keep_last_n=2)
+        for i in [1, 3]:
+            tool_msg = msgs[i * 2 + 1]
+            assert "output" in tool_msg["content"], (
+                f"update_notes result {i} was trimmed"
+            )
+
+    def test_preserves_pairing(self):
+        """Every role:tool has matching preceding tool_calls entry."""
+        agent = SimulatorFirstAgent.__new__(SimulatorFirstAgent)
+        msgs = []
+        for i in range(6):
+            msgs.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": f"tc{i}",
+                            "function": {"name": "python", "arguments": "{}"},
+                        }
+                    ],
+                }
+            )
+            msgs.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": f"tc{i}",
+                    "content": f"output {i}" * 100,
+                }
+            )
+        agent._trim_old_tool_results(msgs, keep_last_n=3)
+        for i, m in enumerate(msgs):
+            if m.get("role") == "tool":
+                tc_id = m.get("tool_call_id")
+                found = False
+                for j in range(i):
+                    if msgs[j].get("role") == "assistant" and msgs[j].get("tool_calls"):
+                        for tc in msgs[j]["tool_calls"]:
+                            if tc["id"] == tc_id:
+                                found = True
+                                break
+                assert found, f"Tool message at index {i} has no matching tool_calls"
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # 6. Registration
 # ═══════════════════════════════════════════════════════════════════════════════
