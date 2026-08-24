@@ -99,7 +99,9 @@ You can call `action()` multiple times in one Python snippet, including inside \
 loops. Each call refreshes `current_frame`, `previous_frame`, `history`, \
 `valid_actions`, and `last_action_result` before execution continues. If \
 `last_action_result` reports `game_over` or `run_complete`, stop acting \
-immediately and re-ground on the next turn.
+immediately and re-ground on the next turn. You have a limited action budget \
+per turn (10 actions). Use it wisely — explore briefly, then build simulate \
+so you can plan without spending actions.
 
 Do NOT attempt to modify these variables. They are read-only.
 """
@@ -131,101 +133,98 @@ identification. For quantitative spatial reasoning, use the sandbox tools.
 AGENT_PYTHON_TOOL_ADDENDUM: str = """\
 Python tool
 
-You have a single tool: `python()`. It executes Python code in a sandbox with \
-preloaded game state and a simulator registration system.
+`python()` executes code in the sandbox with the preloaded state and tools listed above.
 
-Use the sandbox to:
-- Explore: take a few actions, inspect grids with atoms()/diff()/show_frame()
-- Build: write simulate(grid, action), call set_simulate(), call check()
-- Plan: use simulate() for short lookaheads to pick the best action
-- Act: execute the best action with action(), observe the result
-
-When writing a simulator, start from the images and diffs, then encode the rules \
-precisely. Do NOT try to understand the game from raw cell coordinates alone.
-
-Batch actions when you are confident about the sequence, but analyze the result \
-after every real environment action. Do NOT fire actions blindly. Use bounded \
-loops with a max iteration count and analyze after every action:
-
-```python
-# GOOD: bounded loop with analysis after every action
-for _ in range(10):
-    action(1)
-    if last_action_result.get('game_over') or last_action_result.get('run_complete'):
-        break
-    if not last_action_result.get('board_changed'):
-        print("Action had no effect — stop")
-        break
-```
-
-Never print or echo full 64×64 board frames. Return only compact derived \
-summaries such as object lists, diffs, coordinates, counts. Keep tool-output \
-context size minimal and decision-oriented.
-
-Allowed standard library imports: math, re, collections, itertools, functools, \
-json, string, random.
-
-Use `print()` to output results from your code. Output is capped at 1024 tokens \
-(approximately 4096 characters). Execution timeout is 30 seconds per code call. \
-You may make up to 10 python() calls per turn.
+- Output via `print()`, capped at 4096 characters.
+- Execution timeout: 30 seconds per call.
+- Max 10 python() calls per turn.
+- Allowed imports: math, re, collections, itertools, functools, json, string, random.
+- Never print full 64×64 grids — output compact summaries only (object lists, diffs, coordinates, counts).
 """
 
 AGENT_SIMULATOR_TOOLS_ADDENDUM: str = """\
-Simulator tools
+Sandbox tools
 
-These functions are available in the sandbox for writing and testing your \
-simulator:
-
-DATA ACCESS:
-  current_frame         -> the current 64×64 grid (list of lists of ints)
-  previous_frame        -> the previous frame grid, or None on the first frame
-  history               -> list of {action, frame} dicts for past transitions
-  valid_actions         -> list of action IDs available this turn
-  last_action_result    -> dict describing the last environment step
-
-VISUAL INSPECTION:
-  show_frame(i)         -> render frame i as an image (appears in next message)
+VISUAL:
+  show_frame(i)         -> render frame i as an image
   show_grid(grid, label) -> render an arbitrary grid as an image
 
-OBJECT INSPECTION:
-  atoms(grid)           -> all objects: [{color, size, centroid, bbox, cells}, ...]
-  find_color(grid, c)   -> list of (row, col) positions with the given color
-  print_region(grid, r0, r1, c0, c1) -> ASCII map of a sub-region (hex digits)
+OBJECTS:
+  atoms(grid)           -> [{color, size, centroid, bbox, cells}, ...]
+  find_color(grid, c)   -> [(row, col), ...] for cells with color c
+  print_region(grid, r0, r1, c0, c1) -> ASCII map of a sub-region
 
-DIFF INSPECTION:
-  diff(grid_a, grid_b)  -> cell-level diff: [(r, c, val_a, val_b), ...]
+DIFF:
+  diff(grid_a, grid_b)  -> [(r, c, val_a, val_b), ...]
 
-SIMULATOR CONTROL:
-  set_simulate(func)    -> register your simulate(grid, action) function
-  simulate(grid, action) -> run the registered simulator on a grid (for self-testing)
-  set_ignore(cells, colors) -> declare cells/colors to skip in check()/diagnose()
+SIMULATOR:
+  set_simulate(func)    -> register simulate(grid, action) -> next_grid
+  simulate(grid, action) -> run the registered simulator
+  set_ignore(cells, colors) -> skip these in check()/diagnose()
 
-CHECK AND DIAGNOSE:
-  check(simulate_fn)    -> test on recorded frames, print per-frame accuracy
-  diagnose(simulate_fn) -> test on recorded frames, print semantic error analysis
+VALIDATION:
+  check(simulate_fn)    -> accuracy on recorded frames
+  diagnose(simulate_fn) -> semantic error analysis
 
-IMPORTANT: your simulator function MUST accept `(grid, action)` — that is, a \
-grid (list of lists of ints) and an action ID. It does NOT accept a frame index.
+simulate(grid, action) MUST accept a grid (list of lists) and action ID — not a frame index.
 """
 
 AGENT_WORKFLOW_ADDENDUM: str = """\
 How to work
 
-1. Explore: take a few actions, observe what changes. Use Notes to record what you \
-learn. You don't need to understand everything — just enough to start building.
-2. Build: write simulate(grid, action). Test with check(). You don't need 100% \
-accuracy — good enough to reason about is fine.
-3. Plan: use simulate() for lookahead. Full BFS may not work on a 64×64 grid — \
-use short lookaheads (1-3 steps) to pick the best action. If something unexpected \
-happens, go back to exploring.
-4. Act: take the best action you found. Observe. If the result differs from \
-simulation, your simulator is wrong — go back to step 1 or 2.
+1. Explore: take a few actions (one of each action ID) to see what moves and how. \
+Use atoms(), diff(), and find_color() to identify objects. Call update_notes to \
+record what each action does. Keep this short — 4-8 actions is enough. Don't \
+waste your action budget on exploration.
 
-These aren't sequential — you'll cycle between them. Use Notes/Plan to track where \
-you are and what you know.
+2. Build simulate: once you know what each action does, write a simulate(grid, \
+action) function. Start simple — even a rough version is useful:
+
+```python
+def simulate(grid, action):
+    new_grid = [row[:] for row in grid]  # copy
+    # Find the player/block and move it based on action
+    # action 1 = ?, 2 = ?, etc. (fill in from your exploration)
+    return new_grid
+
+set_simulate(simulate)
+check()  # test against frames you've already seen
+```
+
+Call set_simulate(simulate) then check() to see how accurate it is. If wrong \
+cells appear, use diagnose() to understand why, then fix and re-check. \
+You don't need 100% accuracy — good enough to reason about is fine.
+
+3. Plan and act with simulate: once check() shows decent accuracy, STOP taking \
+actions blindly. Before each action, simulate first to decide what to do. \
+You need a registered simulate function for this — if you haven't called \
+set_simulate() yet, go back to step 2.
+
+```python
+# Plan: what state do I want to reach?
+# e.g. "move block to column 32" or "move block up to row 10"
+
+# Try each action with simulate, see which one makes progress
+grid = current_frame
+for a in valid_actions:
+    next_grid = simulate(grid, a)
+    d = diff(grid, next_grid)
+    print(f"Action {a}: {len(d)} cells change, block moves to {get_block_pos(next_grid)}")
+
+# Pick the action that moves toward your target, then call action() ONCE
+action(best_action)
+```
+
+If the result differs from what simulate predicted, your simulator is wrong — \
+go back to step 2. If you're stuck, re-explore (step 1) or try a different \
+target state.
+
+4. Cycle: you'll move between explore → build → plan. When something \
+unexpected happens, go back to an earlier step. Use update_notes to record \
+what you discover and what you're working on.
 
 The key idea: action() is for exploring and executing. simulate() is for \
-understanding and planning. Use simulate() to think before you act.
+understanding and planning. Always simulate before you act.
 """
 
 AGENT_WORLD_MODEL_ADDENDUM: str = """\
