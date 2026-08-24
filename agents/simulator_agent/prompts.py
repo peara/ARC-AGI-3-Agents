@@ -62,9 +62,7 @@ AGENT_GAME_OVERVIEW_ADDENDUM: str = (
     "the level. Each level is a 64×64 grid of color indices (0–15) representing 16 "
     "fixed colors.\n"
     "\n"
-    "The color index mapping is fixed across all games:\n"
-    + COLOR_LEGEND
-    + "\n\n"
+    "The color index mapping is fixed across all games:\n" + COLOR_LEGEND + "\n\n"
     "Key properties:\n"
     "- The world is deterministic: the same (state, action) always produces the same "
     "next state.\n"
@@ -166,62 +164,67 @@ VALIDATION:
   check(simulate_fn)    -> accuracy on recorded frames
   diagnose(simulate_fn) -> semantic error analysis
 
+PLANNING:
+  bfs(start_grid, goal_fn) -> search for a path (max depth 10, requires simulate)
+
 simulate(grid, action) MUST accept a grid (list of lists) and action ID — not a frame index.
 """
 
 AGENT_WORKFLOW_ADDENDUM: str = """\
 How to work
 
+Each turn, check your progress:
+[ ] Know most actions? → if no, take 1 of each action to learn
+[ ] Have simulate? → if no, write simulate + set_simulate + check
+[ ] Have a target? → if no, identify the goal state (what grid do I want?)
+[ ] Have a path? → if no, call bfs(current_frame, goal_fn) — max depth 10
+[ ] Path works? → execute the path, check board_changed after each action
+    If an action has no effect, simulate is wrong — fix it and re-search
+
 1. Explore: take a few actions (one of each action ID) to see what moves and how. \
 Use atoms(), diff(), and find_color() to identify objects. Call update_notes to \
-record what each action does. Keep this short — 4-8 actions is enough. Don't \
-waste your action budget on exploration.
+record what each action does. Keep this short — 4-8 actions is enough.
 
-2. Build simulate: once you know what each action does, write a simulate(grid, \
-action) function. Start simple — even a rough version is useful:
+2. Build simulate: write a simulate(grid, action) function. Start simple:
 
 ```python
 def simulate(grid, action):
-    new_grid = [row[:] for row in grid]  # copy
+    new_grid = [row[:] for row in grid]
     # Find the player/block and move it based on action
-    # action 1 = ?, 2 = ?, etc. (fill in from your exploration)
     return new_grid
 
 set_simulate(simulate)
-check()  # test against frames you've already seen
+check()
 ```
 
-Call set_simulate(simulate) then check() to see how accurate it is. If wrong \
-cells appear, use diagnose() to understand why, then fix and re-check. \
-You don't need 100% accuracy — good enough to reason about is fine.
+Call set_simulate(simulate) then check() to test. If wrong cells appear, use \
+diagnose() to understand why, then fix and re-check. You don't need 100% accuracy.
 
-3. Plan and act with simulate: once check() shows decent accuracy, STOP taking \
-actions blindly. Before each action, simulate first to decide what to do. \
-You need a registered simulate function for this — if you haven't called \
-set_simulate() yet, go back to step 2.
+3. Plan with bfs: define a goal function and call bfs to find a path. \
+bfs uses your simulate() to search — max depth is 10 actions.
 
 ```python
-# Plan: what state do I want to reach?
-# e.g. "move block to column 32" or "move block up to row 10"
+def goal(grid):
+    # e.g. block reached the target
+    cells = find_color(grid, 12)
+    if not cells: return False
+    return min(r for r, c in cells) <= 15  # block is in the top box
 
-# Try each action with simulate, see which one makes progress
-grid = current_frame
-for a in valid_actions:
-    next_grid = simulate(grid, a)
-    d = diff(grid, next_grid)
-    print(f"Action {a}: {len(d)} cells change, block moves to {get_block_pos(next_grid)}")
-
-# Pick the action that moves toward your target, then call action() ONCE
-action(best_action)
+path = bfs(current_frame, goal)
+if path:
+    print(f"Path: {path}")
+    # Execute the path
+    for a in path:
+        action(a)
+        if not last_action_result.get('board_changed'):
+            print(f"Action {a} had no effect — simulate is wrong!")
+            break
+else:
+    print("No path found — try a different goal or fix simulate")
 ```
 
-If the result differs from what simulate predicted, your simulator is wrong — \
-go back to step 2. If you're stuck, re-explore (step 1) or try a different \
-target state.
-
-4. Cycle: you'll move between explore → build → plan. When something \
-unexpected happens, go back to an earlier step. Use update_notes to record \
-what you discover and what you're working on.
+If the path fails (action has no effect), your simulate is wrong. Go back to \
+step 2, fix it, and re-search.
 
 The key idea: action() is for exploring and executing. simulate() is for \
 understanding and planning. Always simulate before you act.
@@ -323,9 +326,7 @@ UPDATE_NOTES_TOOL_SCHEMA: dict[str, Any] = {
                 },
                 "plan": {
                     "type": "string",
-                    "description": (
-                        "What you will do next turn — keep it short."
-                    ),
+                    "description": ("What you will do next turn — keep it short."),
                 },
             },
         },

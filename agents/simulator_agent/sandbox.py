@@ -17,10 +17,13 @@ in live mode the callback is called directly in-process).
 
 from __future__ import annotations
 
+import contextlib
+import io
 import re
 import signal
 import sys
 import threading
+from collections import deque
 from collections.abc import Callable
 from io import StringIO
 from typing import Any
@@ -44,16 +47,36 @@ from vision.render import grid_to_image, image_to_base64
 
 # ── Sandbox security ──────────────────────────────────────────────────────
 
-_ALLOWED_IMPORTS = frozenset({
-    "math", "re", "collections", "itertools", "functools",
-    "json", "string", "random",
-})
+_ALLOWED_IMPORTS = frozenset(
+    {
+        "math",
+        "re",
+        "collections",
+        "itertools",
+        "functools",
+        "json",
+        "string",
+        "random",
+    }
+)
 
-_DANGEROUS_BUILTINS = frozenset({
-    "open", "compile", "eval", "exec",
-    "getattr", "setattr", "delattr", "globals", "locals",
-    "vars", "dir", "type", "object",
-})
+_DANGEROUS_BUILTINS = frozenset(
+    {
+        "open",
+        "compile",
+        "eval",
+        "exec",
+        "getattr",
+        "setattr",
+        "delattr",
+        "globals",
+        "locals",
+        "vars",
+        "dir",
+        "type",
+        "object",
+    }
+)
 
 _DUNDER_PATTERN = re.compile(r"__\w+__")
 
@@ -79,18 +102,25 @@ class SimulatorSandbox:
         harness: ReplayHarness | None = None,
         timeout: float = 30.0,
         max_frames: int | None = None,
-        step_env_callback: Callable[[int, dict[str, Any] | None], dict[str, Any]] | None = None,
+        step_env_callback: Callable[[int, dict[str, Any] | None], dict[str, Any]]
+        | None = None,
         max_actions_per_turn: int = 10,
     ) -> None:
         # ── Determine mode ──────────────────────────────────────────────
         if harness is not None and step_env_callback is not None:
-            raise ValueError("Provide either harness (offline) or step_env_callback (live), not both")
+            raise ValueError(
+                "Provide either harness (offline) or step_env_callback (live), not both"
+            )
         if harness is None and step_env_callback is None:
-            raise ValueError("Provide either harness (offline) or step_env_callback (live)")
+            raise ValueError(
+                "Provide either harness (offline) or step_env_callback (live)"
+            )
 
         self.harness = harness
         self.timeout = timeout
-        self._step_env_callback: Callable[[int, dict[str, Any] | None], dict[str, Any]] | None = step_env_callback
+        self._step_env_callback: (
+            Callable[[int, dict[str, Any] | None], dict[str, Any]] | None
+        ) = step_env_callback
         self.max_actions_per_turn: int = max_actions_per_turn
         self.actions_this_turn: int = 0
         self._action_taken: int | None = None
@@ -149,11 +179,14 @@ class SimulatorSandbox:
         ns["n_frames"] = len(self._grids)
 
         # ── Simulator control ──────────────────────────────────────────
-        def set_simulate(func: Callable[[list[list[int]], int], list[list[int]]]) -> None:
+        def set_simulate(
+            func: Callable[[list[list[int]], int], list[list[int]]],
+        ) -> None:
             """Register a simulate(grid, action) -> next_grid function."""
             self._simulate = func
             try:
                 import inspect as _inspect
+
                 self._simulate_source = _inspect.getsource(func)
             except Exception:
                 self._simulate_source = "(source unavailable)"
@@ -184,7 +217,9 @@ class SimulatorSandbox:
             ``last_action_result``.
             """
             if self._step_env_callback is None:
-                raise RuntimeError("action() is only available in live mode (step_env_callback required)")
+                raise RuntimeError(
+                    "action() is only available in live mode (step_env_callback required)"
+                )
 
             # Build action_data from kwargs
             action_data: dict[str, Any] | None = dict(kwargs) if kwargs else None
@@ -218,11 +253,19 @@ class SimulatorSandbox:
 
             # Refresh namespace variables from callback response
             ns["objects"] = response.get("objects", ns.get("objects", ()))
-            ns["adjacency"] = response.get("adjacency", ns.get("adjacency", frozenset()))
+            ns["adjacency"] = response.get(
+                "adjacency", ns.get("adjacency", frozenset())
+            )
             ns["current_frame"] = response.get("grid", ns.get("current_frame"))
-            ns["previous_frame"] = prev_grid if prev_grid is not None else ns.get("previous_frame")
-            ns["valid_actions"] = response.get("valid_actions", ns.get("valid_actions", []))
-            ns["last_action_result"] = response.get("last_action_result", ns.get("last_action_result", {}))
+            ns["previous_frame"] = (
+                prev_grid if prev_grid is not None else ns.get("previous_frame")
+            )
+            ns["valid_actions"] = response.get(
+                "valid_actions", ns.get("valid_actions", [])
+            )
+            ns["last_action_result"] = response.get(
+                "last_action_result", ns.get("last_action_result", {})
+            )
             ns["history"] = response.get("history", ns.get("history", []))
 
             # Also update instance attributes for update_state() to work with
@@ -259,7 +302,9 @@ class SimulatorSandbox:
                             if grid[r][c] in colors:
                                 mask.add((r, c))
             self._ignore_mask = mask
-            print(f"[set_ignore] {len(self._ignore_mask)} cells will be ignored in check()/diagnose()")
+            print(
+                f"[set_ignore] {len(self._ignore_mask)} cells will be ignored in check()/diagnose()"
+            )
 
         ns["set_ignore"] = set_ignore
 
@@ -282,14 +327,20 @@ class SimulatorSandbox:
                 grid = self._grids[frame_index]
                 img = grid_to_image(grid, scale=8)
                 b64 = image_to_base64(img)
-                action = self._actions[frame_index] if frame_index < len(self._actions) else "?"
+                action = (
+                    self._actions[frame_index]
+                    if frame_index < len(self._actions)
+                    else "?"
+                )
                 caption = f"Frame {frame_index} (action={action})"
                 if label:
                     caption += f" — {label}"
-                self.pending_images.append({
-                    "b64": b64,
-                    "caption": caption,
-                })
+                self.pending_images.append(
+                    {
+                        "b64": b64,
+                        "caption": caption,
+                    }
+                )
                 msg = f"[show_frame] Frame {frame_index} rendered — image will appear in next message"
                 print(msg)
                 return msg
@@ -311,12 +362,17 @@ class SimulatorSandbox:
         def update_notes(notes: str, plan: str = "") -> None:
             """Record your world model for next turn."""
             self._pending_notes = {"notes": notes, "plan": plan}
-            print(f"[update_notes] recorded: notes={len(notes)} chars, plan={len(plan)} chars")
+            print(
+                f"[update_notes] recorded: notes={len(notes)} chars, plan={len(plan)} chars"
+            )
 
         ns["update_notes"] = update_notes
 
         # ── Prebuilt check ─────────────────────────────────────────────
-        def check(simulate_fn: Callable[[list[list[int]], int], list[list[int]]] | None = None) -> dict[str, Any]:
+        def check(
+            simulate_fn: Callable[[list[list[int]], int], list[list[int]]]
+            | None = None,
+        ) -> dict[str, Any]:
             """Test a simulate function against all recorded frames.
 
             If simulate_fn is None, uses the currently registered simulate.
@@ -326,13 +382,22 @@ class SimulatorSandbox:
             if fn is None:
                 print("No simulate function set. Call set_simulate(func) first.")
                 return {"error": "no simulate function"}
-            result = run_check(fn, self._grids, self._actions, verbose=True, ignore_mask=self._ignore_mask)
+            result = run_check(
+                fn,
+                self._grids,
+                self._actions,
+                verbose=True,
+                ignore_mask=self._ignore_mask,
+            )
             self._last_check_result = result
             return result
 
         ns["check"] = check
 
-        def diagnose(simulate_fn: Callable[[list[list[int]], int], list[list[int]]] | None = None) -> dict[str, Any]:
+        def diagnose(
+            simulate_fn: Callable[[list[list[int]], int], list[list[int]]]
+            | None = None,
+        ) -> dict[str, Any]:
             """Test simulate and print semantic error analysis.
 
             For each wrong frame, classifies errors as:
@@ -346,9 +411,112 @@ class SimulatorSandbox:
             if fn is None:
                 print("No simulate function set. Call set_simulate(func) first.")
                 return {"error": "no simulate function"}
-            return diagnose_fn(fn, self._grids, self._actions, ignore_mask=self._ignore_mask)
+            return diagnose_fn(
+                fn, self._grids, self._actions, ignore_mask=self._ignore_mask
+            )
 
         ns["diagnose"] = diagnose
+
+        def bfs(
+            start_grid: list[list[int]],
+            goal_fn: Callable[[list[list[int]]], bool],
+            max_depth: int = 10,
+        ) -> list[int] | None:
+            """Search for a path from start_grid to a goal state using simulate().
+
+            Args:
+                start_grid: The grid to search from.
+                goal_fn: A function(grid) -> bool. Returns True when the goal
+                    is reached. Any print() output from goal_fn at the goal
+                    state is captured and shown.
+                max_depth: Maximum path length (fixed at 10).
+
+            Returns:
+                A list of action IDs, or None if no path found.
+                Requires set_simulate() to be called first.
+            """
+            if self._simulate is None:
+                print("No simulate function set. Call set_simulate(func) first.")
+                return None
+
+            valid_acts = self.namespace.get("valid_actions", [])
+            if not valid_acts:
+                print("No valid actions available.")
+                return None
+
+            def grid_hash(g: list[list[int]]) -> tuple[tuple[int, ...], ...]:
+                return tuple(tuple(row) for row in g)
+
+            def deep_copy(g: list[list[int]]) -> list[list[int]]:
+                return [row[:] for row in g]
+
+            start_hash = grid_hash(start_grid)
+            visited: set[tuple[tuple[int, ...], ...]] = {start_hash}
+            queue: deque[tuple[list[list[int]], list[int]]] = deque(
+                [(deep_copy(start_grid), [])]
+            )
+            max_nodes = 50_000
+            nodes_expanded = 0
+
+            try:
+                if goal_fn(deep_copy(start_grid)):
+                    goal_buf = io.StringIO()
+                    with contextlib.redirect_stdout(goal_buf):
+                        goal_fn(deep_copy(start_grid))
+                    print("Goal already reached. Path: [] (0 steps)")
+                    goal_output = goal_buf.getvalue().strip()
+                    if goal_output:
+                        print(goal_output)
+                    return []
+            except Exception as e:
+                print(f"Error in goal_fn: {e}")
+                return None
+
+            while queue and nodes_expanded < max_nodes:
+                grid, path = queue.popleft()
+                nodes_expanded += 1
+
+                if len(path) >= max_depth:
+                    continue
+
+                for action_id in valid_acts:
+                    try:
+                        next_grid: Any = self._simulate(deep_copy(grid), action_id)
+                    except Exception:
+                        continue
+
+                    if next_grid is None:
+                        continue
+
+                    nh = grid_hash(next_grid)
+                    if nh in visited:
+                        continue
+                    visited.add(nh)
+
+                    new_path = path + [action_id]
+
+                    try:
+                        with contextlib.redirect_stdout(io.StringIO()):
+                            is_goal = goal_fn(deep_copy(next_grid))
+                    except Exception:
+                        continue
+
+                    if is_goal:
+                        goal_buf = io.StringIO()
+                        with contextlib.redirect_stdout(goal_buf):
+                            goal_fn(deep_copy(next_grid))
+                        print(f"Path found: {new_path} ({len(new_path)} steps)")
+                        goal_output = goal_buf.getvalue().strip()
+                        if goal_output:
+                            print(goal_output)
+                        return new_path
+
+                    queue.append((next_grid, new_path))
+
+            print(f"No path found within depth {max_depth}.")
+            return None
+
+        ns["bfs"] = bfs
 
         return ns
 
@@ -420,7 +588,8 @@ class SimulatorSandbox:
             real_import = raw_builtins["__import__"]
         else:
             safe_builtins = {
-                k: v for k, v in vars(raw_builtins).items()
+                k: v
+                for k, v in vars(raw_builtins).items()
                 if k not in _DANGEROUS_BUILTINS
             }
             real_import = raw_builtins.__import__
@@ -454,6 +623,7 @@ class SimulatorSandbox:
 
         old_handler: Any = None
         if in_main_thread:
+
             def _timeout_handler(signum: int, frame: Any) -> None:  # noqa: ARG001
                 raise TimeoutError(f"Sandbox timed out after {self.timeout}s")
 
@@ -511,7 +681,10 @@ class SimulatorSandbox:
             }
 
         result = run_check(
-            self._simulate, self._grids, self._actions, verbose=False,
+            self._simulate,
+            self._grids,
+            self._actions,
+            verbose=False,
             ignore_mask=self._ignore_mask,
         )
 

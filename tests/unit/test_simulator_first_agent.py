@@ -326,7 +326,9 @@ result = check()
         """update_notes() records structured notes in the sandbox."""
         sandbox = _make_live_sandbox()
         assert sandbox._pending_notes == {}
-        output, error, _ = sandbox.run_code("update_notes(notes='test notes', plan='test plan')")
+        output, error, _ = sandbox.run_code(
+            "update_notes(notes='test notes', plan='test plan')"
+        )
         assert error is None, f"Unexpected error: {error}"
         assert sandbox._pending_notes == {"notes": "test notes", "plan": "test plan"}
 
@@ -416,10 +418,16 @@ class TestSimulatorFirstAgent:
 
     def test_estimate_tokens_with_images(self):
         messages = [
-            {"role": "user", "content": [
-                {"type": "text", "text": "See this image"},
-                {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc123"}},
-            ]},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "See this image"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,abc123"},
+                    },
+                ],
+            },
             {"role": "assistant", "content": "I see it"},
         ]
         tokens = SimulatorFirstAgent._estimate_tokens(messages)
@@ -432,27 +440,33 @@ class TestSimulatorFirstAgent:
 
     def test_strip_old_images(self):
         history = [
-            {"role": "user", "content": [
-                {"type": "text", "text": "Frame 1"},
-                {"type": "image_url", "image_url": {"url": "data:image/png;base64,old1"}},
-            ]},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Frame 1"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,old1"},
+                    },
+                ],
+            },
             {"role": "assistant", "content": "ok"},
-            {"role": "user", "content": [
-                {"type": "text", "text": "Frame 2"},
-                {"type": "image_url", "image_url": {"url": "data:image/png;base64,new1"}},
-            ]},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Frame 2"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,new1"},
+                    },
+                ],
+            },
         ]
         SimulatorFirstAgent._strip_old_images(history, keep_last_n_user=1)
         # Old user message should have images stripped
-        assert all(
-            p.get("type") != "image_url"
-            for p in history[0]["content"]
-        )
+        assert all(p.get("type") != "image_url" for p in history[0]["content"])
         # Recent user message should keep its image
-        assert any(
-            p.get("type") == "image_url"
-            for p in history[2]["content"]
-        )
+        assert any(p.get("type") == "image_url" for p in history[2]["content"])
 
     def test_keep_recent_assistant_turns(self):
         messages = [
@@ -509,6 +523,75 @@ def test_agent_handles_update_notes_tool_call():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+class TestBfs:
+    def test_bfs_no_simulate(self):
+        """bfs returns None when no simulate is registered."""
+        sb = SimulatorSandbox(step_env_callback=lambda a, d: {})
+        output, error, _ = sb.run_code(
+            "result = bfs([[0]], lambda g: True)\nprint(f'Result: {result}')"
+        )
+        assert error is None
+        assert "No simulate" in output
+
+    def test_bfs_goal_already_reached(self):
+        """bfs returns [] when goal is already reached at start."""
+        sb = SimulatorSandbox(step_env_callback=lambda a, d: {})
+        sb.namespace["valid_actions"] = [0, 1]
+        output, error, _ = sb.run_code(
+            """
+def sim(grid, action):
+    return [row[:] for row in grid]
+set_simulate(sim)
+result = bfs([[0, 0], [0, 0]], lambda g: True)
+print(f'Result: {result}')
+"""
+        )
+        assert error is None
+        assert "Goal already reached" in output
+        assert "Result: []" in output
+
+    def test_bfs_finds_path(self):
+        """bfs finds a 1-step path with a simple simulate."""
+        sb = SimulatorSandbox(step_env_callback=lambda a, d: {})
+        sb.namespace["valid_actions"] = [0, 1]
+        output, error, _ = sb.run_code(
+            """
+def simulate(grid, action):
+    new_grid = [row[:] for row in grid]
+    if action == 1:
+        new_grid[0][0] = 99  # change a cell
+    return new_grid
+set_simulate(simulate)
+def goal(grid):
+    return grid[0][0] == 99
+result = bfs([[0, 0], [0, 0]], goal)
+print(f'Path: {result}')
+"""
+        )
+        assert error is None
+        assert "Path found: [1]" in output
+        assert "Path: [1]" in output
+
+    def test_bfs_no_path(self):
+        """bfs returns None when no path exists within depth."""
+        sb = SimulatorSandbox(step_env_callback=lambda a, d: {})
+        sb.namespace["valid_actions"] = [0, 1]
+        output, error, _ = sb.run_code(
+            """
+def simulate(grid, action):
+    return [row[:] for row in grid]
+set_simulate(simulate)
+def goal(grid):
+    return grid[0][0] == 99
+result = bfs([[0, 0], [0, 0]], goal)
+print(f'Result: {result}')
+"""
+        )
+        assert error is None
+        assert "No path found" in output
+        assert "Result: None" in output
+
+
 class TestRegistration:
     def test_simulatorfirst_in_available_agents(self):
         assert "simulatorfirst" in AVAILABLE_AGENTS
@@ -518,4 +601,5 @@ class TestRegistration:
 
     def test_simulatorfirst_is_agent_subclass(self):
         from agents.agent import Agent
+
         assert issubclass(AVAILABLE_AGENTS["simulatorfirst"], Agent)
