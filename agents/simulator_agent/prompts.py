@@ -343,6 +343,7 @@ def build_agent_user_prompt(
     available_actions: list[int],
     frame_index: int,
     history_summary: str,
+    simulate_status: str = "",
 ) -> list[dict]:
     """Build a multimodal user message for the live simulator-first agent.
 
@@ -354,6 +355,9 @@ def build_agent_user_prompt(
         available_actions: List of action IDs available this turn.
         frame_index: Current frame number (0-based).
         history_summary: Short text summary of recent history.
+        simulate_status: Text describing the current simulate function
+            state (registered, accuracy, etc.). Empty string if no
+            simulate function has been registered.
 
     Returns:
         A list containing a single user message dict with content blocks
@@ -383,6 +387,9 @@ def build_agent_user_prompt(
 
     if world_model_text:
         content_blocks.append({"type": "text", "text": world_model_text})
+
+    if simulate_status:
+        content_blocks.append({"type": "text", "text": simulate_status})
 
     if history_summary:
         content_blocks.append({"type": "text", "text": history_summary})

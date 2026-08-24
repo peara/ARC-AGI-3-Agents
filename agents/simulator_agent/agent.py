@@ -147,12 +147,14 @@ class SimulatorFirstAgent(DirectStepAgent):
 
         # ── 6. Build prompts ───────────────────────────────────────────
         world_model_text = format_notes(self._world_model)
+        simulate_status = self._build_simulate_status()
         user_content = build_agent_user_prompt(
             grid_image_b64=grid_b64,
             world_model_text=world_model_text,
             available_actions=self._valid_actions,
             frame_index=self._frame_index,
             history_summary=history_summary,
+            simulate_status=simulate_status,
         )
 
         messages: list[dict[str, Any]] = self._trim_messages_for_context(
@@ -239,7 +241,10 @@ class SimulatorFirstAgent(DirectStepAgent):
                         })
 
                         # Run code in sandbox (in-process)
+                        had_simulate = self._sandbox._simulate is not None
                         output, error, action_taken_id = self._sandbox.run_code(code)
+                        if not had_simulate and self._sandbox._simulate is not None:
+                            logger.info(f"simulatorfirst: simulate function registered at frame {self._frame_index}")
 
                         # Build tool result
                         tool_result_parts: list[str] = []
@@ -595,6 +600,27 @@ class SimulatorFirstAgent(DirectStepAgent):
             lines.append(f"Frame {idx}: action={action_id}")
         return "Recent history:\n" + "\n".join(lines)
 
+    def _build_simulate_status(self) -> str:
+        """Build text describing the current simulate function state for the prompt."""
+        if self._sandbox._simulate is None:
+            return ""
+        lines = ["Simulator: registered."]
+        result = self._sandbox._last_check_result
+        if result and "error" not in result:
+            acc = result.get("overall_accuracy")
+            wrong = result.get("wrong_cells", 0)
+            correct = result.get("frames_correct", 0)
+            total = result.get("frames_total", 0)
+            if acc is not None:
+                lines.append(f"Last check(): {acc:.1f}% accuracy, {wrong} wrong cells, {correct}/{total} frames correct.")
+            else:
+                lines.append(f"Last check(): {correct}/{total} frames correct.")
+        elif result and "error" in result:
+            lines.append("Last check(): error.")
+        else:
+            lines.append("No check() run yet. Call check() to test it.")
+        return " ".join(lines)
+
     # ── Recording ──────────────────────────────────────────────────────────
 
     def _extra_record_data(self) -> dict[str, Any]:
@@ -603,6 +629,10 @@ class SimulatorFirstAgent(DirectStepAgent):
             "simulator_state": {
                 "world_model": self._world_model,
                 "history_turns": len(self._history_turns),
+                "has_simulate": self._sandbox._simulate is not None,
+                "simulate_source": self._sandbox._simulate_source,
+                "last_check_result": self._sandbox._last_check_result,
+                "n_collected_frames": len(self._sandbox._grids),
             }
         }
 

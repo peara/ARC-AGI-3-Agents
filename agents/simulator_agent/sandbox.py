@@ -126,6 +126,8 @@ class SimulatorSandbox:
 
         # Current simulator state
         self._simulate: Callable[[list[list[int]], int], list[list[int]]] | None = None
+        self._simulate_source: str = ""
+        self._last_check_result: dict[str, Any] | None = None
         self._ignore_mask: set[tuple[int, int]] = set()
         self._prev_correct_frames: set[int] = set()
         self.pending_images: list[dict[str, Any]] = []
@@ -150,6 +152,12 @@ class SimulatorSandbox:
         def set_simulate(func: Callable[[list[list[int]], int], list[list[int]]]) -> None:
             """Register a simulate(grid, action) -> next_grid function."""
             self._simulate = func
+            try:
+                import inspect as _inspect
+                self._simulate_source = _inspect.getsource(func)
+            except Exception:
+                self._simulate_source = "(source unavailable)"
+            print("[set_simulate] registered. simulate(grid, action) is now available.")
 
         ns["set_simulate"] = set_simulate
 
@@ -318,7 +326,9 @@ class SimulatorSandbox:
             if fn is None:
                 print("No simulate function set. Call set_simulate(func) first.")
                 return {"error": "no simulate function"}
-            return run_check(fn, self._grids, self._actions, verbose=True, ignore_mask=self._ignore_mask)
+            result = run_check(fn, self._grids, self._actions, verbose=True, ignore_mask=self._ignore_mask)
+            self._last_check_result = result
+            return result
 
         ns["check"] = check
 
