@@ -98,7 +98,7 @@ loops. Each call refreshes `current_frame`, `previous_frame`, `history`, \
 `valid_actions`, and `last_action_result` before execution continues. If \
 `last_action_result` reports `game_over` or `run_complete`, stop acting \
 immediately and re-ground on the next turn. You have a limited action budget \
-per turn (10 actions). Use it wisely — explore briefly, then build simulate \
+per game (80 actions). Use it wisely — explore briefly, then build simulate \
 so you can plan without spending actions.
 
 Do NOT attempt to modify these variables. They are read-only.
@@ -135,7 +135,7 @@ Python tool
 
 - Output via `print()`, capped at 4096 characters.
 - Execution timeout: 30 seconds per call.
-- Max 10 python() calls per turn.
+- Max 100 python() calls per turn.
 - Allowed imports: math, re, collections, itertools, functools, json, string, random.
 - Never print full 64×64 grids — output compact summaries only (object lists, diffs, coordinates, counts).
 - Print compact summaries only. Use atoms() for grid overview, find_color() for specific colors, print_region with sub-regions (max 20×20). Never print full 64×64 grids — they exceed the output cap.
@@ -166,7 +166,7 @@ VALIDATION:
   diagnose(simulate_fn) -> semantic error analysis
 
 PLANNING:
-  bfs(start_grid, goal_fn) -> search for a path (max depth 10, requires simulate)
+  bfs(start_grid, goal_fn) -> search for a path (max depth 20, requires simulate)
 
 simulate(grid, action) MUST accept a grid (list of lists) and action ID — not a frame index.
 """
@@ -178,7 +178,7 @@ Each turn, check your progress:
 [ ] Know most actions? → if no, take 1 of each action to learn
 [ ] Have simulate? → if no, write simulate + set_simulate + check
 [ ] Have a target? → if no, identify the goal state (what grid do I want?)
-[ ] Have a path? → if no, call bfs(current_frame, goal_fn) — max depth 10
+[ ] Have a path? → if no, call bfs(current_frame, goal_fn) — max depth 20
 [ ] Path works? → execute the path, check board_changed after each action
     If an action has no effect, simulate is wrong — fix it and re-search
 
@@ -202,7 +202,7 @@ Call set_simulate(simulate) then check() to test. If wrong cells appear, use \
 diagnose() to understand why, then fix and re-check. You don't need 100% accuracy.
 
 3. Plan with bfs: define a goal function and call bfs to find a path. \
-bfs uses your simulate() to search — max depth is 10 actions.
+bfs uses your simulate() to search — max depth is 20 actions.
 
 ```python
 def goal(grid):

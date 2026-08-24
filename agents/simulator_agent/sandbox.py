@@ -104,7 +104,6 @@ class SimulatorSandbox:
         max_frames: int | None = None,
         step_env_callback: Callable[[int, dict[str, Any] | None], dict[str, Any]]
         | None = None,
-        max_actions_per_turn: int = 10,
     ) -> None:
         # ── Determine mode ──────────────────────────────────────────────
         if harness is not None and step_env_callback is not None:
@@ -121,7 +120,6 @@ class SimulatorSandbox:
         self._step_env_callback: (
             Callable[[int, dict[str, Any] | None], dict[str, Any]] | None
         ) = step_env_callback
-        self.max_actions_per_turn: int = max_actions_per_turn
         self.actions_this_turn: int = 0
         self._action_taken: int | None = None
 
@@ -224,11 +222,13 @@ class SimulatorSandbox:
             # Build action_data from kwargs
             action_data: dict[str, Any] | None = dict(kwargs) if kwargs else None
 
+            # Check if game is already over from previous action
+            if self._last_action_result.get(
+                "run_complete"
+            ) or self._last_action_result.get("game_over"):
+                raise RuntimeError("Game already won/over — no more actions allowed")
+
             self.actions_this_turn += 1
-            if self.actions_this_turn > self.max_actions_per_turn:
-                raise RuntimeError(
-                    f"Max actions per turn exceeded ({self.max_actions_per_turn})"
-                )
 
             # Remember the grid before action for history tracking
             prev_grid = self._current_frame
@@ -420,7 +420,7 @@ class SimulatorSandbox:
         def bfs(
             start_grid: list[list[int]],
             goal_fn: Callable[[list[list[int]]], bool],
-            max_depth: int = 10,
+            max_depth: int = 20,
         ) -> list[int] | None:
             """Search for a path from start_grid to a goal state using simulate().
 
@@ -429,7 +429,7 @@ class SimulatorSandbox:
                 goal_fn: A function(grid) -> bool. Returns True when the goal
                     is reached. Any print() output from goal_fn at the goal
                     state is captured and shown.
-                max_depth: Maximum path length (fixed at 10).
+                max_depth: Maximum path length (default 20).
 
             Returns:
                 A list of action IDs, or None if no path found.

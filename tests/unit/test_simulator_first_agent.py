@@ -230,23 +230,25 @@ class TestSandboxLiveMode:
         assert error is None
         assert action_taken is None
 
-    def test_max_actions_per_turn(self):
-        sandbox = SimulatorSandbox(
-            step_env_callback=_mock_step_env_callback,
-            timeout=10.0,
-            max_actions_per_turn=2,
-        )
+    def test_action_blocked_after_win(self):
+        """action() should be blocked after a winning result."""
+        sandbox = SimulatorSandbox(step_env_callback=_mock_step_env_callback)
         sandbox._current_frame = [[0] * 4 for _ in range(4)]
+        sandbox._last_action_result = {"run_complete": True}
         sandbox.namespace["current_frame"] = sandbox._current_frame
         sandbox.namespace["previous_frame"] = None
-        # First two actions succeed
-        output, error, _ = sandbox.run_code("action(0); action(1)")
-        assert error is None or "Max actions" not in (error or "")
-        # Third action in same turn exceeds limit
+        output, error, _ = sandbox.run_code("action(0)")
+        assert "Game already won/over" in (error or "")
+
+    def test_action_blocked_after_game_over(self):
+        """action() should be blocked after a game-over result."""
+        sandbox = SimulatorSandbox(step_env_callback=_mock_step_env_callback)
+        sandbox._current_frame = [[0] * 4 for _ in range(4)]
+        sandbox._last_action_result = {"game_over": True}
         sandbox.namespace["current_frame"] = sandbox._current_frame
         sandbox.namespace["previous_frame"] = None
-        output, error, action_taken = sandbox.run_code("action(0)")
-        assert "Max actions" in (error or "")
+        output, error, _ = sandbox.run_code("action(0)")
+        assert "Game already won/over" in (error or "")
 
     def test_dunder_guard_rejects_import(self):
         sandbox = _make_live_sandbox()
@@ -275,7 +277,6 @@ class TestSandboxLiveMode:
         sandbox = SimulatorSandbox(
             step_env_callback=_mock_step_env_callback,
             timeout=10.0,
-            max_actions_per_turn=10,
         )
         sandbox._current_frame = [[0] * 4 for _ in range(4)]
         sandbox.namespace["current_frame"] = sandbox._current_frame
@@ -707,10 +708,12 @@ def goal(grid):
     return grid[0][0] == 99
 result = bfs([[0, 0], [0, 0]], goal)
 print(f'Result: {result}')
+print(f'Depth: {result}')
 """
         )
         assert error is None
         assert "No path found" in output
+        assert "No path found within depth 20" in output
         assert "Result: None" in output
 
 

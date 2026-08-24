@@ -87,7 +87,6 @@ class SimulatorFirstAgent(DirectStepAgent):
         self._sandbox = SimulatorSandbox(
             step_env_callback=self._step_env_callback,
             timeout=30.0,
-            max_actions_per_turn=10,
         )
 
     # ── Properties ────────────────────────────────────────────────────────
@@ -436,6 +435,10 @@ class SimulatorFirstAgent(DirectStepAgent):
         the sandbox may call ``action()`` multiple times in a single
         ``choose_action()`` (multi-action batching).
         """
+        if self.action_counter >= self.max_actions:
+            raise RuntimeError(
+                f"MAX_ACTIONS ({self.max_actions}) reached — no more actions allowed"
+            )
         frame = self.take_action(action)
         if frame is not None:
             self.action_counter += 1
