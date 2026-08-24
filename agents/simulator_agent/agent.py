@@ -186,7 +186,7 @@ class SimulatorFirstAgent(DirectStepAgent):
         # ── 9. Tool loop ───────────────────────────────────────────────
         action_taken: GameAction | None = None
         turn_count = 0
-        max_tool_steps = 12
+        max_tool_steps = 100
 
         for step in range(max_tool_steps):
             turn_count = step + 1
