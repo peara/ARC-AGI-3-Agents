@@ -186,6 +186,7 @@ class SimulatorFirstAgent(DirectStepAgent):
         action_taken: GameAction | None = None
         turn_count = 0
         max_tool_steps = 100
+        fallback_reason: str | None = None
 
         for step in range(max_tool_steps):
             turn_count = step + 1
@@ -216,6 +217,7 @@ class SimulatorFirstAgent(DirectStepAgent):
                         )
                         continue
                 logger.warning(f"simulatorfirst: LLM call failed: {exc}")
+                fallback_reason = f"LLM call failed: {exc}"
                 preserve_history = False
                 break
 
@@ -387,10 +389,18 @@ class SimulatorFirstAgent(DirectStepAgent):
                 fallback_id = 0
             action_taken = GameAction.from_id(fallback_id)
             self.step_env(action_taken)
-            logger.warning(
-                f"simulatorfirst: tool loop exhausted, falling back to "
-                f"random action {action_taken.name} (id={fallback_id})"
-            )
+            if fallback_reason is not None:
+                logger.warning(
+                    f"simulatorfirst: {fallback_reason}, "
+                    f"falling back to random action {action_taken.name} "
+                    f"(id={fallback_id})"
+                )
+            else:
+                logger.warning(
+                    f"simulatorfirst: tool loop exhausted ({max_tool_steps} steps, "
+                    f"no action taken), falling back to random action "
+                    f"{action_taken.name} (id={fallback_id})"
+                )
 
         # Append this turn to history
         self._history_turns.append(
