@@ -938,6 +938,173 @@ class TestTrimOldNonToolMessages:
         assert "discovered something new" in msgs[2]["content"]
 
 
+class TestNotesMessageRegression:
+    def test_turn_start_appends_notes_user_message(self):
+        """Turn-start message list should include a trailing notes user message."""
+        agent = SimulatorFirstAgent.__new__(SimulatorFirstAgent)
+        agent._world_model = {"notes": "test notes", "plan": "test plan"}
+        messages = [
+            {"role": "system", "content": "system prompt"},
+            {"role": "user", "content": "frame prompt"},
+            {"role": "assistant", "content": "ok"},
+        ]
+        # Production will append a separate notes message at turn start.
+        agent._append_notes_message(messages, agent._world_model)
+        notes_messages = [
+            m
+            for m in messages
+            if m.get("role") == "user"
+            and isinstance(m.get("content"), str)
+            and m["content"].startswith("[Current notes]\n")
+        ]
+        assert len(notes_messages) == 1
+        assert "test notes" in notes_messages[0]["content"]
+        assert "test plan" in notes_messages[0]["content"]
+
+    def test_update_notes_updates_message_in_place(self):
+        """Updating notes should mutate the existing notes message, not append."""
+        agent = SimulatorFirstAgent.__new__(SimulatorFirstAgent)
+        stale_world_model = {"notes": "old notes", "plan": "old plan"}
+        notes_content = f"[Current notes]\n{format_notes(stale_world_model)}"
+        messages = [
+            {"role": "user", "content": notes_content},
+        ]
+        original_len = len(messages)
+
+        # Production will update the notes message in-place.
+        new_world_model = {"notes": "new notes", "plan": "new plan"}
+        agent._update_notes_message(messages, new_world_model)
+        assert len(messages) == original_len
+        notes_msg = messages[0]
+        assert notes_msg["content"].startswith("[Current notes]\n")
+        assert "new notes" in notes_msg["content"]
+        assert "new plan" in notes_msg["content"]
+        assert "old notes" not in notes_msg["content"]
+        assert "old plan" not in notes_msg["content"]
+
+    def test_same_turn_double_call_reflects_first_call(self):
+        """Regression test: first update_notes correction must replace stale notes."""
+        agent = SimulatorFirstAgent.__new__(SimulatorFirstAgent)
+        stale_world_model = {"notes": "stale notes from prev turn", "plan": ""}
+        stale_notes = f"[Current notes]\n{format_notes(stale_world_model)}"
+        messages = [
+            {"role": "system", "content": "system prompt"},
+            {"role": "user", "content": stale_notes},
+        ]
+
+        # Production will apply the first update_notes correction in-place.
+        correction = {"notes": "correction: color 0 does not move", "plan": ""}
+        agent._update_notes_message(messages, correction)
+
+        notes_msg = messages[-1]
+        assert notes_msg["content"].startswith("[Current notes]\n")
+        assert "correction: color 0 does not move" in notes_msg["content"]
+        assert "stale notes from prev turn" not in notes_msg["content"]
+
+    def test_update_notes_empty_strings(self):
+        """Empty notes/plan values are still formatted with labels intact."""
+        agent = SimulatorFirstAgent.__new__(SimulatorFirstAgent)
+        agent._world_model = {"notes": "", "plan": ""}
+        initial_world_model = {"notes": "initial notes", "plan": "initial plan"}
+        notes_content = f"[Current notes]\n{format_notes(initial_world_model)}"
+        messages = [
+            {"role": "user", "content": notes_content},
+        ]
+
+        agent._update_notes_message(messages, agent._world_model)
+
+        notes_msg = messages[-1]
+        assert notes_msg["content"].startswith("[Current notes]\n")
+        assert "Notes:" in notes_msg["content"]
+        assert "Plan:" in notes_msg["content"]
+        assert "initial notes" not in notes_msg["content"]
+        assert "initial plan" not in notes_msg["content"]
+
+    def test_update_notes_notes_only_no_plan(self):
+        """Updating notes only leaves the existing plan text in place."""
+        agent = SimulatorFirstAgent.__new__(SimulatorFirstAgent)
+        initial_world_model = {"notes": "old", "plan": "old plan"}
+        notes_content = f"[Current notes]\n{format_notes(initial_world_model)}"
+        messages = [
+            {"role": "user", "content": notes_content},
+        ]
+
+        updated_world_model = {"notes": "new notes only", "plan": "old plan"}
+        agent._update_notes_message(messages, updated_world_model)
+
+        notes_msg = messages[-1]
+        assert notes_msg["content"].startswith("[Current notes]\n")
+        assert "new notes only" in notes_msg["content"]
+        assert "old plan" in notes_msg["content"]
+
+    def test_update_notes_multiline(self):
+        """Multiline notes content is preserved in the notes message."""
+        agent = SimulatorFirstAgent.__new__(SimulatorFirstAgent)
+        agent._world_model = {"notes": "line1\nline2\nline3", "plan": ""}
+        stale_world_model = {"notes": "stale single line", "plan": ""}
+        notes_content = f"[Current notes]\n{format_notes(stale_world_model)}"
+        messages = [
+            {"role": "user", "content": notes_content},
+        ]
+
+        agent._update_notes_message(messages, agent._world_model)
+
+        notes_msg = messages[-1]
+        assert notes_msg["content"].startswith("[Current notes]\n")
+        assert "line1" in notes_msg["content"]
+        assert "line3" in notes_msg["content"]
+        assert "stale single line" not in notes_msg["content"]
+
+    def test_notes_message_not_trimmed_by_non_tool_trimmer(self):
+        """The non-tool message trimmer must leave notes messages unchanged."""
+        notes_content = (
+            "[Current notes]\n"
+            "Notes carried from earlier turns:\n"
+            "Notes: test\n"
+            "Plan: \n"
+            "- Revise anything above if it contradicts what you see now."
+        )
+        messages = [
+            {
+                "role": "user",
+                "content": "If you discovered something new about the game, call update_notes.",
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Frame 0"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,abc"},
+                    },
+                ],
+            },
+            {"role": "user", "content": notes_content},
+            {
+                "role": "user",
+                "content": "If you discovered something new about the game, call update_notes.",
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Frame 1"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,def"},
+                    },
+                ],
+            },
+        ]
+
+        SimulatorFirstAgent._trim_old_non_tool_messages(messages)
+
+        assert messages[0]["content"] == "[nudge]"
+        assert messages[1]["content"] == "[frame]"
+        assert messages[2]["content"] == notes_content
+        assert "discovered something new" in messages[3]["content"]
+        assert messages[4]["content"][0]["text"] == "Frame 1"
+
+
 class TestRegistration:
     def test_simulatorfirst_in_available_agents(self):
         assert "simulatorfirst" in AVAILABLE_AGENTS

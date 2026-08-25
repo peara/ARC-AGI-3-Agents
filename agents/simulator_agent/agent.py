@@ -150,11 +150,10 @@ class SimulatorFirstAgent(DirectStepAgent):
         history_summary = self._build_history_summary()
 
         # ── 6. Build prompts ───────────────────────────────────────────
-        world_model_text = format_notes(self._world_model)
         simulate_status = self._build_simulate_status()
         user_content = build_agent_user_prompt(
             grid_image_b64=grid_b64,
-            world_model_text=world_model_text,
+            world_model_text="",
             available_actions=self._valid_actions,
             frame_index=self._frame_index,
             history_summary=history_summary,
@@ -168,6 +167,7 @@ class SimulatorFirstAgent(DirectStepAgent):
                 *user_content,
             ],
         )
+        self._append_notes_message(messages, self._world_model)
 
         # ── 7-8. Update sandbox state ─────────────────────────────────
         self._sandbox.update_state(
@@ -235,6 +235,7 @@ class SimulatorFirstAgent(DirectStepAgent):
                             self._world_model["notes"] = notes
                         if plan:
                             self._world_model["plan"] = plan
+                        self._update_notes_message(messages, self._world_model)
                         messages.append(
                             {
                                 "role": "assistant",
@@ -436,6 +437,22 @@ class SimulatorFirstAgent(DirectStepAgent):
             self._history_messages = previous_history
 
         return action_taken
+
+    def _append_notes_message(
+        self, messages: list[dict[str, Any]], world_model: dict[str, str]
+    ) -> None:
+        notes_text = format_notes(world_model)
+        messages.append({"role": "user", "content": f"[Current notes]\n{notes_text}"})
+
+    def _update_notes_message(
+        self, messages: list[dict[str, Any]], world_model: dict[str, str]
+    ) -> None:
+        notes_text = f"[Current notes]\n{format_notes(world_model)}"
+        for msg in reversed(messages):
+            if msg.get("role") == "user" and isinstance(msg.get("content"), str):
+                if msg["content"].startswith("[Current notes]"):
+                    msg["content"] = notes_text
+                    return
 
     # ── step_env override ─────────────────────────────────────────────────
 
