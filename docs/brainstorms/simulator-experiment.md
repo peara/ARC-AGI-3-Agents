@@ -1,5 +1,12 @@
 # Simulator Experiment
 
+> **Status (2026-08-25):** The experiment evolved into a live agent.
+> See [`docs/reports/simulator-agent.md`](../reports/simulator-agent.md) for the full
+> design. Key change: the simulate signature reversed from
+> `simulate(frame_index, action)` to `simulate(grid, action)` to support BFS planning.
+> The sandbox gained `action()`, `bfs()`, `update_notes`, and a live mode
+> (`step_env_callback`). The agent is registered as `simulatorfirst`.
+
 ## Hypothesis
 
 An LLM can write a Python `simulate(frame_index, action) -> next_grid`
@@ -39,10 +46,12 @@ tool loop (single `python()` tool), measures accuracy after each turn.
 
 ### Key design decisions
 
-- **`simulate(frame_index, action)`** — not `simulate(grid, action)`.
-  The function calls `get_frame(frame_index)` internally, which lets it
-  access history if the game requires it. For the real agent, swap
-  `get_frame` for "current grid".
+- **`simulate(frame_index, action)`** *(original experiment only)* — the
+  offline experiment used a frame-index signature so the LLM could access
+  history via `get_frame(i)`. **This was reversed for the live agent**:
+  `simulate(grid, action) -> next_grid` takes a grid directly, enabling BFS
+  to call simulate on hypothetical states. See
+  [`docs/reports/simulator-agent.md`](../reports/simulator-agent.md).
 - **Prebuilt `check()`** — the LLM calls this to self-test. It runs the
   simulate function on all recorded frame transitions and prints
   per-frame accuracy. The LLM doesn't have to write its own test harness.

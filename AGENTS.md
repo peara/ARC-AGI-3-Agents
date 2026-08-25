@@ -20,6 +20,7 @@ models are under consideration for Kaggle).
 - `agents/` — upstream harness. `agent.py` (base contract), `swarm.py`, `recorder.py`, `templates/` (random, curiosity, llmcuriosity, llm, langgraph, …). Registered by lowercased class name in `agents/__init__.py:AVAILABLE_AGENTS`.
   - `langgraph_vision_agent/` — vision-first multimodal LLM agent (`langgraphvision` / `llmcuriosityv2`); 4-node LangGraph workflow (observe → reflect → plan → experiment). See `docs/reports/langgraph-vision-agent.md`.
   - `langgraph_unified_agent/` — tool-calling LLM agent (`langgraphunified`) merging reflect + plan into a single `unified` node; 2-node workflow (observe → unified) with `inspect`/`reflect`/`decide` tools. V2 (2-tool, nested `world_model`) and V3 (`use_routing`, 3-tool routing dispatch) modes. See `docs/reports/langgraph-unified-agent.md`.
+  - `simulator_agent/` — simulator-first LLM agent (`simulatorfirst`); writes `simulate(grid, action)` to learn game transitions, validates with `check()`, plans with `bfs()`. Also houses the offline experiment infrastructure (`run_experiment`, `SimulatorSandbox`). See `docs/reports/simulator-agent.md`.
 - `vision/` — grid rendering for multimodal LLM input (palette + PIL-based image generation)
   - `palette.py` — `ARCADE_PALETTE`: canonical 16-color RGBA tuples for ARC-AGI-3 grid indices
   - `render.py` — `grid_to_image` (64×64 → 256×256 PNG), `image_to_base64`, `make_image_block`, `make_multimodal_user_message`
