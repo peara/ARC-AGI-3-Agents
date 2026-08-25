@@ -1104,6 +1104,214 @@ class TestNotesMessageRegression:
         assert "discovered something new" in messages[3]["content"]
         assert messages[4]["content"][0]["text"] == "Frame 1"
 
+    def test_persistent_history_strips_notes_messages(self):
+        """_persistent_history_messages must remove all [Current notes] messages."""
+        agent = SimulatorFirstAgent.__new__(SimulatorFirstAgent)
+        agent._world_model = {"notes": "frame 1 notes", "plan": "frame 1 plan"}
+        agent._context_budget_tokens = 100000
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "frame"},
+            {
+                "role": "user",
+                "content": f"[Current notes]\n{format_notes(agent._world_model)}",
+            },
+            {"role": "assistant", "content": "ok"},
+            {"role": "tool", "content": "result", "tool_call_id": "tc1"},
+        ]
+        result = agent._persistent_history_messages(messages)
+        notes_messages = [
+            m
+            for m in result
+            if isinstance(m.get("content"), str)
+            and m["content"].startswith("[Current notes]")
+        ]
+        assert len(notes_messages) == 0
+
+    def test_multi_frame_only_one_notes_message(self):
+        """Across frames only one notes message exists at prompt time, and none persist."""
+        agent = SimulatorFirstAgent.__new__(SimulatorFirstAgent)
+        agent._context_budget_tokens = 100000
+
+        # Frame 1
+        agent._world_model = {"notes": "frame 1", "plan": ""}
+        messages_1 = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "frame1"},
+        ]
+        agent._append_notes_message(messages_1, agent._world_model)
+        history_1 = agent._persistent_history_messages(messages_1)
+        assert (
+            len([
+                m
+                for m in messages_1
+                if isinstance(m.get("content"), str)
+                and m["content"].startswith("[Current notes]")
+            ])
+            == 1
+        )
+
+        # Frame 2
+        agent._world_model = {"notes": "frame 2", "plan": ""}
+        messages_2 = [
+            {"role": "system", "content": "sys"},
+            *history_1,
+            {"role": "user", "content": "frame2"},
+        ]
+        agent._append_notes_message(messages_2, agent._world_model)
+        assert (
+            len([
+                m
+                for m in messages_2
+                if isinstance(m.get("content"), str)
+                and m["content"].startswith("[Current notes]")
+            ])
+            == 1
+        )
+        history_2 = agent._persistent_history_messages(messages_2)
+
+        # Frame 3
+        agent._world_model = {"notes": "frame 3", "plan": ""}
+        messages_3 = [
+            {"role": "system", "content": "sys"},
+            *history_2,
+            {"role": "user", "content": "frame3"},
+        ]
+        agent._append_notes_message(messages_3, agent._world_model)
+        assert (
+            len([
+                m
+                for m in messages_3
+                if isinstance(m.get("content"), str)
+                and m["content"].startswith("[Current notes]")
+            ])
+            == 1
+        )
+
+        notes_in_history_2 = [
+            m
+            for m in history_2
+            if isinstance(m.get("content"), str)
+            and m["content"].startswith("[Current notes]")
+        ]
+        assert len(notes_in_history_2) == 0
+
+    def test_persistent_history_zero_notes_after_strip(self):
+        """Strip removes multiple [Current notes] messages regardless of position."""
+        agent = SimulatorFirstAgent.__new__(SimulatorFirstAgent)
+        agent._world_model = {"notes": "n", "plan": "p"}
+        agent._context_budget_tokens = 100000
+        notes = f"[Current notes]\n{format_notes(agent._world_model)}"
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": notes},
+            {"role": "user", "content": "frame prompt"},
+            {"role": "user", "content": notes},
+            {"role": "assistant", "content": "ok"},
+            {"role": "tool", "tool_call_id": "tc1", "content": "result"},
+            {"role": "user", "content": notes},
+        ]
+        result = agent._persistent_history_messages(messages)
+        notes_messages = [
+            m
+            for m in result
+            if isinstance(m.get("content"), str)
+            and m["content"].startswith("[Current notes]")
+        ]
+        assert len(notes_messages) == 0
+        assert any(m.get("content") == "frame prompt" for m in result)
+        assert any(m.get("role") == "assistant" for m in result)
+
+    def test_preserve_history_false_rollback_no_stale_notes(self):
+        """When preserve_history=False, rolling back to previous_history has no notes."""
+        agent = SimulatorFirstAgent.__new__(SimulatorFirstAgent)
+        agent._world_model = {"notes": "frame 1", "plan": ""}
+        agent._context_budget_tokens = 100000
+        agent._history_messages = []
+        messages_1 = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "frame1"},
+        ]
+        agent._append_notes_message(messages_1, agent._world_model)
+        history_1 = agent._persistent_history_messages(messages_1)
+        assert (
+            len([
+                m
+                for m in history_1
+                if isinstance(m.get("content"), str)
+                and m["content"].startswith("[Current notes]")
+            ])
+            == 0
+        )
+
+        previous_history = list(history_1)
+        agent._history_messages = previous_history
+        stale_notes = [
+            m
+            for m in agent._history_messages
+            if isinstance(m.get("content"), str)
+            and m["content"].startswith("[Current notes]")
+        ]
+        assert len(stale_notes) == 0
+
+    def test_degenerate_notes_only_user_message(self):
+        """_strip_notes_messages handles the case where the only user message is notes."""
+        notes_content = f"[Current notes]\n{format_notes({'notes': 'only', 'plan': ''})}"
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": notes_content},
+            {"role": "assistant", "content": "ack"},
+            {"role": "tool", "tool_call_id": "tc1", "content": "result"},
+        ]
+        result = SimulatorFirstAgent._strip_notes_messages(messages)
+        user_messages = [m for m in result if m.get("role") == "user"]
+        assert len(user_messages) == 0
+        assert all(
+            not (
+                isinstance(m.get("content"), str)
+                and m["content"].startswith("[Current notes]")
+            )
+            for m in result
+        )
+
+    def test_high_turn_count_notes_stripped_first(self):
+        """Notes are stripped before _keep_recent_assistant_turns can retain them."""
+        agent = SimulatorFirstAgent.__new__(SimulatorFirstAgent)
+        agent._context_budget_tokens = 100000
+        notes_content = f"[Current notes]\n{format_notes({'notes': 'high turn', 'plan': ''})}"
+        messages: list[dict] = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": notes_content},
+        ]
+        for i in range(35):
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": f"tc{i}",
+                            "type": "function",
+                            "function": {
+                                "name": "python",
+                                "arguments": '{"code": "1"}',
+                            },
+                        }
+                    ],
+                }
+            )
+            messages.append(
+                {"role": "tool", "tool_call_id": f"tc{i}", "content": "output"}
+            )
+        result = agent._persistent_history_messages(messages)
+        notes_messages = [
+            m
+            for m in result
+            if isinstance(m.get("content"), str)
+            and m["content"].startswith("[Current notes]")
+        ]
+        assert len(notes_messages) == 0
+
 
 class TestRegistration:
     def test_simulatorfirst_in_available_agents(self):

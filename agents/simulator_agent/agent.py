@@ -638,7 +638,8 @@ class SimulatorFirstAgent(DirectStepAgent):
     def _persistent_history_messages(
         self, messages: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        trimmed = self._trim_messages_for_context(messages)
+        stripped = self._strip_notes_messages(messages)
+        trimmed = self._trim_messages_for_context(stripped)
         if not trimmed:
             return []
         trimmed_history = trimmed[1:]
@@ -657,6 +658,25 @@ class SimulatorFirstAgent(DirectStepAgent):
         history = self._drop_until_first_user_message(history)
         self._strip_old_images(history, keep_last_n_user=2)
         return history
+
+    @staticmethod
+    def _strip_notes_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Return a new list with all [Current notes] user messages removed.
+
+        Notes messages are injected fresh each frame from self._world_model.
+        Carrying stale notes messages in persistent history causes duplicates
+        and bloat. Strip them before the trim pipeline so history never keeps
+        old notes.
+        """
+        return [
+            msg
+            for msg in messages
+            if not (
+                msg.get("role") == "user"
+                and isinstance(msg.get("content"), str)
+                and msg["content"].startswith("[Current notes]")
+            )
+        ]
 
     @staticmethod
     def _strip_old_images(
