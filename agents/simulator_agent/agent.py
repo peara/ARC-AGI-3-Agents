@@ -192,6 +192,7 @@ class SimulatorFirstAgent(DirectStepAgent):
 
             try:
                 self._trim_old_tool_results(messages, keep_last_n=3)
+                self._trim_old_non_tool_messages(messages)
                 messages = self._trim_messages_for_context(messages)
                 response = self._llm_chat(
                     messages=messages,
@@ -704,6 +705,49 @@ class SimulatorFirstAgent(DirectStepAgent):
             else:
                 original_chars = len(str(content))
             msg["content"] = f"[Old output ({original_chars} chars, trimmed)]"
+
+    @staticmethod
+    def _trim_old_non_tool_messages(messages: list[dict[str, Any]]) -> None:
+        """Trim old user prompts, nudge messages, and assistant code.
+
+        Idempotent — safe to run on already-trimmed messages.
+        Mutates in-place. Never deletes messages (API pairing requirement).
+        """
+        nudge_indices = [
+            i
+            for i, m in enumerate(messages)
+            if m.get("role") == "user"
+            and isinstance(m.get("content"), str)
+            and (
+                "discovered something new" in m.get("content", "")
+                or "Please use the python tool" in m.get("content", "")
+            )
+        ]
+        for i in nudge_indices[:-1]:
+            messages[i]["content"] = "[nudge]"
+
+        frame_indices = [
+            i
+            for i, m in enumerate(messages)
+            if m.get("role") == "user" and isinstance(m.get("content"), list)
+        ]
+        for i in frame_indices[:-1]:
+            messages[i] = {**messages[i], "content": "[frame]"}
+
+        assistant_tc_indices = [
+            i
+            for i, m in enumerate(messages)
+            if m.get("role") == "assistant" and m.get("tool_calls")
+        ]
+        for i in assistant_tc_indices[:-2]:
+            for tc in messages[i]["tool_calls"]:
+                name = tc["function"]["name"]
+                if name == "python":
+                    tc["function"]["arguments"] = '{"code": "[code trimmed]"}'
+                elif name == "update_notes":
+                    tc["function"]["arguments"] = (
+                        '{"notes": "[trimmed]", "plan": "[trimmed]"}'
+                    )
 
     # ── Helpers ────────────────────────────────────────────────────────────
 

@@ -717,6 +717,227 @@ print(f'Depth: {result}')
         assert "Result: None" in output
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# 7. Context trimming — _trim_old_non_tool_messages
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestTrimOldNonToolMessages:
+    def test_trim_nudges_keeps_last(self):
+        msgs = []
+        for i in range(5):
+            text = (
+                "If you discovered something new about the game, call update_notes."
+                if i % 2 == 0
+                else "Please use the python tool to explore the game."
+            )
+            msgs.append({"role": "user", "content": text})
+        SimulatorFirstAgent._trim_old_non_tool_messages(msgs)
+        assert len(msgs) == 5
+        assert msgs[-1]["content"] != "[nudge]"
+        for i in range(4):
+            assert msgs[i]["content"] == "[nudge]"
+
+    def test_trim_frame_prompts_keeps_last(self):
+        msgs = []
+        for i in range(3):
+            msgs.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": f"Frame prompt {i}"},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{i}"}},
+                    ],
+                }
+            )
+        SimulatorFirstAgent._trim_old_non_tool_messages(msgs)
+        assert len(msgs) == 3
+        assert msgs[0]["content"] == "[frame]"
+        assert msgs[1]["content"] == "[frame]"
+        assert msgs[2]["content"] != "[frame]"
+        assert msgs[2]["content"][0]["text"] == "Frame prompt 2"
+
+    def test_trim_assistant_code_keeps_last_2(self):
+        msgs = []
+        for i in range(5):
+            msgs.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": f"tc{i}",
+                            "function": {
+                                "name": "python",
+                                "arguments": f'{{"code": "print({i})"}}',
+                            },
+                        }
+                    ],
+                }
+            )
+        SimulatorFirstAgent._trim_old_non_tool_messages(msgs)
+        assert len(msgs) == 5
+        for i in range(3):
+            assert msgs[i]["tool_calls"][0]["function"]["arguments"] == '{"code": "[code trimmed]"}'
+        for i in range(3, 5):
+            assert msgs[i]["tool_calls"][0]["function"]["arguments"] == f'{{"code": "print({i})"}}'
+
+    def test_trim_no_delete(self):
+        msgs = []
+        for i in range(10):
+            msgs.append(
+                {
+                    "role": "user",
+                    "content": "If you discovered something new about the game, call update_notes.",
+                }
+            )
+            msgs.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": f"tc{i}",
+                            "function": {
+                                "name": "python",
+                                "arguments": '{"code": "print(1)"}',
+                            },
+                        }
+                    ],
+                }
+            )
+            msgs.append({"role": "tool", "tool_call_id": f"tc{i}", "content": "output"})
+        original_len = len(msgs)
+        SimulatorFirstAgent._trim_old_non_tool_messages(msgs)
+        assert len(msgs) == original_len
+
+    def test_trim_preserves_tool_call_structure(self):
+        msgs = []
+        for i in range(3):
+            msgs.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": f"tc{i}",
+                            "function": {
+                                "name": "python",
+                                "arguments": f'{{"code": "print({i})"}}',
+                            },
+                        }
+                    ],
+                }
+            )
+        SimulatorFirstAgent._trim_old_non_tool_messages(msgs)
+        for i, m in enumerate(msgs):
+            assert m["role"] == "assistant"
+            assert m["tool_calls"][0]["id"] == f"tc{i}"
+            assert m["tool_calls"][0]["function"]["name"] == "python"
+
+    def test_trim_idempotent(self):
+        msgs = []
+        for i in range(5):
+            msgs.append(
+                {
+                    "role": "user",
+                    "content": "If you discovered something new about the game, call update_notes.",
+                }
+            )
+            msgs.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": f"tc{i}",
+                            "function": {
+                                "name": "python",
+                                "arguments": '{"code": "print(1)"}',
+                            },
+                        }
+                    ],
+                }
+            )
+        SimulatorFirstAgent._trim_old_non_tool_messages(msgs)
+        snapshot = [dict(m) for m in msgs]
+        for i, m in enumerate(msgs):
+            if isinstance(m.get("content"), str):
+                snapshot[i]["content"] = m["content"]
+            if m.get("tool_calls"):
+                snapshot[i]["tool_calls"] = [
+                    {
+                        "id": tc["id"],
+                        "function": dict(tc["function"]),
+                    }
+                    for tc in m["tool_calls"]
+                ]
+        SimulatorFirstAgent._trim_old_non_tool_messages(msgs)
+        for orig, after in zip(snapshot, msgs):
+            if isinstance(orig.get("content"), str):
+                assert orig["content"] == after["content"]
+            if orig.get("tool_calls"):
+                for tc_orig, tc_after in zip(orig["tool_calls"], after["tool_calls"]):
+                    assert tc_orig["id"] == tc_after["id"]
+                    assert tc_orig["function"]["name"] == tc_after["function"]["name"]
+                    assert tc_orig["function"]["arguments"] == tc_after["function"]["arguments"]
+
+    def test_trim_single_frame_no_op(self):
+        msgs = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Only frame prompt"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+                ],
+            }
+        ]
+        SimulatorFirstAgent._trim_old_non_tool_messages(msgs)
+        assert len(msgs) == 1
+        assert msgs[0]["content"][0]["text"] == "Only frame prompt"
+
+    def test_trim_update_notes_arguments(self):
+        msgs = []
+        for i in range(4):
+            msgs.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": f"tc{i}",
+                            "function": {
+                                "name": "update_notes",
+                                "arguments": f'{{"notes": "note {i}", "plan": "plan {i}"}}',
+                            },
+                        }
+                    ],
+                }
+            )
+        SimulatorFirstAgent._trim_old_non_tool_messages(msgs)
+        for i in range(2):
+            assert (
+                msgs[i]["tool_calls"][0]["function"]["arguments"]
+                == '{"notes": "[trimmed]", "plan": "[trimmed]"}'
+            )
+        for i in range(2, 4):
+            assert (
+                msgs[i]["tool_calls"][0]["function"]["arguments"]
+                == f'{{"notes": "note {i}", "plan": "plan {i}"}}'
+            )
+
+    def test_trim_both_nudge_types(self):
+        msgs = [
+            {"role": "user", "content": "If you discovered something new about the game, call update_notes."},
+            {"role": "user", "content": "Please use the python tool to explore the game."},
+            {"role": "user", "content": "Another nudge: discovered something new."},
+        ]
+        SimulatorFirstAgent._trim_old_non_tool_messages(msgs)
+        assert msgs[0]["content"] == "[nudge]"
+        assert msgs[1]["content"] == "[nudge]"
+        assert "discovered something new" in msgs[2]["content"]
+
+
 class TestRegistration:
     def test_simulatorfirst_in_available_agents(self):
         assert "simulatorfirst" in AVAILABLE_AGENTS
