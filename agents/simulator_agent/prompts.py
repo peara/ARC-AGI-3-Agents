@@ -150,7 +150,7 @@ VISUAL:
 
 OBJECTS:
   atoms(grid)           -> [{color, size, centroid, bbox, cells}, ...]
-  find_color(grid, c)   -> [(row, col), ...] for cells with color c
+  find_color(grid, c)   -> [(row, col), ...] for cells with color c (avoid printing for common colors like walls/background — can return 100s of cells; use atoms() or count_color() instead)
   print_region(grid, r0, r1, c0, c1) -> ASCII map of a sub-region
 
 DIFF:
@@ -469,7 +469,7 @@ VISUAL INSPECTION:
 OBJECT INSPECTION:
   atoms(grid)           -> all objects: [{{color, size, centroid, bbox, cells}}, ...]
   find_objects(grid, [colors]) -> objects filtered by color, grouped by proximity
-  find_color(grid, c)   -> list of (row, col) positions with the given color
+  find_color(grid, c)   -> list of (row, col) positions with the given color (avoid printing for common colors like walls/background — can return 100s of cells; use atoms() or count_color() instead)
   get_bbox(cells)       -> (r_min, r_max, c_min, c_max) from a cell list
   print_region(grid, r0, r1, c0, c1) -> ASCII map of a sub-region (hex digits)
 
