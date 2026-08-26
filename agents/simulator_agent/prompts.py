@@ -356,7 +356,7 @@ def build_agent_user_prompt(
         world_model_text: Carried-forward world model text (from
             format_world_model). Empty string on the first turn.
         available_actions: List of action IDs available this turn.
-        frame_index: Current frame number (0-based).
+        frame_index: Current frame number (0-based, matches recording line index).
         history_summary: Short text summary of recent history.
         simulate_status: Text describing the current simulate function
             state (registered, accuracy, etc.). Empty string if no

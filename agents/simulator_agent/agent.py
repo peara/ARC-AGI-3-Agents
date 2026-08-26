@@ -51,7 +51,6 @@ class SimulatorFirstAgent(DirectStepAgent):
         # World model: 2-block (Notes + Plan)
         self._world_model: dict[str, str] = {"notes": "", "plan": ""}
         self._history_turns: list[dict[str, Any]] = []
-        self._frame_index: int = 0
 
         # Cached state for sandbox
         self._objects: tuple[dict, ...] = ()
@@ -72,7 +71,7 @@ class SimulatorFirstAgent(DirectStepAgent):
             llm_logger = LlmCallLogger(
                 guid=self.recorder.guid,
                 path=self.recorder.llm_log_path(),
-                frame_indexer=lambda: self._frame_index,
+                frame_indexer=lambda: self.action_counter - 1,
             )
         if llm_logger is None:
             self._llm_chat = llm_client.chat
@@ -117,7 +116,6 @@ class SimulatorFirstAgent(DirectStepAgent):
         # ── 1. Iteration-0 guard: empty placeholder → RESET ────────────
         if not getattr(frames[-1], "frame", None):
             self.step_env(GameAction.RESET)
-            self._frame_index += 1
             return GameAction.RESET
 
         # ── 2. Get current grid ────────────────────────────────────────
@@ -155,7 +153,7 @@ class SimulatorFirstAgent(DirectStepAgent):
             grid_image_b64=grid_b64,
             world_model_text="",
             available_actions=self._valid_actions,
-            frame_index=self._frame_index,
+            frame_index=self.action_counter - 1,
             history_summary=history_summary,
             simulate_status=simulate_status,
         )
@@ -272,7 +270,7 @@ class SimulatorFirstAgent(DirectStepAgent):
                         output, error, action_taken_id = self._sandbox.run_code(code)
                         if not had_simulate and self._sandbox._simulate is not None:
                             logger.info(
-                                f"simulatorfirst: simulate function registered at frame {self._frame_index}"
+                                f"simulatorfirst: simulate function registered at frame {self.action_counter - 1}"
                             )
 
                         # Build tool result
@@ -407,7 +405,7 @@ class SimulatorFirstAgent(DirectStepAgent):
         self._history_turns.append(
             {
                 "action": action_taken.value,
-                "frame_index": self._frame_index,
+                "frame_index": self.action_counter - 1,
                 "frame": [list(row) for row in grid] if grid else [],
             }
         )
@@ -427,8 +425,6 @@ class SimulatorFirstAgent(DirectStepAgent):
         # ── 15. Clear world model on WIN/GAME_OVER ─────────────────────
         if latest_frame.state in (GameState.WIN, GameState.GAME_OVER):
             self._world_model = {"notes": "", "plan": ""}
-
-        self._frame_index += 1
 
         # ── 16. Return action ──────────────────────────────────────────
         if preserve_history:
