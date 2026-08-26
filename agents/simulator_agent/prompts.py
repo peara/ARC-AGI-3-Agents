@@ -70,8 +70,6 @@ AGENT_GAME_OVERVIEW_ADDENDUM: str = (
     "is the left, column 63 is the right.\n"
     "- Objects are contiguous same-color regions. Identify them by color, shape, and "
     "position.\n"
-    "- The most common color is usually the background/floor. Objects sit on it; some "
-    "colors may be walls or obstacles.\n"
     "- If you identify cells that are unimportant (timers, HUD, decorative noise), "
     "use set_ignore() to exclude them from check() and diagnose().\n"
 )
@@ -149,7 +147,8 @@ VISUAL:
   show_grid(grid, label) -> render an arbitrary grid as an image
 
 OBJECTS:
-  atoms(grid)           -> [{color, size, centroid, bbox, cells}, ...]
+  atoms(grid)           -> [{color, size, centroid, bbox, cells}, ...] in row-major scan order (NOT size-sorted). Use find_objects() for specific colors sorted by size.
+  find_objects(grid, [colors]) -> [{colors, bbox, size, cells}, ...] filtered by color, grouped by proximity (within 2 cells), sorted by size descending. Use this to find multi-color objects as a single unit.
   find_color(grid, c)   -> [(row, col), ...] for cells with color c (avoid printing for common colors like walls/background — can return 100s of cells; use atoms() or count_color() instead)
   print_region(grid, r0, r1, c0, c1) -> ASCII map of a sub-region
 
@@ -212,14 +211,17 @@ def goal(grid):
     return min(r for r, c in cells) <= 15  # block is in the top box
 
 path = bfs(current_frame, goal)
-if path:
-    print(f"Path: {path}")
-    # Execute the path
-    for a in path:
-        action(a)
-        if not last_action_result.get('board_changed'):
-            print(f"Action {a} had no effect — simulate is wrong!")
-            break
+if path is not None:
+    if not path:
+        print("Goal already reached!")
+    else:
+        print(f"Path: {path}")
+        # Execute the path
+        for a in path:
+            action(a)
+            if not last_action_result.get('board_changed'):
+                print(f"Action {a} had no effect — simulate is wrong!")
+                break
 else:
     print("No path found — try a different goal or fix simulate")
 ```
