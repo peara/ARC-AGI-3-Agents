@@ -400,6 +400,29 @@ def build_agent_user_prompt(
     return [{"role": "user", "content": content_blocks}]
 
 
+EXCEPTION_FLOW_TEXT = """\
+EXCEPTION FLOW — Something is wrong
+
+You attempted action {action_id} ({action_name}). Your simulate() predicted \
+a result that differs from reality by {n_diff} cells.
+
+Something is wrong with your model of this game. You need to carefully \
+investigate what actually happened and update your understanding.
+
+Step 1: INVESTIGATE — Use python() to carefully inspect the current state. \
+Compare what you expected to happen with what actually happened. What is \
+different from your model?
+
+Step 2: HYPOTHESIZE — Call update_notes with your new understanding: \
+what did you get wrong, and what is the actual game mechanic?
+
+Step 3: FIX — Update simulate() to match reality. Call check() to verify.
+
+Step 4: RE-PLAN — Re-run bfs(current_frame, goal) with the fixed simulate. \
+If no path exists, try a different approach.
+"""
+
+
 # ── System prompt ───────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT: str = """\

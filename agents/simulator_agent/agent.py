@@ -28,6 +28,7 @@ from agents.llm_client import LLMClient
 from agents.simulator_agent.prompts import (
     AGENT_PYTHON_TOOL_SCHEMA,
     AGENT_SYSTEM_PROMPT,
+    EXCEPTION_FLOW_TEXT,
     UPDATE_NOTES_TOOL_SCHEMA,
     build_agent_user_prompt,
 )
@@ -60,6 +61,7 @@ class SimulatorFirstAgent(DirectStepAgent):
         self._valid_actions: list[int] = []
         self._last_action_result: dict[str, Any] = {}
         self._history_messages: list[dict[str, Any]] = []
+        self._exception_flow_fired_for: int | None = None
 
         # Context budget (same formula as duck harness)
         self._context_budget_tokens = max(1024, 32768 - 4096 - 512)
@@ -101,6 +103,18 @@ class SimulatorFirstAgent(DirectStepAgent):
         return (
             latest_frame.state is GameState.WIN
             or self.action_counter >= self.MAX_ACTIONS
+        )
+
+    def _exception_flow_can_fire(self, action_id: int) -> bool:
+        return self._exception_flow_fired_for != action_id
+
+    def _exception_flow_mark_fired(self, action_id: int) -> None:
+        self._exception_flow_fired_for = action_id
+
+    @staticmethod
+    def _action_name(action_id: int) -> str:
+        return {1: "up", 2: "down", 3: "left", 4: "right"}.get(
+            action_id, f"action_{action_id}"
         )
 
     # ── choose_action (main per-turn logic) ────────────────────────────────
@@ -317,6 +331,26 @@ class SimulatorFirstAgent(DirectStepAgent):
                                 else tool_result_text,
                             }
                         )
+
+                        # ── Exception flow injection ────────────────────────
+                        pending = getattr(self._sandbox, "_pending_exception_flow", None)
+                        if pending and self._exception_flow_can_fire(
+                            pending["action_id"]
+                        ):
+                            messages.append(
+                                {
+                                    "role": "user",
+                                    "content": EXCEPTION_FLOW_TEXT.format(
+                                        action_id=pending["action_id"],
+                                        action_name=self._action_name(
+                                            pending["action_id"]
+                                        ),
+                                        n_diff=pending["n_diff"],
+                                    ),
+                                }
+                            )
+                            self._exception_flow_mark_fired(pending["action_id"])
+                        self._sandbox._pending_exception_flow = None
 
                         # If sandbox executed an action, we're done
                         if action_taken_id is not None:

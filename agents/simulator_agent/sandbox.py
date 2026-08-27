@@ -156,6 +156,7 @@ class SimulatorSandbox:
         self._simulate: Callable[[list[list[int]], int], list[list[int]]] | None = None
         self._simulate_source: str = ""
         self._last_check_result: dict[str, Any] | None = None
+        self._pending_exception_flow: dict[str, int] | None = None
         self._ignore_mask: set[tuple[int, int]] = set()
         self._prev_correct_frames: set[int] = set()
         self.pending_images: list[dict[str, Any]] = []
@@ -273,6 +274,45 @@ class SimulatorSandbox:
             self._previous_grid = prev_grid
             self._valid_actions = ns["valid_actions"]
             self._last_action_result = ns["last_action_result"]
+
+            # ── Predict-and-compare: run simulate on prev grid + action, compare with actual
+            if (
+                self._simulate is not None
+                and action_id != 0
+                and prev_grid is not None
+                and new_grid is not None
+                and not self._last_action_result.get("run_complete")
+                and not self._last_action_result.get("game_over")
+            ):
+                try:
+                    grid_copy = [row[:] for row in prev_grid]
+                    predicted = self._simulate(grid_copy, action_id)
+                    if (
+                        predicted is not None
+                        and len(predicted) == len(new_grid)
+                        and all(
+                            len(pr) == len(nr)
+                            for pr, nr in zip(predicted, new_grid)
+                        )
+                    ):
+                        if predicted != new_grid:
+                            n_diff = sum(
+                                1
+                                for r in range(len(predicted))
+                                for c in range(len(predicted[0]))
+                                if predicted[r][c] != new_grid[r][c]
+                            )
+                            self._pending_exception_flow = {
+                                "action_id": action_id,
+                                "n_diff": n_diff,
+                            }
+                        else:
+                            self._pending_exception_flow = None
+                except Exception as exc:
+                    import logging
+                    logging.getLogger("sandbox").warning(
+                        f"exception_flow: simulate crashed during predict-and-compare: {exc}"
+                    )
 
             # Update n_frames since grids grew
             ns["n_frames"] = len(self._grids)
