@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from agents.simulator_agent.sandbox import SimulatorSandbox
@@ -116,3 +118,126 @@ def test_directive_returns_current_phase() -> None:
     controller.set_phase("MODEL", "ready")
     directive = controller.directive()
     assert "PHASE: MODEL" in directive
+
+
+@pytest.mark.unit
+def test_turn_start_log(caplog: pytest.LogCaptureFixture) -> None:
+    sandbox = make_sandbox()
+    controller = WorkflowController(sandbox)
+    with caplog.at_level(logging.INFO, logger="agents.simulator_agent.workflow"):
+        controller.update(action_counter=5)
+    assert any(
+        r.name == "agents.simulator_agent.workflow" and "frame=4 phase=EXPLORE actions=5" in r.message
+        for r in caplog.records
+    )
+
+
+@pytest.mark.unit
+def test_auto_advance_guardrail_log(caplog: pytest.LogCaptureFixture) -> None:
+    sandbox = make_sandbox()
+    controller = WorkflowController(sandbox)
+    with caplog.at_level(logging.INFO, logger="agents.simulator_agent.workflow"):
+        controller.update(action_counter=10)
+    assert any(
+        r.name == "agents.simulator_agent.workflow"
+        and "frame=9 guardrail: EXPLORE→MODEL (action_counter=10)" in r.message
+        for r in caplog.records
+    )
+
+
+@pytest.mark.unit
+def test_check_failure_escape_log(caplog: pytest.LogCaptureFixture) -> None:
+    sandbox = make_sandbox()
+    controller = WorkflowController(sandbox)
+    controller.set_phase("MODEL", "ready to model")
+    with caplog.at_level(logging.WARNING, logger="agents.simulator_agent.workflow"):
+        for _ in range(5):
+            controller.on_check_result({"wrong_cells": 5})
+        controller.update(action_counter=20)
+    assert any(
+        r.name == "agents.simulator_agent.workflow"
+        and r.levelname == "WARNING"
+        and "frame=19 guardrail: MODEL→EXPLORE (5 consecutive check failures)" in r.message
+        for r in caplog.records
+    )
+
+
+@pytest.mark.unit
+def test_exception_flow_escape_log_uses_old_phase(caplog: pytest.LogCaptureFixture) -> None:
+    sandbox = make_sandbox()
+    sandbox._simulate = lambda grid, action: grid
+    controller = WorkflowController(sandbox)
+    controller.set_phase("EXECUTE", "manual play")
+    with caplog.at_level(logging.WARNING, logger="agents.simulator_agent.workflow"):
+        for _ in range(3):
+            controller.on_exception_flow()
+        # on_exception_flow forces MODEL each time, so the escape guardrail fires from MODEL.
+        controller.update(action_counter=1)
+    assert any(
+        r.name == "agents.simulator_agent.workflow"
+        and r.levelname == "WARNING"
+        and "guardrail: MODEL→EXPLORE (3 exception flows)" in r.message
+        for r in caplog.records
+    )
+    # Critical regression: must NOT show EXPLORE→EXPLORE (phase before the guardrail)
+    assert not any(
+        r.name == "agents.simulator_agent.workflow"
+        and r.levelname == "WARNING"
+        and "guardrail: EXPLORE→EXPLORE (3 exception flows)" in r.message
+        for r in caplog.records
+    )
+
+
+@pytest.mark.unit
+def test_set_phase_accepted_log(caplog: pytest.LogCaptureFixture) -> None:
+    sandbox = make_sandbox()
+    controller = WorkflowController(sandbox)
+    with caplog.at_level(logging.INFO, logger="agents.simulator_agent.workflow"):
+        controller.update(action_counter=3)
+        controller.set_phase("MODEL", "ready to build simulator")
+    assert any(
+        r.name == "agents.simulator_agent.workflow"
+        and "frame=2 set_phase EXPLORE→MODEL reason='ready to build simulator'" in r.message
+        for r in caplog.records
+    )
+
+
+@pytest.mark.unit
+def test_set_phase_plan_rejection_log(caplog: pytest.LogCaptureFixture) -> None:
+    sandbox = make_sandbox()
+    controller = WorkflowController(sandbox)
+    with caplog.at_level(logging.INFO, logger="agents.simulator_agent.workflow"):
+        controller.set_phase("PLAN", "ready")
+    assert any(
+        r.name == "agents.simulator_agent.workflow"
+        and "frame=-1 set_phase→PLAN REJECTED: no simulate registered" in r.message
+        for r in caplog.records
+    )
+
+
+@pytest.mark.unit
+def test_set_phase_execute_rejection_log(caplog: pytest.LogCaptureFixture) -> None:
+    sandbox = make_sandbox()
+    controller = WorkflowController(sandbox)
+    with caplog.at_level(logging.INFO, logger="agents.simulator_agent.workflow"):
+        controller.set_phase("EXECUTE", "go")
+    assert any(
+        r.name == "agents.simulator_agent.workflow"
+        and "frame=-1 set_phase→EXECUTE REJECTED: no simulate (reason lacks manual keyword)" in r.message
+        for r in caplog.records
+    )
+
+
+@pytest.mark.unit
+def test_check_ok_log(caplog: pytest.LogCaptureFixture) -> None:
+    sandbox = make_sandbox()
+    controller = WorkflowController(sandbox)
+    with caplog.at_level(logging.DEBUG, logger="agents.simulator_agent.workflow"):
+        controller.update(action_counter=2)
+        controller.on_check_result({"wrong_cells": 0})
+    assert any(
+        r.name == "agents.simulator_agent.workflow"
+        and r.levelname == "DEBUG"
+        and "frame=1 check: ok (failures=0)" in r.message
+        for r in caplog.records
+    )

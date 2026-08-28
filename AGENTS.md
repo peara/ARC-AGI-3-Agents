@@ -142,6 +142,8 @@ DEBUG-level logs (e.g. proposal rejection reasons):
 DEBUG=True uv run main.py --agent=llmcuriosityv2 --game=<game_id>
 ```
 
+Note: mid-turn `frame=N` in workflow logs refers to the frame observed at the start of that turn, not the post-action frame — context is preserved for correlation with adjacent agent.py lines.
+
 ### Log channels (filter with `grep` on `<recording>.logs.log`)
 
 | Logger prefix | What it traces | Key log lines |
@@ -151,6 +153,7 @@ DEBUG=True uv run main.py --agent=llmcuriosityv2 --game=<game_id>
 | `planning.llm_planner` | LLM rule proposer pipeline | `rule_proposer: parsed=N validated=N deduped=N`, `rule_proposer: + <rule>`, `rule_proposer: 0/N proposals survived` (WARNING), `rule_proposer: exception` (WARNING) |
 | `planning.llm_rule_proposer` | Per-proposal validation | `validate_proposal: accept`, `validate_proposal: reject <reason>` (DEBUG) |
 | `effects.engine_log` | Rule context diff per engine step | `+ proposed:`, `↑ bucket→bucket`, `- pruned` |
+| `agents.simulator_agent.workflow` | Workflow phase lifecycle | `frame=N phase=EXPLORE actions=N`, `frame=N set_phase EXPLORE→MODEL reason='...'`, `frame=N set_phase→PLAN REJECTED: ...`, `frame=N guardrail: MODEL→EXPLORE (5 consecutive check failures)` (WARNING), `frame=N exception_flow #N {old}→MODEL` |
 
 ### Quick diagnostics
 
@@ -172,6 +175,9 @@ grep "confirm_rules" <recording>.logs.log
 
 # Full engine step diffs
 grep "engine_log" <recording>.logs.log
+
+# What phase was the agent in, and when did it transition?
+grep "workflow" <recording>.logs.log
 ```
 
 The LLM `.llm.jsonl` sidecar (see "Debugging with LLM logs" above) records

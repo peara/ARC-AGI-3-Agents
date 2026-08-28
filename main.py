@@ -80,6 +80,7 @@ def main() -> None:
 
     logger.addHandler(stdout_handler)
     logging.getLogger("effects.engine").setLevel(log_level)
+    logging.getLogger("agents.simulator_agent.workflow").setLevel(log_level)
     # No global FileHandler: each Agent installs a per-recording ContextVar-gated
     # handler writing to its .logs.log sidecar (see Agent._install_log_handler).
 

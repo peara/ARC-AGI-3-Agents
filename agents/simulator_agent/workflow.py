@@ -7,11 +7,14 @@ escape hatches. Phase directives are injected into the user message each turn.
 
 from __future__ import annotations
 
+import logging
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from agents.simulator_agent.sandbox import SimulatorSandbox
+
+logger = logging.getLogger(__name__)
 
 
 class Phase(str, Enum):
@@ -64,6 +67,7 @@ class WorkflowController:
         self._check_failures: int = 0
         self._exception_flow_count: int = 0
         self._last_path: list[int] | None = None
+        self._action_counter: int = 0
 
     @property
     def phase(self) -> Phase:
@@ -71,20 +75,28 @@ class WorkflowController:
 
     def update(self, action_counter: int) -> Phase:
         """Apply guardrails. Called once per turn BEFORE the LLM call."""
+        self._action_counter = action_counter
+        frame = action_counter - 1
+        logger.info("frame=%d phase=%s actions=%d", frame, self._phase.value, action_counter)
+
         # Guardrail: auto-advance from EXPLORE after 10 actions
         if self._phase == Phase.EXPLORE and action_counter >= 10:
             self._phase = Phase.MODEL
+            logger.info("frame=%d guardrail: EXPLORE→MODEL (action_counter=%d)", frame, action_counter)
 
         # Guardrail: after 5 check failures in MODEL, back to EXPLORE
         if self._phase == Phase.MODEL and self._check_failures >= 5:
             self._phase = Phase.EXPLORE
             self._check_failures = 0
+            logger.warning("frame=%d guardrail: MODEL→EXPLORE (5 consecutive check failures)", frame)
 
         # Guardrail: after 3 exception flows, back to EXPLORE
         if self._exception_flow_count >= 3:
+            old_phase = self._phase.value
             self._phase = Phase.EXPLORE
             self._exception_flow_count = 0
             self._last_path = None
+            logger.warning("frame=%d guardrail: %s→EXPLORE (3 exception flows)", frame, old_phase)
 
         return self._phase
 
@@ -93,15 +105,18 @@ class WorkflowController:
 
         Returns (success, message including new directive if changed).
         """
+        frame = self._action_counter - 1
         # Parse phase string safely
         try:
             phase = Phase(phase_str)
         except ValueError:
             valid = ", ".join(p.value for p in Phase)
+            logger.info("frame=%d set_phase INVALID: '%s'", frame, phase_str)
             return False, f"Invalid phase '{phase_str}'. Valid phases: {valid}"
 
         # Gate: can't enter PLAN without simulate registered
         if phase == Phase.PLAN and self._sandbox._simulate is None:
+            logger.info("frame=%d set_phase→PLAN REJECTED: no simulate registered", frame)
             return False, (
                 "Cannot enter PLAN without a registered simulate. "
                 "Call set_phase('MODEL') first."
@@ -114,16 +129,20 @@ class WorkflowController:
                 "no simulate", "skip simulate",
             }
             if not any(kw in reason.lower() for kw in manual_keywords):
+                logger.info("frame=%d set_phase→EXECUTE REJECTED: no simulate (reason lacks manual keyword)", frame)
                 return False, (
                     "Cannot enter EXECUTE without simulate. "
                     "Call set_phase('MODEL') first, or set_phase('EXECUTE') "
                     "with reason 'manual play' if you can't simulate this game."
                 )
 
+        old_phase = self._phase.value
         self._phase = phase
         # Reset counters on phase change
         if phase == Phase.EXPLORE:
             self._check_failures = 0
+        logger.info("frame=%d set_phase %s→%s reason='%s'",
+                    frame, old_phase, phase.value, reason[:80])
         return True, f"Phase changed to {phase.value}.\n\n{PHASE_DIRECTIVES[phase]}"
 
     def on_check_result(self, result: dict[str, Any] | None) -> None:
@@ -132,22 +151,35 @@ class WorkflowController:
             return
         if "error" in result:
             self._check_failures += 1
+            logger.debug("frame=%d check: error (failures=%d)",
+                         self._action_counter - 1, self._check_failures)
             return
         wrong = result.get("wrong_cells", 999)
         if wrong > 0:
             self._check_failures += 1
+            logger.debug("frame=%d check: wrong_cells=%d (failures=%d)",
+                         self._action_counter - 1, wrong, self._check_failures)
         else:
             self._check_failures = 0
+            logger.debug("frame=%d check: ok (failures=0)",
+                         self._action_counter - 1)
 
     def on_bfs_result(self, path: list[int] | None) -> None:
         """Called after bfs() runs in the sandbox."""
         self._last_path = path
+        if path is None:
+            logger.debug("frame=%d bfs: no path", self._action_counter - 1)
+        else:
+            logger.debug("frame=%d bfs: path len=%d", self._action_counter - 1, len(path))
 
     def on_exception_flow(self) -> None:
         """Called when simulate prediction differs from reality."""
+        old_phase = self._phase.value
         self._exception_flow_count += 1
         self._phase = Phase.MODEL
         self._last_path = None  # invalidate the failed path
+        logger.info("frame=%d exception_flow #%d %s→MODEL (path invalidated)",
+                    self._action_counter - 1, self._exception_flow_count, old_phase)
 
     @property
     def path(self) -> list[int] | None:

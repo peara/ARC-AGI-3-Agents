@@ -49,6 +49,7 @@ from vision.render import grid_to_image, image_to_base64
 
 _ALLOWED_IMPORTS = frozenset(
     {
+        "copy",
         "math",
         "re",
         "collections",
