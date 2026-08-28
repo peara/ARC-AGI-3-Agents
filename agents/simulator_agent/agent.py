@@ -33,6 +33,7 @@ from agents.simulator_agent.prompts import (
     build_agent_user_prompt,
 )
 from agents.simulator_agent.sandbox import SimulatorSandbox
+from agents.simulator_agent.workflow import SET_PHASE_TOOL_SCHEMA, WorkflowController
 from agents.simulator_agent.world_model import extract_notes, format_notes
 from agents.templates.llm_logging import LlmCallLogger, wrap_llm_call
 from optitrack.atoms import extract_atoms
@@ -89,6 +90,9 @@ class SimulatorFirstAgent(DirectStepAgent):
             step_env_callback=self._step_env_callback,
             timeout=30.0,
         )
+
+        # Workflow phase controller
+        self._workflow = WorkflowController(self._sandbox)
 
     # ── Properties ────────────────────────────────────────────────────────
 
@@ -163,6 +167,11 @@ class SimulatorFirstAgent(DirectStepAgent):
 
         # ── 6. Build prompts ───────────────────────────────────────────
         simulate_status = self._build_simulate_status()
+
+        # ── 6.5. Update workflow phase + get directive ────────────────────
+        self._workflow.update(action_counter=self.action_counter)
+        phase_directive = self._workflow.directive()
+
         user_content = build_agent_user_prompt(
             grid_image_b64=grid_b64,
             world_model_text="",
@@ -170,6 +179,7 @@ class SimulatorFirstAgent(DirectStepAgent):
             frame_index=self.action_counter - 1,
             history_summary=history_summary,
             simulate_status=simulate_status,
+            phase_directive=phase_directive,
         )
 
         messages: list[dict[str, Any]] = self._trim_messages_for_context(
@@ -209,7 +219,7 @@ class SimulatorFirstAgent(DirectStepAgent):
                 messages = self._trim_messages_for_context(messages)
                 response = self._llm_chat(
                     messages=messages,
-                    tools=[AGENT_PYTHON_TOOL_SCHEMA, UPDATE_NOTES_TOOL_SCHEMA],
+                    tools=[AGENT_PYTHON_TOOL_SCHEMA, UPDATE_NOTES_TOOL_SCHEMA, SET_PHASE_TOOL_SCHEMA],
                     tool_choice="auto",
                 )
             except Exception as exc:
@@ -236,6 +246,28 @@ class SimulatorFirstAgent(DirectStepAgent):
             # Check for tool calls
             if response.tool_calls:
                 for tc in response.tool_calls:
+                    if tc["function"]["name"] == "set_phase":
+                        try:
+                            args = json.loads(tc["function"]["arguments"])
+                        except Exception:
+                            args = {}
+                        phase_str = args.get("phase", "")
+                        reason = args.get("reason", "")
+                        success, msg = self._workflow.set_phase(phase_str, reason)
+                        messages.append(
+                            {
+                                "role": "assistant",
+                                "content": response.content or None,
+                                "tool_calls": [tc],
+                            }
+                        )
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tc["id"],
+                                "content": msg,
+                            }
+                        )
                     if tc["function"]["name"] == "update_notes":
                         try:
                             args = json.loads(tc["function"]["arguments"])
@@ -281,11 +313,17 @@ class SimulatorFirstAgent(DirectStepAgent):
 
                         # Run code in sandbox (in-process)
                         had_simulate = self._sandbox._simulate is not None
+                        check_before = self._sandbox._last_check_result
+                        bfs_before = self._sandbox._last_bfs_result
                         output, error, action_taken_id = self._sandbox.run_code(code)
                         if not had_simulate and self._sandbox._simulate is not None:
                             logger.info(
                                 f"simulatorfirst: simulate function registered at frame {self.action_counter - 1}"
                             )
+                        if self._sandbox._last_check_result is not check_before:
+                            self._workflow.on_check_result(self._sandbox._last_check_result)
+                        if self._sandbox._last_bfs_result is not bfs_before:
+                            self._workflow.on_bfs_result(self._sandbox._last_bfs_result)
 
                         # Build tool result
                         tool_result_parts: list[str] = []
@@ -350,6 +388,7 @@ class SimulatorFirstAgent(DirectStepAgent):
                                 }
                             )
                             self._exception_flow_mark_fired(pending["action_id"])
+                            self._workflow.on_exception_flow()
                         self._sandbox._pending_exception_flow = None
 
                         # If sandbox executed an action, we're done

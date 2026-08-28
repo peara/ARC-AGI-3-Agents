@@ -156,6 +156,7 @@ class SimulatorSandbox:
         self._simulate: Callable[[list[list[int]], int], list[list[int]]] | None = None
         self._simulate_source: str = ""
         self._last_check_result: dict[str, Any] | None = None
+        self._last_bfs_result: list[int] | None = None
         self._pending_exception_flow: dict[str, int] | None = None
         self._ignore_mask: set[tuple[int, int]] = set()
         self._prev_correct_frames: set[int] = set()
@@ -549,11 +550,13 @@ class SimulatorSandbox:
                         goal_output = goal_buf.getvalue().strip()
                         if goal_output:
                             print(goal_output)
+                        self._last_bfs_result = new_path
                         return new_path
 
                     queue.append((next_grid, new_path))
 
             print(f"No path found within depth {max_depth}.")
+            self._last_bfs_result = None
             return None
 
         ns["bfs"] = bfs

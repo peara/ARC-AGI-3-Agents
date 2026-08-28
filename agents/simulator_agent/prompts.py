@@ -170,67 +170,26 @@ PLANNING:
 simulate(grid, action) MUST accept a grid (list of lists) and action ID — not a frame index.
 """
 
-AGENT_WORKFLOW_ADDENDUM: str = """\
+AGENT_PHASES_OVERVIEW: str = """\
 How to work
 
-Each turn, check your progress:
-[ ] Know most actions? → if no, take 1 of each action to learn
-[ ] Have simulate? → if no, write simulate + set_simulate + check
-[ ] Have a target? → if no, identify the goal state (what grid do I want?)
-[ ] Have a path? → if no, call bfs(current_frame, goal_fn) — max depth 20
-[ ] Path works? → execute the path, check board_changed after each action
-    If an action has no effect, simulate is wrong — fix it and re-search
+You move through 4 phases. The current phase is shown at the top of \
+each turn with specific instructions. Follow them.
 
-1. Explore: take a few actions (one of each action ID) to see what moves and how. \
-Use atoms(), diff(), and find_color() to identify objects. Call update_notes to \
-record what each action does. Keep this short — 4-8 actions is enough.
+  EXPLORE → MODEL → PLAN → EXECUTE
 
-2. Build simulate: write a simulate(grid, action) function. Start simple:
+EXPLORE: learn game mechanics by taking actions and observing.
+MODEL: write simulate(grid, action), register with set_simulate(), \
+test with check(). Fix if wrong. You don't need 100% accuracy.
+PLAN: define a goal function, call bfs(current_frame, goal).
+EXECUTE: run the path. If an action fails, go back to MODEL.
 
-```python
-def simulate(grid, action):
-    new_grid = [row[:] for row in grid]
-    # Find the player/block and move it based on action
-    return new_grid
+Use set_phase("PHASE_NAME", reason="...") to change phase when ready.
+If you can't simulate this game, set_phase("EXECUTE", reason="manual play").
 
-set_simulate(simulate)
-check()
-```
-
-Call set_simulate(simulate) then check() to test. If wrong cells appear, use \
-diagnose() to understand why, then fix and re-check. You don't need 100% accuracy.
-
-3. Plan with bfs: define a goal function and call bfs to find a path. \
-bfs uses your simulate() to search — max depth is 20 actions.
-
-```python
-def goal(grid):
-    # e.g. block reached the target
-    cells = find_color(grid, 12)
-    if not cells: return False
-    return min(r for r, c in cells) <= 15  # block is in the top box
-
-path = bfs(current_frame, goal)
-if path is not None:
-    if not path:
-        print("Goal already reached!")
-    else:
-        print(f"Path: {path}")
-        # Execute the path
-        for a in path:
-            action(a)
-            if not last_action_result.get('board_changed'):
-                print(f"Action {a} had no effect — simulate is wrong!")
-                break
-else:
-    print("No path found — try a different goal or fix simulate")
-```
-
-If the path fails (action has no effect), your simulate is wrong. Go back to \
-step 2, fix it, and re-search.
-
-The key idea: action() is for exploring and executing. simulate() is for \
-understanding and planning. Always simulate before you act.
+Key tools: set_simulate(func), check(), diagnose(), bfs(), action(id), \
+set_ignore(colors/cells). Always simulate before you act — unless you've \
+declared manual play.
 """
 
 AGENT_WORLD_MODEL_ADDENDUM: str = """\
@@ -272,7 +231,7 @@ AGENT_SYSTEM_PROMPT: str = (
     + "\n\n"
     + AGENT_SIMULATOR_TOOLS_ADDENDUM
     + "\n\n"
-    + AGENT_WORKFLOW_ADDENDUM
+    + AGENT_PHASES_OVERVIEW
     + "\n\n"
     + AGENT_WORLD_MODEL_ADDENDUM
 )
@@ -347,6 +306,7 @@ def build_agent_user_prompt(
     frame_index: int,
     history_summary: str,
     simulate_status: str = "",
+    phase_directive: str = "",
 ) -> list[dict]:
     """Build a multimodal user message for the live simulator-first agent.
 
@@ -361,12 +321,18 @@ def build_agent_user_prompt(
         simulate_status: Text describing the current simulate function
             state (registered, accuracy, etc.). Empty string if no
             simulate function has been registered.
+        phase_directive: Current-phase instructions to show at the top of
+            the prompt (most salient position). Empty string if no phase
+            directive should be included.
 
     Returns:
         A list containing a single user message dict with content blocks
         (text and optional image). Format: ``[{"role": "user", "content": [...]}]``
     """
     content_blocks: list[dict] = []
+
+    if phase_directive:
+        content_blocks.append({"type": "text", "text": phase_directive})
 
     if grid_image_b64 is not None:
         content_blocks.append(
