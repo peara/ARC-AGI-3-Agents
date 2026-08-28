@@ -855,11 +855,11 @@ class SimulatorFirstAgent(DirectStepAgent):
             for i, m in enumerate(messages)
             if m.get("role") == "assistant" and m.get("tool_calls")
         ]
-        for i in assistant_tc_indices[:-2]:
+        for i in assistant_tc_indices[:-4]:
             for tc in messages[i]["tool_calls"]:
                 name = tc["function"]["name"]
                 if name == "python":
-                    tc["function"]["arguments"] = '{"code": "[code trimmed]"}'
+                    tc["function"]["arguments"] = '{"code": "# previous code omitted"}'
                 elif name == "update_notes":
                     tc["function"]["arguments"] = (
                         '{"notes": "[trimmed]", "plan": "[trimmed]"}'

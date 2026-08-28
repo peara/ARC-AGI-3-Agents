@@ -757,9 +757,9 @@ class TestTrimOldNonToolMessages:
         assert msgs[2]["content"] != "[frame]"
         assert msgs[2]["content"][0]["text"] == "Frame prompt 2"
 
-    def test_trim_assistant_code_keeps_last_2(self):
+    def test_trim_assistant_code_keeps_last_4(self):
         msgs = []
-        for i in range(5):
+        for i in range(6):
             msgs.append(
                 {
                     "role": "assistant",
@@ -776,10 +776,13 @@ class TestTrimOldNonToolMessages:
                 }
             )
         SimulatorFirstAgent._trim_old_non_tool_messages(msgs)
-        assert len(msgs) == 5
-        for i in range(3):
-            assert msgs[i]["tool_calls"][0]["function"]["arguments"] == '{"code": "[code trimmed]"}'
-        for i in range(3, 5):
+        assert len(msgs) == 6
+        for i in range(2):
+            assert (
+                msgs[i]["tool_calls"][0]["function"]["arguments"]
+                == '{"code": "# previous code omitted"}'
+            )
+        for i in range(2, 6):
             assert msgs[i]["tool_calls"][0]["function"]["arguments"] == f'{{"code": "print({i})"}}'
 
     def test_trim_no_delete(self):
@@ -898,7 +901,7 @@ class TestTrimOldNonToolMessages:
 
     def test_trim_update_notes_arguments(self):
         msgs = []
-        for i in range(4):
+        for i in range(6):
             msgs.append(
                 {
                     "role": "assistant",
@@ -920,7 +923,7 @@ class TestTrimOldNonToolMessages:
                 msgs[i]["tool_calls"][0]["function"]["arguments"]
                 == '{"notes": "[trimmed]", "plan": "[trimmed]"}'
             )
-        for i in range(2, 4):
+        for i in range(2, 6):
             assert (
                 msgs[i]["tool_calls"][0]["function"]["arguments"]
                 == f'{{"notes": "note {i}", "plan": "plan {i}"}}'
