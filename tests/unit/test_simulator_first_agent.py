@@ -941,6 +941,62 @@ class TestTrimOldNonToolMessages:
         assert "discovered something new" in msgs[2]["content"]
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# 7. Action budget enforcement
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestActionBudget:
+    @pytest.mark.unit
+    def test_step_env_has_no_budget_guard(self):
+        import inspect
+
+        source = inspect.getsource(SimulatorFirstAgent.step_env)
+        assert "MAX_ACTIONS" not in source, \
+            "step_env must not contain a budget guard (committed batches complete)"
+        assert "RuntimeError" not in source, \
+            "step_env must not raise a RuntimeError"
+
+    @pytest.mark.unit
+    def test_tool_loop_budget_guard(self):
+        import inspect
+
+        source = inspect.getsource(SimulatorFirstAgent.choose_action)
+        assert "action_counter >= self.MAX_ACTIONS" in source, \
+            "tool loop must check action_counter vs MAX_ACTIONS"
+        assert "budget exhausted mid-turn" in source, \
+            "tool-loop guard must log budget exhausted mid-turn"
+        assert "guardrail:" in source and "budget exhausted" in source, \
+            "tool-loop guard must use the guardrail log format"
+
+    @pytest.mark.unit
+    def test_fallback_skips_step_when_budget_exhausted(self):
+        import inspect
+
+        source = inspect.getsource(SimulatorFirstAgent.choose_action)
+        fallback_idx = source.find("Fallback: random action")
+        assert fallback_idx > 0
+
+        budget_check = source.find("action_counter >= self.MAX_ACTIONS", fallback_idx)
+        assert budget_check > 0
+
+        elif_idx = source.find("elif self._valid_actions", fallback_idx)
+        assert elif_idx > 0
+        budget_to_elif = source[budget_check:elif_idx]
+        assert "self.step_env" not in budget_to_elif, \
+            "budget-exhausted branch must not call step_env"
+        assert "GameAction.from_id(0)" in source[fallback_idx:], \
+            "budget-exhausted branch must return a RESET placeholder"
+        assert "skipping fallback step" in source[fallback_idx:], \
+            "budget-exhausted branch must log 'skipping fallback step'"
+
+    @pytest.mark.unit
+    def test_no_max_actions_attr_on_class(self):
+        assert (
+            "max_actions" not in SimulatorFirstAgent.__dict__
+        ), "SimulatorFirstAgent must not have the stale max_actions class attr"
+
+
 class TestNotesMessageRegression:
     def test_turn_start_appends_notes_user_message(self):
         """Turn-start message list should include a trailing notes user message."""

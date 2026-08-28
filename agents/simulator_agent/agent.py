@@ -45,8 +45,6 @@ logger = logging.getLogger(__name__)
 class SimulatorFirstAgent(DirectStepAgent):
     """Agent that uses a single ``python()`` tool with in-process sandboxed execution."""
 
-    max_actions: int = 80
-
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
 
@@ -391,6 +389,16 @@ class SimulatorFirstAgent(DirectStepAgent):
                             self._workflow.on_exception_flow()
                         self._sandbox._pending_exception_flow = None
 
+                        # Budget guard: stop the turn before calling the LLM again.
+                        # Committed batches complete; this fires after run_code() returns.
+                        if self.action_counter >= self.MAX_ACTIONS:
+                            logger.info(
+                                f"simulatorfirst: frame={self.action_counter - 1} guardrail: "
+                                f"budget exhausted mid-turn ({self.action_counter}/{self.MAX_ACTIONS})"
+                                " — ending turn"
+                            )
+                            break
+
                         # If sandbox executed an action, we're done
                         if action_taken_id is not None:
                             action_taken = GameAction.from_id(action_taken_id)
@@ -455,24 +463,48 @@ class SimulatorFirstAgent(DirectStepAgent):
 
         # ── 11. Fallback: random action ─────────────────────────────────
         if action_taken is None:
-            if self._valid_actions:
+            if self.action_counter >= self.MAX_ACTIONS:
+                # Budget exhausted — do NOT step. Return a bookkeeping action so
+                # choose_action can return non-None; main() ignores it and the next
+                # is_done() check (counter >= MAX) exits the game.
+                action_taken = GameAction.from_id(0)  # RESET placeholder, never sent
+                logger.warning(
+                    "simulatorfirst: budget exhausted "
+                    f"({self.action_counter}/{self.MAX_ACTIONS}), "
+                    "skipping fallback step — ending game"
+                )
+            elif self._valid_actions:
                 fallback_id = random.choice(self._valid_actions)
+                action_taken = GameAction.from_id(fallback_id)
+                self.step_env(action_taken)
+                if fallback_reason is not None:
+                    logger.warning(
+                        f"simulatorfirst: {fallback_reason}, "
+                        f"falling back to random action {action_taken.name} "
+                        f"(id={fallback_id})"
+                    )
+                else:
+                    logger.warning(
+                        f"simulatorfirst: tool loop exhausted ({max_tool_steps} steps, "
+                        f"no action taken), falling back to random action "
+                        f"{action_taken.name} (id={fallback_id})"
+                    )
             else:
                 fallback_id = 0
-            action_taken = GameAction.from_id(fallback_id)
-            self.step_env(action_taken)
-            if fallback_reason is not None:
-                logger.warning(
-                    f"simulatorfirst: {fallback_reason}, "
-                    f"falling back to random action {action_taken.name} "
-                    f"(id={fallback_id})"
-                )
-            else:
-                logger.warning(
-                    f"simulatorfirst: tool loop exhausted ({max_tool_steps} steps, "
-                    f"no action taken), falling back to random action "
-                    f"{action_taken.name} (id={fallback_id})"
-                )
+                action_taken = GameAction.from_id(fallback_id)
+                self.step_env(action_taken)
+                if fallback_reason is not None:
+                    logger.warning(
+                        f"simulatorfirst: {fallback_reason}, "
+                        f"falling back to random action {action_taken.name} "
+                        f"(id={fallback_id})"
+                    )
+                else:
+                    logger.warning(
+                        f"simulatorfirst: tool loop exhausted ({max_tool_steps} steps, "
+                        f"no action taken), falling back to random action "
+                        f"{action_taken.name} (id={fallback_id})"
+                    )
 
         # Append this turn to history
         self._history_turns.append(
@@ -531,11 +563,11 @@ class SimulatorFirstAgent(DirectStepAgent):
         ``action_counter`` is incremented here (not in ``main()``) because
         the sandbox may call ``action()`` multiple times in a single
         ``choose_action()`` (multi-action batching).
+
+        No budget check here: committed batches must complete; the tool-loop
+        guard and ``is_done()`` enforce the budget at turn boundaries. Clock
+        time is the real constraint in live games.
         """
-        if self.action_counter >= self.max_actions:
-            raise RuntimeError(
-                f"MAX_ACTIONS ({self.max_actions}) reached — no more actions allowed"
-            )
         frame = self.take_action(action)
         if frame is not None:
             self.action_counter += 1
