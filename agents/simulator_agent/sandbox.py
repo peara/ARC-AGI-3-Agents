@@ -315,102 +315,8 @@ class SimulatorSandbox:
             self._valid_actions = ns["valid_actions"]
             self._last_action_result = ns["last_action_result"]
 
-            # ── Predict-and-compare: run simulate on prev grid + action, compare with actual
-            if (
-                self._simulate is not None
-                and action_id != 0
-                and prev_grid is not None
-                and new_grid is not None
-                and not self._last_action_result.get("run_complete")
-                and not self._last_action_result.get("game_over")
-            ):
-                try:
-                    grid_copy = [row[:] for row in prev_grid]
-                    predicted = self._simulate(grid_copy, action_id)
-                    if (
-                        predicted is not None
-                        and len(predicted) == len(new_grid)
-                        and all(
-                            len(pr) == len(nr)
-                            for pr, nr in zip(predicted, new_grid)
-                        )
-                    ):
-                        if predicted != new_grid:
-                            n_diff = sum(
-                                1
-                                for r in range(len(predicted))
-                                for c in range(len(predicted[0]))
-                                if predicted[r][c] != new_grid[r][c]
-                            )
-                            # Region fingerprint (top 4 by cell count)
-                            raw_regions = find_changed_regions(predicted, new_grid)
-
-                            def _area(r):
-                                return (r[1] - r[0] + 1) * (r[3] - r[2] + 1)
-
-                            sorted_regions = sorted(
-                                raw_regions, key=_area, reverse=True
-                            )[:4]
-                            region_info: list[dict[str, Any]] = []
-                            for r0, r1, c0, c1 in sorted_regions:
-                                trans: Counter = Counter()
-                                for r in range(r0, r1 + 1):
-                                    for c in range(c0, c1 + 1):
-                                        if predicted[r][c] != new_grid[r][c]:
-                                            trans[
-                                                (predicted[r][c], new_grid[r][c])
-                                            ] += 1
-                                top = ", ".join(
-                                    f"{o}->{n}"
-                                    for (o, n), _ in trans.most_common(2)
-                                )
-                                region_info.append(
-                                    {
-                                        "bbox": (r0, c0, r1, c1),
-                                        "n_cells": sum(trans.values()),
-                                        "transitions": top,
-                                    }
-                                )
-                            self._pending_exception_flow = {
-                                "action_id": action_id,
-                                "n_diff": n_diff,
-                                "n_regions": len(raw_regions),
-                                "regions": region_info,
-                                "error": None,
-                            }
-                            # Visual diff image (boxed actual frame)
-                            try:
-                                diff_img = draw_boxes_on_grid(new_grid, raw_regions)
-                                self.pending_images.append(
-                                    {
-                                        "b64": image_to_base64(diff_img),
-                                        "caption": (
-                                            f"SIMULATION DIFF after action {action_id} "
-                                            f"({n_diff} cells in {len(raw_regions)} regions, red = wrong)"
-                                        ),
-                                    }
-                                )
-                            except Exception as img_exc:
-                                logger.warning(
-                                    f"failed to render diff image: {img_exc}"
-                                )
-                        else:
-                            self._pending_exception_flow = None
-                except Exception as exc:
-                    # Crash path: capture traceback tail for the LLM
-                    tb = traceback.format_exc()
-                    tail = "\n".join(tb.strip().splitlines()[-3:])[:500]
-                    logger.warning(
-                        f"exception_flow: simulate crashed during predict-and-compare: {exc}"
-                    )
-                    self._pending_exception_flow = {
-                        "action_id": action_id,
-                        "n_diff": 0,
-                        "n_regions": 0,
-                        "regions": [],
-                        "error": tail,
-                    }
-
+            # ── Predict-and-compare (extracted to predict_and_compare method) ─
+            self.predict_and_compare(prev_grid, new_grid, action_id)
             # Update n_frames since grids grew
             ns["n_frames"] = len(self._grids)
 
@@ -658,6 +564,120 @@ class SimulatorSandbox:
         ns["bfs"] = bfs
 
         return ns
+
+    def predict_and_compare(
+        self,
+        prev_grid: list[list[int]] | None,
+        new_grid: list[list[int]] | None,
+        action_id: int,
+    ) -> None:
+        """Run simulate on prev_grid+action_id, compare with new_grid.
+
+        On diff: populates self._pending_exception_flow with region fingerprint
+        and renders a boxed visual diff into self.pending_images.
+
+        On crash: populates self._pending_exception_flow with the traceback tail.
+
+        On match: clears self._pending_exception_flow (no exception flow).
+
+        Skipped silently when simulate isn't registered, action is RESET, or
+        game is over.
+        """
+        if (
+            self._simulate is None
+            or action_id == 0
+            or prev_grid is None
+            or new_grid is None
+            or self._last_action_result.get("run_complete")
+            or self._last_action_result.get("game_over")
+        ):
+            return
+        try:
+            grid_copy = [row[:] for row in prev_grid]
+            predicted = self._simulate(grid_copy, action_id)
+            if (
+                predicted is not None
+                and len(predicted) == len(new_grid)
+                and all(
+                    len(pr) == len(nr)
+                    for pr, nr in zip(predicted, new_grid)
+                )
+            ):
+                if predicted != new_grid:
+                    n_diff = sum(
+                        1
+                        for r in range(len(predicted))
+                        for c in range(len(predicted[0]))
+                        if predicted[r][c] != new_grid[r][c]
+                    )
+                    # Region fingerprint (top 4 by cell count)
+                    raw_regions = find_changed_regions(predicted, new_grid)
+
+                    def _area(r):
+                        return (r[1] - r[0] + 1) * (r[3] - r[2] + 1)
+
+                    sorted_regions = sorted(
+                        raw_regions, key=_area, reverse=True
+                    )[:4]
+                    region_info: list[dict[str, Any]] = []
+                    for r0, r1, c0, c1 in sorted_regions:
+                        trans: Counter = Counter()
+                        for r in range(r0, r1 + 1):
+                            for c in range(c0, c1 + 1):
+                                if predicted[r][c] != new_grid[r][c]:
+                                    trans[
+                                        (predicted[r][c], new_grid[r][c])
+                                    ] += 1
+                        top = ", ".join(
+                            f"{o}->{n}"
+                            for (o, n), _ in trans.most_common(2)
+                        )
+                        region_info.append(
+                            {
+                                "bbox": (r0, c0, r1, c1),
+                                "n_cells": sum(trans.values()),
+                                "transitions": top,
+                            }
+                        )
+                    self._pending_exception_flow = {
+                        "action_id": action_id,
+                        "n_diff": n_diff,
+                        "n_regions": len(raw_regions),
+                        "regions": region_info,
+                        "error": None,
+                    }
+                    # Visual diff image (boxed actual frame)
+                    try:
+                        diff_img = draw_boxes_on_grid(new_grid, raw_regions)
+                        self.pending_images.append(
+                            {
+                                "b64": image_to_base64(diff_img),
+                                "caption": (
+                                    f"SIMULATION DIFF after action {action_id} "
+                                    f"({n_diff} cells in {len(raw_regions)} regions, red = wrong)"
+                                ),
+                            }
+                        )
+                    except Exception as img_exc:
+                        logger.warning(
+                            f"failed to render diff image: {img_exc}"
+                        )
+                else:
+                    self._pending_exception_flow = None
+        except Exception as exc:
+            # Crash path: capture traceback tail for the LLM
+            tb = traceback.format_exc()
+            tail = "\n".join(tb.strip().splitlines()[-3:])[:500]
+            logger.warning(
+                f"exception_flow: simulate crashed during predict-and-compare: {exc}"
+            )
+            self._pending_exception_flow = {
+                "action_id": action_id,
+                "n_diff": 0,
+                "n_regions": 0,
+                "regions": [],
+                "error": tail,
+            }
 
     def _protect_tool_names(self, output: str) -> str:
         """Restore any protected tool names that the LLM code reassigned.
