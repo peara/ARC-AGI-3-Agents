@@ -19,11 +19,14 @@ from __future__ import annotations
 
 import contextlib
 import io
+import logging
 import re
 import signal
 import sys
 import threading
-from collections import deque
+import traceback
+import types  # noqa: F401  # reserved for Task 2 freeze + tool-protection logic
+from collections import Counter, deque
 from collections.abc import Callable
 from io import StringIO
 from typing import Any
@@ -43,7 +46,14 @@ from agents.simulator_agent.tools import (
 )
 from perception.objects import to_grid
 from replay.harness import ReplayHarness
-from vision.render import grid_to_image, image_to_base64
+from vision.render import (
+    draw_boxes_on_grid,
+    find_changed_regions,
+    grid_to_image,
+    image_to_base64,
+)
+
+logger = logging.getLogger(__name__)
 
 # ── Sandbox security ──────────────────────────────────────────────────────
 
@@ -169,6 +179,18 @@ class SimulatorSandbox:
         # Build persistent namespace
         self.namespace: dict[str, Any] = self._build_namespace()
 
+        self._protected_tools: dict[str, Any] = {
+            k: self.namespace[k]
+            for k in (
+                "set_simulate", "simulate", "check", "diagnose", "bfs", "action",
+                "set_ignore", "update_notes", "show_frame", "show_grid",
+                "atoms", "find_objects", "find_color", "diff", "compute_delta",
+                "copy_grid", "count_color", "print_region", "move_region",
+                "get_bbox", "get_frame", "get_action",
+            )
+            if k in self.namespace
+        }
+
     # ── Namespace construction ──────────────────────────────────────────
 
     def _build_namespace(self) -> dict[str, Any]:
@@ -183,15 +205,31 @@ class SimulatorSandbox:
         def set_simulate(
             func: Callable[[list[list[int]], int], list[list[int]]],
         ) -> None:
-            """Register a simulate(grid, action) -> next_grid function."""
-            self._simulate = func
+            """Register a simulate(grid, action) -> next_grid function.
+
+            The function's globals are snapshotted at registration time, so later
+            redefinitions of helper functions do NOT affect the registered simulate.
+            Call set_simulate() again to pick up new helper definitions.
+            """
+            frozen = types.FunctionType(
+                func.__code__,
+                dict(func.__globals__),
+                func.__name__,
+                func.__defaults__,
+                func.__closure__,
+            )
+            self._simulate = frozen
             try:
                 import inspect as _inspect
-
-                self._simulate_source = _inspect.getsource(func)
+                src = _inspect.getsource(func)
+                first_line = src.splitlines()[0] if src else "(no source)"
             except Exception:
-                self._simulate_source = "(source unavailable)"
-            print("[set_simulate] registered. simulate(grid, action) is now available.")
+                first_line = "(source unavailable)"
+            print(
+                f"[set_simulate] registered (helper definitions frozen at "
+                f"registration; call set_simulate() again after redefining helpers)\n"
+                f"[set_simulate] source first line: {first_line.strip()}"
+            )
 
         ns["set_simulate"] = set_simulate
 
@@ -304,17 +342,74 @@ class SimulatorSandbox:
                                 for c in range(len(predicted[0]))
                                 if predicted[r][c] != new_grid[r][c]
                             )
+                            # Region fingerprint (top 4 by cell count)
+                            raw_regions = find_changed_regions(predicted, new_grid)
+
+                            def _area(r):
+                                return (r[1] - r[0] + 1) * (r[3] - r[2] + 1)
+
+                            sorted_regions = sorted(
+                                raw_regions, key=_area, reverse=True
+                            )[:4]
+                            region_info: list[dict[str, Any]] = []
+                            for r0, r1, c0, c1 in sorted_regions:
+                                trans: Counter = Counter()
+                                for r in range(r0, r1 + 1):
+                                    for c in range(c0, c1 + 1):
+                                        if predicted[r][c] != new_grid[r][c]:
+                                            trans[
+                                                (predicted[r][c], new_grid[r][c])
+                                            ] += 1
+                                top = ", ".join(
+                                    f"{o}->{n}"
+                                    for (o, n), _ in trans.most_common(2)
+                                )
+                                region_info.append(
+                                    {
+                                        "bbox": (r0, c0, r1, c1),
+                                        "n_cells": sum(trans.values()),
+                                        "transitions": top,
+                                    }
+                                )
                             self._pending_exception_flow = {
                                 "action_id": action_id,
                                 "n_diff": n_diff,
+                                "n_regions": len(raw_regions),
+                                "regions": region_info,
+                                "error": None,
                             }
+                            # Visual diff image (boxed actual frame)
+                            try:
+                                diff_img = draw_boxes_on_grid(new_grid, raw_regions)
+                                self.pending_images.append(
+                                    {
+                                        "b64": image_to_base64(diff_img),
+                                        "caption": (
+                                            f"SIMULATION DIFF after action {action_id} "
+                                            f"({n_diff} cells in {len(raw_regions)} regions, red = wrong)"
+                                        ),
+                                    }
+                                )
+                            except Exception as img_exc:
+                                logger.warning(
+                                    f"failed to render diff image: {img_exc}"
+                                )
                         else:
                             self._pending_exception_flow = None
                 except Exception as exc:
-                    import logging
-                    logging.getLogger("sandbox").warning(
+                    # Crash path: capture traceback tail for the LLM
+                    tb = traceback.format_exc()
+                    tail = "\n".join(tb.strip().splitlines()[-3:])[:500]
+                    logger.warning(
                         f"exception_flow: simulate crashed during predict-and-compare: {exc}"
                     )
+                    self._pending_exception_flow = {
+                        "action_id": action_id,
+                        "n_diff": 0,
+                        "n_regions": 0,
+                        "regions": [],
+                        "error": tail,
+                    }
 
             # Update n_frames since grids grew
             ns["n_frames"] = len(self._grids)
@@ -564,6 +659,23 @@ class SimulatorSandbox:
 
         return ns
 
+    def _protect_tool_names(self, output: str) -> str:
+        """Restore any protected tool names that the LLM code reassigned.
+
+        Appends a warning to output for each one. Returns the updated output.
+        """
+        for name, original in self._protected_tools.items():
+            current = self.namespace.get(name)
+            if current is not original:
+                self.namespace[name] = original
+                warning = (
+                    f"[sandbox] WARNING: '{name}' is a builtin tool and was "
+                    f"protected from redefinition"
+                )
+                output += "\n" + warning
+                print(warning)
+        return output
+
     # ── Live mode: state refresh ────────────────────────────────────────
 
     def update_state(
@@ -691,6 +803,7 @@ class SimulatorSandbox:
                 self.namespace.pop("__builtins__", None)
 
         output = buf.getvalue()
+        output = self._protect_tool_names(output)
         if len(output) > _MAX_OUTPUT_CHARS:
             output = (
                 output[:_MAX_OUTPUT_CHARS]

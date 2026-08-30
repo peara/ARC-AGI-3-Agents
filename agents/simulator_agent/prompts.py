@@ -168,6 +168,18 @@ PLANNING:
   bfs(start_grid, goal_fn) -> search for a path (max depth 20, requires simulate)
 
 simulate(grid, action) MUST accept a grid (list of lists) and action ID — not a frame index.
+
+IMPORTANT — build simulate() from the provided tools:
+  find_objects(grid, [colors]) identifies multi-color objects robustly
+  (sorted by size). Use it inside simulate to locate your controllable
+  object instead of hand-rolling connected-component search.
+
+Namespaces: your simulate is FROZEN at set_simulate() time. Redefining a
+helper later does NOT affect the registered simulate. If you improve a
+helper, call set_simulate() again to pick it up.
+
+Builtin sandbox tools (find_objects, check, bfs, ...) are protected and
+cannot be overwritten — redefinition is silently restored.
 """
 
 AGENT_PHASES_OVERVIEW: str = """\
@@ -369,20 +381,20 @@ def build_agent_user_prompt(
 EXCEPTION_FLOW_TEXT = """\
 EXCEPTION FLOW — Something is wrong
 
-You attempted action {action_id} ({action_name}). Your simulate() predicted \
-a result that differs from reality by {n_diff} cells.
+You attempted action {action_id} ({action_name}). {diagnosis}
 
-Something is wrong with your model of this game. You need to carefully \
-investigate what actually happened and update your understanding.
+{diagnosis_hint}
 
-Step 1: INVESTIGATE — Use python() to carefully inspect the current state. \
-Compare what you expected to happen with what actually happened. What is \
-different from your model?
+Step 1: INVESTIGATE — Inspect the diff image (red boxes = where reality \
+differed from your prediction). Use compute-delta reasoning: transitions \
+like 0->5 (white overlay vanishing) far from your move = board animation, \
+not a movement error.
 
-Step 2: HYPOTHESIZE — Call update_notes with your new understanding: \
-what did you get wrong, and what is the actual game mechanic?
+Step 2: HYPOTHESIZE — Call update_notes with your new understanding.
 
-Step 3: FIX — Update simulate() to match reality. Call check() to verify.
+Step 3: FIX — Either model the animation in simulate() (e.g. event-driven \
+flashes), or exclude fixed regions with set_ignore(cells=[...]). \
+Call check() to verify.
 
 Step 4: RE-PLAN — Re-run bfs(current_frame, goal) with the fixed simulate. \
 If no path exists, try a different approach.
