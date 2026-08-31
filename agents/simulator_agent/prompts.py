@@ -401,6 +401,28 @@ If no path exists, try a different approach.
 """
 
 
+LEVEL_TRANSITION_TEXT = """\
+[ LEVEL TRANSITION — LEVEL {levels_completed} COMPLETED ]
+
+Your last batch contained action {action_id}. Result: level_completed=True, \
+reward=1. The board you see now is the NEXT level's fresh maze.
+
+All frame history and check results from the previous level were cleared. \
+Your simulate() was carried over from the previous level — treat it as a \
+HYPOTHESIS: movement rules (step size, direction mapping) may differ.
+
+Your task in THIS turn (do exactly this, then stop):
+1. Call update_notes: record which conjecture this win CONFIRMED \
+(what condition triggered the win — this transfers to future levels) \
+and clear the stale plan.
+2. Do NOT take any actions. The previous board is dead; nothing more to \
+observe there.
+3. Do NOT re-verify the win — the engine already confirmed it.
+
+After update_notes, in a NEW turn you will re-explore this fresh board \
+from scratch (it may move differently)."""
+
+
 # ── System prompt ───────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT: str = """\
@@ -546,5 +568,6 @@ __all__ = [
     "AGENT_SYSTEM_PROMPT",
     "AGENT_PYTHON_TOOL_SCHEMA",
     "UPDATE_NOTES_TOOL_SCHEMA",
+    "LEVEL_TRANSITION_TEXT",
     "build_agent_user_prompt",
 ]

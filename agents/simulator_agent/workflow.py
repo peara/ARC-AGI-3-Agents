@@ -181,6 +181,24 @@ class WorkflowController:
         logger.info("frame=%d exception_flow #%d %s→MODEL (path invalidated)",
                     self._action_counter - 1, self._exception_flow_count, old_phase)
 
+    def reset_to_explore(self, reason: str = "level transition") -> None:
+        """Hard reset per-level workflow state to EXPLORE (e.g. on level transition).
+
+        Mirrors the guardrail reset in `update()` but is invoked explicitly by the
+        agent when a `LevelTransition` is detected. Logs the transition BEFORE the
+        phase change to show {old}→EXPLORE (consistent with other guardrail logs).
+        """
+        frame = self._action_counter - 1
+        old_phase = self._phase.value
+        logger.info(
+            "frame=%d level_transition %s→EXPLORE reason='%s'",
+            frame, old_phase, reason[:80],
+        )
+        self._phase = Phase.EXPLORE
+        self._check_failures = 0
+        self._exception_flow_count = 0
+        self._last_path = None
+
     @property
     def path(self) -> list[int] | None:
         return self._last_path

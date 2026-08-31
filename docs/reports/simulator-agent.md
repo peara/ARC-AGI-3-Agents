@@ -317,11 +317,36 @@ Result vs the same transition in production (which consumed 23 LLM calls /
 - **Turn 1**: 1 call, 18s. Called `update_notes` only — captured the win-trigger
   conjecture, flagged the carried-over simulate as hypothesis, zero action probes,
   no win re-verification loop.
-- Design conclusion: the structured transition call (clear stale state → inject
-  `[LEVEL TRANSITION]` message with the win fact → constrain to `update_notes` +
-  stop) converts the production re-confirmation spiral into 1 call and captures
-  strictly more transferable knowledge. The "do not take any actions" line is
-  load-bearing.
+- **Shipped as WS1** (`.omo/plans/level-transition-ws1.md`, Tasks 1-6 implemented):
+  - **Hard-abort** — the sandbox's `action()` raises `LevelTransition` the moment
+    a callback returns `level_completed=True`, so the remaining actions in the
+    batch never step on the new level's fresh board (`sandbox.py`).
+  - **Clear** — `reset_for_level_transition()` clears 11 per-level structures
+    (`_grids`, `_actions`, `_last_check_result`, `_ignore_mask`,
+    `_prev_correct_frames`, `_pending_exception_flow`, `pending_images`,
+    `_current_frame`, `_previous_grid`, `_last_action_result`, and the matching
+    namespace vars) while **preserving** `_simulate`, `_simulate_source`
+    (the carried-forward hypothesis) and `_pending_notes` (transition-turn notes
+    survive the clear).
+  - **Consume flag at the top of `choose_action`** — when
+    `_sandbox._transition_pending` is set the agent clears `_history_messages`,
+    `_history_turns`, and `world_model['plan']`, runs
+    `reset_for_level_transition()` + `WorkflowController.reset_to_explore(
+    reason='level transition')`, then drops the flag.
+  - **Inject** — `LEVEL_TRANSITION_TEXT.format(...)` is inserted as the first
+    content block of the transition turn's user message: the win fact
+    (`level_completed=True, action_id, reward=1`), the carried-over simulate
+    framed as a HYPOTHESIS, and the load-bearing constraints — "Do NOT take any
+    actions", "Do NOT re-verify", and "call update_notes" to record the
+    confirmed win-trigger conjecture.
+  - **Fallback suppression** — the transition turn returns a RESET placeholder
+    without stepping the env, so the board is not disturbed before the next
+    fresh-level turn.
+  - **Empirical validation** — `scripts/experiment_level_transition.py` is the
+    offline reconstruction that produced the 1-call / 18s result above vs
+    production's 23 calls / 17.5 min re-confirmation spiral. The structured
+    transition call captures strictly more transferable knowledge; the
+    "do not take any actions" line is load-bearing.
 
 ---
 
@@ -439,8 +464,19 @@ The key insight is that ARC-AGI-3 games are deterministic grid transitions. Once
 - **Stochastic games**: `simulate()` assumes deterministic transitions. Games with randomness cannot be captured this way.
 - **Complex ACTION6**: The sandbox supports complex actions, but the LLM rarely uses them effectively in the simulator.
 - **Long-horizon planning**: BFS depth 20 and 50,000 nodes is sufficient for simple games but may fail for multi-step puzzles.
-- **Cross-level transfer**: Each level needs a new simulator. There is no automatic state clearing or message injection on level transitions yet (validated by `scripts/experiment_level_transition.py`; planned as WS1).
-- **Level-transition handling**: `history` and `_grids` mix frames across level boundaries — `check()` replays poisoned pairs, and the exception-flow message blames the wrong action on board redraws (`replay/harness.py` also hardcodes `OperationMode.NORMAL`, burning a real scorecard per replay run).
+- **Cross-level transfer**: Each level needs a new simulator; the carried-over
+  simulate is treated as a hypothesis on the next level (no automatic simulator
+  rewrite). State clearing + win-fact injection on level transitions shipped as
+  WS1 (see §9). The step-timer death mechanic (level 2 in `a5df227a`, ~20-action
+  budget with a full-board yellow flash on expiry) remains unsolved — planned as
+  WS2.
+- **Level-transition handling (remaining)**: WS1 hard-aborts the batch and
+  clears per-level state, so `history` and `_grids` no longer mix frames across
+  level boundaries in production. Two residual issues remain: the
+  exception-flow message can still blame the wrong action on board redraws, and
+  `replay/harness.py` hardcodes `OperationMode.NORMAL`, burning a real scorecard
+  per replay run (the offline `experiment_level_transition.py` uses
+  `OperationMode.OFFLINE` instead).
 
 ---
 

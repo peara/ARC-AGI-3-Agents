@@ -29,6 +29,7 @@ from agents.simulator_agent.prompts import (
     AGENT_PYTHON_TOOL_SCHEMA,
     AGENT_SYSTEM_PROMPT,
     EXCEPTION_FLOW_TEXT,
+    LEVEL_TRANSITION_TEXT,
     UPDATE_NOTES_TOOL_SCHEMA,
     build_agent_user_prompt,
 )
@@ -61,6 +62,9 @@ class SimulatorFirstAgent(DirectStepAgent):
         self._last_action_result: dict[str, Any] = {}
         self._history_messages: list[dict[str, Any]] = []
         self._exception_flow_fired_for: int | None = None
+
+        self._current_grid_levels_completed: int = 0
+        self._transition_ended_turn: bool = False
 
         # Context budget (same formula as duck harness)
         self._context_budget_tokens = max(1024, 32768 - 4096 - 512)
@@ -128,6 +132,10 @@ class SimulatorFirstAgent(DirectStepAgent):
 
         previous_history = list(self._history_messages)
         preserve_history = True
+        self._transition_ended_turn = False
+
+        if latest_frame.levels_completed is not None:
+            self._current_grid_levels_completed = latest_frame.levels_completed
 
         # ── 1. Iteration-0 guard: empty placeholder → RESET ────────────
         if not getattr(frames[-1], "frame", None):
@@ -169,6 +177,34 @@ class SimulatorFirstAgent(DirectStepAgent):
         # ── 6.5. Update workflow phase + get directive ────────────────────
         self._workflow.update(action_counter=self.action_counter)
         phase_directive = self._workflow.directive()
+        transition_active = False
+
+        # Level-transition turn (Task 4 / WS1): inject the structured
+        # transition message first (highest salience), clear stale per-level
+        # state, consume the flag. Notes survive; plan/history clear because
+        # they describe the dead level's geometry.
+        if self._sandbox._transition_pending:
+            logger.info(
+                "simulatorfirst: frame=%d LEVEL TRANSITION detected "
+                "(action=%s, lvl=%s)",
+                self.action_counter - 1,
+                self._sandbox._action_taken,
+                self._current_grid_levels_completed,
+            )
+            transition_msg = LEVEL_TRANSITION_TEXT.format(
+                levels_completed=self._current_grid_levels_completed,
+                action_id=self._sandbox._action_taken,
+            )
+            self._history_messages = []
+            self._history_turns = []
+            previous_history = []
+            self._world_model["plan"] = ""
+            self._sandbox.reset_for_level_transition()
+            self._workflow.reset_to_explore(reason="level transition")
+            self._sandbox._transition_pending = False
+            phase_directive = self._workflow.directive()
+            transition_active = True
+            self._transition_ended_turn = True
 
         user_content = build_agent_user_prompt(
             grid_image_b64=grid_b64,
@@ -179,6 +215,9 @@ class SimulatorFirstAgent(DirectStepAgent):
             simulate_status=simulate_status,
             phase_directive=phase_directive,
         )
+
+        if transition_active:
+            user_content[0]["content"].insert(0, {"type": "text", "text": transition_msg})
 
         messages: list[dict[str, Any]] = self._trim_messages_for_context(
             [
@@ -326,6 +365,8 @@ class SimulatorFirstAgent(DirectStepAgent):
                         check_before = self._sandbox._last_check_result
                         bfs_before = self._sandbox._last_bfs_result
                         output, error, action_taken_id = self._sandbox.run_code(code)
+                        if output and "LEVEL COMPLETED" in output:
+                            self._transition_ended_turn = True
                         if not had_simulate and self._sandbox._simulate is not None:
                             logger.info(
                                 f"simulatorfirst: simulate function registered at frame {self.action_counter - 1}"
@@ -532,14 +573,16 @@ class SimulatorFirstAgent(DirectStepAgent):
         # ── 11. Fallback: random action ─────────────────────────────────
         if action_taken is None:
             if self.action_counter >= self.MAX_ACTIONS:
-                # Budget exhausted — do NOT step. Return a bookkeeping action so
-                # choose_action can return non-None; main() ignores it and the next
-                # is_done() check (counter >= MAX) exits the game.
                 action_taken = GameAction.from_id(0)  # RESET placeholder, never sent
                 logger.warning(
                     "simulatorfirst: budget exhausted "
                     f"({self.action_counter}/{self.MAX_ACTIONS}), "
                     "skipping fallback step — ending game"
+                )
+            elif self._transition_ended_turn:
+                action_taken = GameAction.from_id(0)  # RESET placeholder, never sent
+                logger.warning(
+                    "simulatorfirst: transition turn returned RESET placeholder (no step)"
                 )
             elif self._valid_actions:
                 fallback_id = random.choice(self._valid_actions)
@@ -690,6 +733,8 @@ class SimulatorFirstAgent(DirectStepAgent):
                 if curr.available_actions
                 else [],
             }
+            if curr_levels > self._current_grid_levels_completed:
+                self._current_grid_levels_completed = curr_levels
         else:
             self._last_action_result = {}
 

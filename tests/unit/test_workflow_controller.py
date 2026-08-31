@@ -241,3 +241,52 @@ def test_check_ok_log(caplog: pytest.LogCaptureFixture) -> None:
         and "frame=1 check: ok (failures=0)" in r.message
         for r in caplog.records
     )
+
+
+@pytest.mark.unit
+def test_reset_to_explore_resets_all_state(caplog: pytest.LogCaptureFixture) -> None:
+    sandbox = make_sandbox()
+    sandbox._simulate = lambda grid, action: grid
+    controller = WorkflowController(sandbox)
+    controller.set_phase("EXECUTE", "manual play")
+    controller._check_failures = 2
+    controller._exception_flow_count = 1
+    controller.on_bfs_result([0, 1, 4])
+    controller.update(action_counter=7)
+    assert controller.phase == Phase.EXECUTE
+    assert controller._check_failures == 2
+    assert controller._exception_flow_count == 1
+    assert controller.path == [0, 1, 4]
+
+    with caplog.at_level(logging.INFO, logger="agents.simulator_agent.workflow"):
+        controller.reset_to_explore()
+
+    assert controller.phase == Phase.EXPLORE
+    assert controller._check_failures == 0
+    assert controller._exception_flow_count == 0
+    assert controller._last_path is None
+    assert controller.path is None
+    assert any(
+        r.name == "agents.simulator_agent.workflow"
+        and "frame=6 level_transition EXECUTE→EXPLORE reason='level transition'" in r.message
+        for r in caplog.records
+    )
+
+
+@pytest.mark.unit
+def test_reset_to_explore_default_reason_truncates_long_reason(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    sandbox = make_sandbox()
+    controller = WorkflowController(sandbox)
+    controller.update(action_counter=5)
+    long_reason = "x" * 200
+    with caplog.at_level(logging.INFO, logger="agents.simulator_agent.workflow"):
+        controller.reset_to_explore(reason=long_reason)
+    assert any(
+        r.name == "agents.simulator_agent.workflow"
+        and "frame=4 level_transition EXPLORE→EXPLORE reason='"
+        + long_reason[:80]
+        + "'" in r.message
+        for r in caplog.records
+    )
