@@ -211,6 +211,18 @@ class SimulatorFirstAgent(DirectStepAgent):
         for step in range(max_tool_steps):
             turn_count = step + 1
 
+            # Top-of-loop budget guard: before ANY further LLM call. The
+            # post-run_code() guard alone left a re-entry hole when
+            # action_taken stayed None (LLM calls python() without
+            # action()) — the 61/30 bug.
+            if self.action_counter >= self.MAX_ACTIONS:
+                logger.info(
+                    f"simulatorfirst: frame={self.action_counter - 1} guardrail: "
+                    f"budget exhausted pre-LLM ({self.action_counter}/{self.MAX_ACTIONS})"
+                    " — ending turn"
+                )
+                break
+
             try:
                 self._trim_old_tool_results(messages, keep_last_n=3)
                 self._trim_old_non_tool_messages(messages)
@@ -440,6 +452,12 @@ class SimulatorFirstAgent(DirectStepAgent):
                             self._workflow.on_exception_flow()
                         self._sandbox._pending_exception_flow = None
 
+                        # Capture BEFORE the budget guard: if the guard
+                        # broke first, action_taken stayed None here and
+                        # the outer tool loop re-entered (61/30 bug).
+                        if action_taken_id is not None:
+                            action_taken = GameAction.from_id(action_taken_id)
+
                         # Budget guard: stop the turn before calling the LLM again.
                         # Committed batches complete; this fires after run_code() returns.
                         if self.action_counter >= self.MAX_ACTIONS:
@@ -448,11 +466,10 @@ class SimulatorFirstAgent(DirectStepAgent):
                                 f"budget exhausted mid-turn ({self.action_counter}/{self.MAX_ACTIONS})"
                                 " — ending turn"
                             )
-                            break
-
-                        # If sandbox executed an action, we're done
-                        if action_taken_id is not None:
-                            action_taken = GameAction.from_id(action_taken_id)
+                            # Both breaks are intentional: action_taken set
+                            # above ends the turn with the executed action;
+                            # without it, the post-loop fallback handles the
+                            # empty case (never re-step the env here).
                             break
 
                         # Nudge: remind LLM to record notes if it discovered something

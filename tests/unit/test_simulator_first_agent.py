@@ -996,6 +996,103 @@ class TestActionBudget:
             "max_actions" not in SimulatorFirstAgent.__dict__
         ), "SimulatorFirstAgent must not have the stale max_actions class attr"
 
+    def _make_budget_exhausted_agent(self):
+        import numpy as np
+        from arcengine import FrameData, GameState
+
+        agent = SimulatorFirstAgent.__new__(SimulatorFirstAgent)
+        agent.MAX_ACTIONS = 30
+        agent.action_counter = 61  # crossed MAX mid-turn, as in the 61/30 bug
+        agent.game_id = "test"
+        agent.frames = []
+        agent._world_model = {"notes": "", "plan": ""}
+        agent._history_messages = []
+        agent._history_turns = []
+        agent._valid_actions = [1, 2, 3, 4]
+        agent._last_action_result = {}
+        agent._current_grid = None
+        agent._previous_grid = None
+        agent._context_budget_tokens = 100000
+        agent._exception_flow_fired_for = None
+        agent._llm_calls = 0
+        agent._sandbox_steps = 0
+
+        def fake_llm_chat(**kwargs):
+            agent._llm_calls += 1
+            raise AssertionError("LLM must not be called when budget is exhausted")
+
+        def fake_step_env(action):
+            agent._sandbox_steps += 1
+            raise AssertionError("step_env must not be called once budget is spent")
+
+        agent._llm_chat = fake_llm_chat
+        agent.step_env = fake_step_env  # type: ignore[method-assign]
+        agent._sandbox = MagicMock()
+        agent._sandbox._simulate = None
+        agent._sandbox._pending_notes = {}
+        agent._sandbox._pending_exception_flow = None
+        agent._workflow = MagicMock()
+        agent._workflow.directive.return_value = ""
+        agent._trim_messages_for_context = lambda messages, **kw: list(messages)
+        agent._append_notes_message = lambda messages, wm: None
+
+        frame = FrameData(
+            game_id="test",
+            frame=np.zeros((1, 64, 64), dtype=int),
+            state=GameState.NOT_FINISHED,
+            levels_completed=0,
+            win_levels=7,
+            available_actions=[1, 2, 3, 4],
+        )
+        return agent, [frame]
+
+    @pytest.mark.unit
+    def test_choose_action_no_llm_call_after_budget_exhausted(self):
+        """61/30 bug regression: counter past MAX must end the turn without
+        any further LLM calls or sandbox steps."""
+        agent, frames = self._make_budget_exhausted_agent()
+        action = agent.choose_action(frames, frames[-1])
+        assert agent._llm_calls == 0
+        assert agent._sandbox_steps == 0
+        assert action.value == 0  # RESET placeholder, never stepped
+
+    @pytest.mark.unit
+    def test_choose_action_ends_turn_when_batch_crosses_budget(self):
+        """Batch crosses MAX mid-turn: LLM must not be called again after it."""
+        agent, frames = self._make_budget_exhausted_agent()
+        agent.action_counter = 28  # 2 left
+        agent.MAX_ACTIONS = 30
+
+        def fake_llm_chat(**kwargs):
+            agent._llm_calls += 1
+            return type(
+                "R",
+                (),
+                {
+                    "tool_calls": [{
+                        "id": "tc1",
+                        "type": "function",
+                        "function": {
+                            "name": "python",
+                            "arguments": '{"code": "action(4)\\naction(4)\\naction(4)"}',
+                        },
+                    }],
+                    "content": "running batch",
+                },
+            )()
+
+        def fake_sandbox_run(code):
+            agent.action_counter = 31  # batch pushes past MAX
+            return ("output", None, 4)
+
+        agent._llm_chat = fake_llm_chat
+        agent._sandbox.run_code = fake_sandbox_run  # type: ignore[method-assign]
+
+        agent.choose_action(frames, frames[-1])
+        assert agent._llm_calls == 1, (
+            "after the batch crossed MAX, no further LLM call may happen"
+        )
+
 
 class TestNotesMessageRegression:
     def test_turn_start_appends_notes_user_message(self):
