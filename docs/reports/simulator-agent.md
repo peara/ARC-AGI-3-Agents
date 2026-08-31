@@ -298,9 +298,30 @@ LLM calls are logged to a `.llm.jsonl` sidecar via `LlmCallLogger` + `wrap_llm_c
 Tested on `ls20` with local gemma-4-31b via LM Studio:
 
 - **Win**: Agent won level 1 in one run (`dab1058e`). The winning run used `set_simulate` + `check()` + `bfs()` — the full simulator-first workflow.
+- **Second win run** (`a5df227a`, qwen3.8-27b): won level 1 again after the budget-guardrail and set_ignore fixes. Level 2 then died to the step-timer mechanic (~20-action budget, full-board yellow flash on expiry) while one move short of the win pose.
 - **Pattern**: The agent explores (takes 1 of each action), writes `simulate(grid, action)`, tests with `check()`, then uses `bfs(current_frame, goal_fn)` to find a path and executes it.
 - **Context management**: The 3-layer trimming pipeline keeps context under 32k tokens even with 100 tool calls per turn.
 - **Known issues**: The LLM sometimes skips building `simulate()` and goes straight to acting. The prompt includes a checklist to encourage the simulator-first workflow. `find_color` can return hundreds of cells for common colors (walls) — the prompt warns against printing these.
+
+### Level-transition experiment (`scripts/experiment_level_transition.py`)
+
+Reconstructs the exact `a5df227a` win moment offline (env via `OperationMode.OFFLINE`,
+action ids replayed from the recording) and shows the LLM a single structured
+transition message: win fact pre-loaded (`level_completed=True, action_id, reward`),
+carried-over simulate declared a hypothesis, instruction to record the win-trigger
+conjecture via `update_notes` and stop (no actions, no re-verification).
+
+Result vs the same transition in production (which consumed 23 LLM calls /
+17.5 min re-confirming the already-won state and 7 dead-board actions):
+
+- **Turn 1**: 1 call, 18s. Called `update_notes` only — captured the win-trigger
+  conjecture, flagged the carried-over simulate as hypothesis, zero action probes,
+  no win re-verification loop.
+- Design conclusion: the structured transition call (clear stale state → inject
+  `[LEVEL TRANSITION]` message with the win fact → constrain to `update_notes` +
+  stop) converts the production re-confirmation spiral into 1 call and captures
+  strictly more transferable knowledge. The "do not take any actions" line is
+  load-bearing.
 
 ---
 
@@ -418,7 +439,8 @@ The key insight is that ARC-AGI-3 games are deterministic grid transitions. Once
 - **Stochastic games**: `simulate()` assumes deterministic transitions. Games with randomness cannot be captured this way.
 - **Complex ACTION6**: The sandbox supports complex actions, but the LLM rarely uses them effectively in the simulator.
 - **Long-horizon planning**: BFS depth 20 and 50,000 nodes is sufficient for simple games but may fail for multi-step puzzles.
-- **Cross-level transfer**: Each level needs a new simulator. There is no mechanism to reuse learned transition rules.
+- **Cross-level transfer**: Each level needs a new simulator. There is no automatic state clearing or message injection on level transitions yet (validated by `scripts/experiment_level_transition.py`; planned as WS1).
+- **Level-transition handling**: `history` and `_grids` mix frames across level boundaries — `check()` replays poisoned pairs, and the exception-flow message blames the wrong action on board redraws (`replay/harness.py` also hardcodes `OperationMode.NORMAL`, burning a real scorecard per replay run).
 
 ---
 
