@@ -17,7 +17,7 @@ _LABELS = ["notes", "plan"]
 def extract_notes(content: str) -> dict[str, str]:
     result: dict[str, str] = {"notes": "", "plan": ""}
     matches = list(_LABEL_LINE_RE.finditer(content))
-    label_set = {l.lower() for l in _LABELS}
+    label_set = {lbl.lower() for lbl in _LABELS}
 
     for idx, match in enumerate(matches):
         raw_label = match.group(1).strip().strip("*")
