@@ -7,6 +7,8 @@ not re-implementations of the logic under test.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from agents.simulator_agent.prompts import EXCEPTION_FLOW_TEXT
@@ -22,6 +24,54 @@ def make_sandbox() -> SimulatorSandbox:
     s.namespace = {}
     s._protected_tools = {}
     s._ignore_mask = set()
+    return s
+
+
+def make_live_sandbox(
+    callback: Any,
+    simulate: Any = None,
+    current_frame: list[list[int]] | None = None,
+) -> SimulatorSandbox:
+    """Create a live-mode sandbox wired for ``action()`` + ``run_code()``.
+
+    Seeds the attributes ``__init__`` would set, then builds the real
+    namespace (which defines the real ``action`` closure bound to
+    ``callback``).
+    """
+    s = SimulatorSandbox.__new__(SimulatorSandbox)
+    s.harness = None
+    s.timeout = 30.0
+    s._step_env_callback = callback
+    s.actions_this_turn = 0
+    s._action_taken = None
+    s._grids: list[list[list[int]]] = []
+    s._actions: list[int] = []
+    s._current_frame = current_frame
+    s._previous_grid = None
+    s._valid_actions: list[int] = []
+    s._last_action_result: dict[str, Any] = {}
+    s._simulate = simulate
+    s._simulate_source = ""
+    s._last_check_result = None
+    s._last_bfs_result = None
+    s._pending_exception_flow = None
+    s._ignore_mask: set[tuple[int, int]] = set()
+    s._prev_correct_frames: set[int] = set()
+    s.pending_images: list[dict[str, Any]] = []
+    s._pending_notes: dict[str, str] = {}
+    s._transition_pending = False
+    s.namespace = s._build_namespace()
+    s._protected_tools = {
+        k: s.namespace[k]
+        for k in (
+            "set_simulate", "simulate", "check", "diagnose", "bfs", "action",
+            "set_ignore", "update_notes", "show_frame", "show_grid",
+            "atoms", "find_objects", "find_color", "diff", "compute_delta",
+            "copy_grid", "count_color", "print_region", "move_region",
+            "get_bbox", "get_frame", "get_action",
+        )
+        if k in s.namespace
+    }
     return s
 
 
@@ -231,3 +281,121 @@ def test_tool_protection_restores_overwrite() -> None:
         in output
     )
     assert output.count("WARNING") == 1
+
+
+# ── Level-transition hard-abort + state clearing (WS1 Task 1) ──────────────
+
+
+def _win_callback(action_id: int, action_data: dict[str, Any] | None) -> dict[str, Any]:
+    """Stubbed step_env_callback: action 1 wins the level, others don't."""
+    base = [[0] * 8 for _ in range(8)]
+    after = [row[:] for row in base]
+    after[0][0] = action_id
+    if action_id == 1:
+        last_action_result = {
+            "level_completed": True,
+            "reward": 1,
+            "board_changed": True,
+            "done": False,
+            "game_over": False,
+            "run_complete": False,
+            "valid_actions": [0, 1, 2, 3, 4],
+        }
+    else:
+        last_action_result = {
+            "level_completed": False,
+            "reward": 0,
+            "board_changed": True,
+            "done": False,
+            "game_over": False,
+            "run_complete": False,
+            "valid_actions": [0, 1, 2, 3, 4],
+        }
+    return {
+        "grid": after,
+        "valid_actions": [0, 1, 2, 3, 4],
+        "last_action_result": last_action_result,
+        "history": [],
+        "objects": (),
+        "adjacency": frozenset(),
+    }
+
+
+@pytest.mark.unit
+def test_win_action_sets_transition_pending() -> None:
+    initial = [[0] * 8 for _ in range(8)]
+    s = make_live_sandbox(_win_callback, current_frame=initial)
+
+    output, error, action_taken = s.run_code("action(1)")
+
+    assert s._transition_pending is True
+    assert error is None
+    assert output == "[LEVEL COMPLETED — board transitioning; stop]"
+    assert action_taken == 1
+
+
+@pytest.mark.unit
+def test_transition_clears_grids_and_check_state() -> None:
+    initial = [[0] * 8 for _ in range(8)]
+
+    def static_simulate(g: list[list[int]], a: int) -> list[list[int]]:
+        return [row[:] for row in g]
+
+    s = make_live_sandbox(_win_callback, simulate=static_simulate, current_frame=initial)
+    s._simulate_source = "def simulate(g, a): return g"
+    s._pending_notes = {"notes": "win-trigger conjecture", "plan": ""}
+
+    s._grids = [initial, initial, initial, initial]
+    s._actions = [4, 4, 1]
+    s._last_check_result = {"total_wrong": 5}
+    s._ignore_mask = {(0, 0), (1, 1)}
+
+    s.reset_for_level_transition()
+
+    assert s._grids == []
+    assert s._actions == []
+    assert s._last_check_result is None
+    assert s._ignore_mask == set()
+    assert s._pending_exception_flow is None
+    assert s._current_frame is None
+    assert s._previous_grid is None
+    assert s._last_action_result == {}
+    assert s._simulate is not None
+    assert s._simulate_source == "def simulate(g, a): return g"
+    assert s._pending_notes == {"notes": "win-trigger conjecture", "plan": ""}
+    assert s._transition_pending is False
+    assert s.namespace["current_frame"] is None
+    assert s.namespace["history"] == []
+
+    output, error, _ = s.run_code("check()")
+    assert error is None
+    assert "No simulate frames recorded" in output
+
+
+@pytest.mark.unit
+def test_predict_and_compare_suppressed_on_win_step() -> None:
+    initial = [[0] * 8 for _ in range(8)]
+
+    def static_simulate(g: list[list[int]], a: int) -> list[list[int]]:
+        return [row[:] for row in g]
+
+    s = make_live_sandbox(_win_callback, simulate=static_simulate, current_frame=initial)
+
+    s.run_code("action(1)")
+
+    assert s._pending_exception_flow is None
+
+
+@pytest.mark.unit
+def test_check_with_empty_history_after_clear() -> None:
+    initial = [[0] * 8 for _ in range(8)]
+
+    def static_simulate(g: list[list[int]], a: int) -> list[list[int]]:
+        return [row[:] for row in g]
+
+    s = make_live_sandbox(_win_callback, simulate=static_simulate, current_frame=initial)
+    s.reset_for_level_transition()
+
+    output, error, _ = s.run_code("check()")
+    assert error is None
+    assert "No simulate frames recorded" in output

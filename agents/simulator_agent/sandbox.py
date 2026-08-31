@@ -94,6 +94,17 @@ _DUNDER_PATTERN = re.compile(r"__\w+__")
 _MAX_OUTPUT_CHARS = 4096
 
 
+class LevelTransition(Exception):
+    """Raised inside ``action()`` when ``last_action_result.level_completed`` is True.
+
+    Hard-aborts the current ``run_code()`` batch: remaining batched actions
+    never execute (they would step on the new level's fresh board). Caught
+    explicitly in ``run_code()`` BEFORE the broad ``except Exception`` and
+    converted to the marker output ``"[LEVEL COMPLETED — board transitioning; stop]"``
+    with the winning action id preserved in ``self._action_taken``.
+    """
+
+
 class SimulatorSandbox:
     """In-process sandbox with persistent namespace for the simulator experiment.
 
@@ -175,6 +186,10 @@ class SimulatorSandbox:
 
         # Structured world model notes recorded via update_notes()
         self._pending_notes: dict[str, str] = {}
+
+        # Level-transition hard-abort flag (set when a winning action is
+        # detected inside action(); consumed by run_code's except chain).
+        self._transition_pending: bool = False
 
         # Build persistent namespace
         self.namespace: dict[str, Any] = self._build_namespace()
@@ -277,6 +292,14 @@ class SimulatorSandbox:
             # Call the callback directly (in-process)
             response = self._step_env_callback(action_id, action_data)
 
+            # Level-transition hard-abort: a previous action in this batch
+            # already completed a level. Remaining actions would step on the
+            # new level's fresh board — refuse them.
+            if self._transition_pending:
+                raise LevelTransition(
+                    f"Level already completed this batch (action {action_id} skipped)"
+                )
+
             # Append to grid/action history
             # We need _grids to have len(_actions) + 1 entries for check() to work:
             # _grids[i] = grid before action i, _grids[i+1] = grid after action i
@@ -314,6 +337,17 @@ class SimulatorSandbox:
             self._previous_grid = prev_grid
             self._valid_actions = ns["valid_actions"]
             self._last_action_result = ns["last_action_result"]
+
+            # Level-transition detection: the winning action's callback
+            # returned level_completed=True. Suppress predict_and_compare
+            # (the win-pose diff vs. the old level's simulate is meaningless),
+            # flag the pending transition, and hard-abort the batch so the
+            # remaining actions never step on the new level's fresh board.
+            if self._last_action_result.get("level_completed"):
+                self._transition_pending = True
+                raise LevelTransition(
+                    f"Level completed after action {action_id}"
+                )
 
             # ── Predict-and-compare (extracted to predict_and_compare method) ─
             self.predict_and_compare(prev_grid, new_grid, action_id)
@@ -425,6 +459,9 @@ class SimulatorSandbox:
             if fn is None:
                 print("No simulate function set. Call set_simulate(func) first.")
                 return {"error": "no simulate function"}
+            if not self._grids:
+                print("No simulate frames recorded.")
+                return {"error": "no frames recorded"}
             result = run_check(
                 fn,
                 self._grids,
@@ -454,6 +491,9 @@ class SimulatorSandbox:
             if fn is None:
                 print("No simulate function set. Call set_simulate(func) first.")
                 return {"error": "no simulate function"}
+            if not self._grids:
+                print("No simulate frames recorded.")
+                return {"error": "no frames recorded"}
             return diagnose_fn(
                 fn, self._grids, self._actions, ignore_mask=self._ignore_mask
             )
@@ -757,6 +797,34 @@ class SimulatorSandbox:
         self.actions_this_turn = 0
         self._action_taken = None
 
+    def reset_for_level_transition(self) -> None:
+        """Clear per-level state after a ``LevelTransition`` hard-abort.
+
+        Clears the 11 per-level structures (grids, actions, check state,
+        ignore mask, correct-frame cache, pending exception flow, pending
+        images, current frame, previous grid, last action result, and the
+        matching namespace vars). PRESERVES ``_simulate``, ``_simulate_source``
+        (the LLM's carried-forward hypothesis) and ``_pending_notes`` (notes
+        recorded on the transition turn survive the clear). The
+        ``_transition_pending`` flag is intentionally NOT cleared here — it
+        is a cross-turn signal consumed by the agent on the next turn.
+        """
+        self._grids = []
+        self._actions = []
+        self._last_check_result = None
+        self._ignore_mask = set()
+        self._prev_correct_frames = set()
+        self._pending_exception_flow = None
+        self.pending_images = []
+        self._current_frame = None
+        self._previous_grid = None
+        self._last_action_result = {}
+        self.namespace["current_frame"] = None
+        self.namespace["previous_frame"] = None
+        self.namespace["history"] = []
+        self.namespace["last_action_result"] = {}
+        self.namespace["n_frames"] = 0
+
     # ── Code execution ─────────────────────────────────────────────────
 
     def run_code(self, code: str) -> tuple[str, str | None, int | None]:
@@ -831,6 +899,8 @@ class SimulatorSandbox:
             exec(compile(code, "<sandbox>", "exec"), self.namespace)  # noqa: S102
         except TimeoutError as exc:
             error = str(exc)
+        except LevelTransition:
+            error = None
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
         finally:
@@ -842,6 +912,14 @@ class SimulatorSandbox:
                 self.namespace["__builtins__"] = old_builtins
             else:
                 self.namespace.pop("__builtins__", None)
+
+        if self._transition_pending:
+            self.reset_for_level_transition()
+            return (
+                "[LEVEL COMPLETED — board transitioning; stop]",
+                None,
+                self._action_taken,
+            )
 
         output = buf.getvalue()
         output = self._protect_tool_names(output)

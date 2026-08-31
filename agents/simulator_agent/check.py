@@ -39,7 +39,7 @@ def run_check(
     total_correct = 0
     total_spurious = 0
     frames_correct = 0
-    frames_total = len(grids) - 1
+    frames_total = max(len(grids) - 1, 0)
 
     for i in range(frames_total):
         grid_before = grids[i]
@@ -155,7 +155,7 @@ def diagnose(
     total_missed = 0
     total_spurious = 0
     total_wrong_val = 0
-    frames_total = len(grids) - 1
+    frames_total = max(len(grids) - 1, 0)
 
     for i in range(frames_total):
         grid_before = grids[i]
