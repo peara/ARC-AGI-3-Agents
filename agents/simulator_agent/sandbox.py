@@ -576,6 +576,11 @@ class SimulatorSandbox:
         On diff: populates self._pending_exception_flow with region fingerprint
         and renders a boxed visual diff into self.pending_images.
 
+        Cells in self._ignore_mask (set via set_ignore) are hidden from the
+        comparison, matching check()/diagnose() semantics — an action whose
+        only diffs are ignored (e.g. HUD timer ticks) produces no exception
+        flow.
+
         On crash: populates self._pending_exception_flow with the traceback tail.
 
         On match: clears self._pending_exception_flow (no exception flow).
@@ -603,6 +608,22 @@ class SimulatorSandbox:
                     for pr, nr in zip(predicted, new_grid)
                 )
             ):
+                # Hide ignored cells by making the prediction agree with
+                # reality there — every downstream diff computation then
+                # covers only cells the LLM hasn't declared unimportant.
+                if self._ignore_mask:
+                    mask = self._ignore_mask
+                    predicted = [
+                        [
+                            new_cell if (r, c) in mask else cell
+                            for c, (cell, new_cell) in enumerate(
+                                zip(row, new_row)
+                            )
+                        ]
+                        for r, (row, new_row) in enumerate(
+                            zip(predicted, new_grid)
+                        )
+                    ]
                 if predicted != new_grid:
                     n_diff = sum(
                         1

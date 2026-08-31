@@ -21,6 +21,7 @@ def make_sandbox() -> SimulatorSandbox:
     s._last_action_result = {}
     s.namespace = {}
     s._protected_tools = {}
+    s._ignore_mask = set()
     return s
 
 
@@ -104,6 +105,51 @@ def test_region_cap_at_4() -> None:
     assert pending["n_regions"] == 6  # total regions found
     # But only top 4 stored (by area — all are 1x1 here, so any 4)
     assert len(pending["regions"]) == 4
+
+
+@pytest.mark.unit
+def test_ignore_mask_hides_hud_tick_diff() -> None:
+    s = make_sandbox()
+
+    def static_simulate(g: list[list[int]], a: int) -> list[list[int]]:
+        return [row[:] for row in g]
+
+    s._simulate = static_simulate
+    prev = [[0] * 64 for _ in range(64)]
+    curr = [[0] * 64 for _ in range(64)]
+    curr[61][27] = 3  # HUD timer tick, same shape as ls20's 11->3
+    curr[5][5] = 7  # real sprite movement the LLM failed to model
+
+    s._ignore_mask = {(61, 27)}
+    s.predict_and_compare(prev, curr, action_id=4)
+
+    pending = s._pending_exception_flow
+    assert pending is not None
+    assert pending["n_diff"] == 1, "ignored HUD cell must not count into n_diff"
+    assert pending["n_regions"] == 1
+    assert pending["regions"][0]["bbox"] == (5, 5, 5, 5)
+
+
+@pytest.mark.unit
+def test_ignore_mask_full_cover_produces_no_exception_flow() -> None:
+    s = make_sandbox()
+
+    def static_simulate(g: list[list[int]], a: int) -> list[list[int]]:
+        return [row[:] for row in g]
+
+    s._simulate = static_simulate
+    prev = [[0] * 64 for _ in range(64)]
+    curr = [[0] * 64 for _ in range(64)]
+    curr[61][27] = 3
+    curr[62][27] = 3
+
+    s._ignore_mask = {(61, 27), (62, 27)}
+    s.predict_and_compare(prev, curr, action_id=4)
+
+    assert s._pending_exception_flow is None, (
+        "diff entirely inside ignore mask must not fire exception flow"
+    )
+    assert s.pending_images == []
 
 
 @pytest.mark.unit
