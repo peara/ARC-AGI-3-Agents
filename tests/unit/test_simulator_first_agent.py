@@ -2493,3 +2493,78 @@ class TestRegistration:
         from agents.agent import Agent
 
         assert issubclass(AVAILABLE_AGENTS["simulatorfirst"], Agent)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 9. Phase 2 — main() override smoke test
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestMainOverride:
+    """Smoke test: verify the Phase 2 main() override compiles and runs."""
+
+    @pytest.mark.unit
+    def test_main_override_runs(self):
+        """_session_iteration is callable and main() returns without error
+        when _end_condition is True immediately."""
+        import numpy as np
+        from arcengine import FrameData, GameState, GameAction
+
+        from agents.simulator_agent.sandbox import SimulatorSandbox
+        from agents.simulator_agent.workflow import WorkflowController
+
+        agent = SimulatorFirstAgent.__new__(SimulatorFirstAgent)
+        agent.MAX_ACTIONS = 100
+        agent.action_counter = 1
+        agent.game_id = "test-main"
+        agent.frames = [
+            FrameData(
+                game_id="test-main",
+                frame=np.zeros((1, 64, 64), dtype=int),
+                state=GameState.NOT_FINISHED,
+                levels_completed=0,
+                win_levels=7,
+                available_actions=[1, 2, 3, 4],
+            )
+        ]
+        agent._world_model = {"notes": "", "plan": ""}
+        agent._history_messages = []
+        agent._history_turns = []
+        agent._valid_actions = [1, 2, 3, 4]
+        agent._last_action_result = {}
+        agent._current_grid = [[0] * 64 for _ in range(64)]
+        agent._previous_grid = None
+        agent._context_budget_tokens = 100000
+        agent._exception_flow_fired_for = None
+        agent._non_action_calls = 0
+        agent._objects = ()
+        agent._adjacency = frozenset()
+        agent._current_grid_levels_completed = 0
+        agent._transition_ended_turn = False
+
+        holder = {"agent": agent}
+
+        def adapter(action_id: int, action_data):
+            return {
+                "objects": (),
+                "adjacency": frozenset(),
+                "history": [],
+                "grid": agent._current_grid,
+                "valid_actions": [1, 2, 3, 4],
+                "last_action_result": {},
+            }
+
+        sandbox = SimulatorSandbox(step_env_callback=adapter, timeout=30.0)
+        agent._sandbox = sandbox
+        agent._workflow = WorkflowController(sandbox)
+        agent._llm_chat = lambda **kwargs: type(
+            "R", (), {"tool_calls": None, "content": "no action"}
+        )()
+
+        # Override _end_condition to return True immediately
+        agent._end_condition = lambda frames, latest_frame: True  # type: ignore[method-assign]
+
+        result = agent.main()
+
+        # main() should return None since _end_condition is True from the start
+        assert result is None

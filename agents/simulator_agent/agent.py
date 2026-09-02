@@ -65,6 +65,7 @@ class SimulatorFirstAgent(DirectStepAgent):
 
         self._current_grid_levels_completed: int = 0
         self._transition_ended_turn: bool = False
+        self._non_action_calls: int = 0
 
         # Context budget (same formula as duck harness)
         self._context_budget_tokens = max(1024, 32768 - 4096 - 512)
@@ -110,6 +111,14 @@ class SimulatorFirstAgent(DirectStepAgent):
             latest_frame.state is GameState.WIN
             or self.action_counter >= self.MAX_ACTIONS
         )
+
+    def _end_condition(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
+        """Return True when the game should end (WIN/MAX_ACTIONS/budget exhausted).
+
+        Delegates to ``is_done()`` — no new logic.  Exists so ``main()`` can
+        poll the end condition without the base-class loop.
+        """
+        return self.is_done(frames, latest_frame)
 
     def _exception_flow_can_fire(self, action_id: int) -> bool:
         return self._exception_flow_fired_for != action_id
@@ -676,6 +685,487 @@ class SimulatorFirstAgent(DirectStepAgent):
             self._history_messages = previous_history
 
         return action_taken
+
+    # ── Phase 2: session iteration (extracted tool-loop body) ──────────────
+
+    def _session_iteration(
+        self,
+        messages: list[dict[str, Any]],
+        frames: list[FrameData],
+        latest_frame: FrameData,
+    ) -> tuple[GameAction | None, list[dict[str, Any]]]:
+        """Run one tool-loop iteration (LLM call + tool dispatch).
+
+        Returns ``(action_taken, messages)`` so ``main()`` can drive the
+        loop.  ``action_taken`` is ``None`` if no action was executed this
+        iteration — ``main()`` keeps looping until ``_end_condition`` or
+        the budget is exhausted.
+
+        The body is extracted from the ``choose_action`` for-loop so that
+        ``main()`` owns the outer loop (persistent conversation) while
+        ``_session_iteration`` handles one LLM-call-and-dispatch cycle.
+        """
+        max_tool_steps = 100
+        action_taken: GameAction | None = None
+        action_taken_id: int | None = None
+
+        for step in range(max_tool_steps):
+            # ── P2-T4.a: consecutive tool-call cap (anti-spiral) ─────────
+            if action_taken_id is not None:
+                self._non_action_calls = 0
+            else:
+                self._non_action_calls += 1
+                if self._non_action_calls == 12:
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "You have not taken an action in the last 12 tool calls. "
+                                "Use the python tool to call action() now."
+                            ),
+                        }
+                    )
+                elif self._non_action_calls == 24:
+                    logger.warning(
+                        f"simulatorfirst: frame={self.action_counter - 1} guardrail: "
+                        f"{self._non_action_calls} consecutive non-action calls — "
+                        f"set_phase('MODEL')"
+                    )
+                    self._workflow.set_phase("MODEL", reason="consecutive-tool-call-cap")
+                    self._non_action_calls = 0
+
+            # Top-of-loop budget guard: before ANY further LLM call.
+            if self.action_counter >= self.MAX_ACTIONS:
+                logger.info(
+                    f"simulatorfirst: frame={self.action_counter - 1} guardrail: "
+                    f"budget exhausted pre-LLM ({self.action_counter}/{self.MAX_ACTIONS})"
+                    " — ending iteration"
+                )
+                return action_taken, messages
+
+            try:
+                self._trim_old_tool_results(messages, keep_last_n=3)
+                self._trim_old_non_tool_messages(messages)
+                messages = self._trim_messages_for_context(messages)
+                response = self._llm_chat(
+                    messages=messages,
+                    tools=[AGENT_PYTHON_TOOL_SCHEMA, UPDATE_NOTES_TOOL_SCHEMA, SET_PHASE_TOOL_SCHEMA],
+                    tool_choice="auto",
+                )
+            except Exception as exc:
+                exc_str = str(exc).lower()
+                if (
+                    "context_length" in exc_str
+                    or "context length" in exc_str
+                    or "too long" in exc_str
+                ):
+                    trimmed = self._trim_messages_for_context(
+                        messages, extra_safety_tokens=512
+                    )
+                    if len(trimmed) < len(messages):
+                        messages = trimmed
+                        logger.warning(
+                            "simulatorfirst: context overflow — trimmed history, retrying"
+                        )
+                        continue
+                logger.warning(f"simulatorfirst: LLM call failed: {exc}")
+                return action_taken, messages
+
+            # Check for tool calls
+            if response.tool_calls:
+                for tc in response.tool_calls:
+                    if tc["function"]["name"] == "set_phase":
+                        try:
+                            args = json.loads(tc["function"]["arguments"])
+                        except Exception:
+                            args = {}
+                        phase_str = args.get("phase", "")
+                        reason = args.get("reason", "")
+                        success, msg = self._workflow.set_phase(phase_str, reason)
+                        messages.append(
+                            {
+                                "role": "assistant",
+                                "content": response.content or None,
+                                "tool_calls": [tc],
+                            }
+                        )
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tc["id"],
+                                "content": msg,
+                            }
+                        )
+                    if tc["function"]["name"] == "update_notes":
+                        try:
+                            args = json.loads(tc["function"]["arguments"])
+                        except Exception:
+                            args = {}
+                        notes = args.get("notes", "")
+                        plan = args.get("plan", "")
+                        if notes:
+                            self._world_model["notes"] = notes
+                        if plan:
+                            self._world_model["plan"] = plan
+                        self._update_notes_message(messages, self._world_model)
+                        messages.append(
+                            {
+                                "role": "assistant",
+                                "content": response.content or None,
+                                "tool_calls": [tc],
+                            }
+                        )
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tc["id"],
+                                "content": f"Notes updated: notes={len(notes)} chars, plan={len(plan)} chars",
+                            }
+                        )
+                        continue
+                    if tc["function"]["name"] == "python":
+                        try:
+                            args = json.loads(tc["function"]["arguments"])
+                        except Exception:
+                            args = {}
+                        code = args.get("code", "")
+
+                        # Add assistant message with tool call
+                        messages.append(
+                            {
+                                "role": "assistant",
+                                "content": response.content or None,
+                                "tool_calls": [tc],
+                            }
+                        )
+
+                        # Run code in sandbox (in-process)
+                        had_simulate = self._sandbox._simulate is not None
+                        check_before = self._sandbox._last_check_result
+                        bfs_before = self._sandbox._last_bfs_result
+                        output, error, action_taken_id = self._sandbox.run_code(code)
+                        if output and "LEVEL COMPLETED" in output:
+                            self._transition_ended_turn = True
+                        if not had_simulate and self._sandbox._simulate is not None:
+                            logger.info(
+                                f"simulatorfirst: simulate function registered at frame {self.action_counter - 1}"
+                            )
+                        if self._sandbox._last_check_result is not check_before:
+                            self._workflow.on_check_result(self._sandbox._last_check_result)
+                        if self._sandbox._last_bfs_result is not bfs_before:
+                            self._workflow.on_bfs_result(self._sandbox._last_bfs_result)
+
+                        # Build tool result
+                        tool_result_parts: list[str] = []
+                        if output:
+                            tool_result_parts.append(output)
+                        if error:
+                            logger.warning(f"simulatorfirst: sandbox error: {error}")
+                            tool_result_parts.append(f"Error: {error}")
+
+                        tool_result_text = (
+                            "\n".join(tool_result_parts)
+                            if tool_result_parts
+                            else "(no output)"
+                        )
+
+                        # Append pending images from sandbox (show_frame, show_grid)
+                        content_parts: list[dict[str, Any]] = [
+                            {"type": "text", "text": tool_result_text},
+                        ]
+                        for img in self._sandbox.pending_images:
+                            content_parts.append(
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:image/png;base64,{img['b64']}"
+                                    },
+                                }
+                            )
+                            content_parts.append(
+                                {
+                                    "type": "text",
+                                    "text": img.get("caption", ""),
+                                }
+                            )
+                        self._sandbox.pending_images.clear()
+
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tc["id"],
+                                "content": content_parts
+                                if len(content_parts) > 1
+                                else tool_result_text,
+                            }
+                        )
+
+                        # ── Mid-turn prompt refresh (T2) ────────────────────
+                        if action_taken_id is not None:
+                            new_grid_b64 = image_to_base64(
+                                grid_to_image(self._current_grid, scale=8)
+                            ) if self._current_grid else ""
+                            new_user_content = build_agent_user_prompt(
+                                grid_image_b64=new_grid_b64,
+                                world_model_text="",
+                                available_actions=self._valid_actions,
+                                frame_index=self.action_counter - 1,
+                                history_summary=self._build_history_summary(),
+                                simulate_status=self._build_simulate_status(),
+                                phase_directive=self._workflow.directive(),
+                            )
+                            # Replace the last frame-bearing user message in-place
+                            replaced = False
+                            for msg in reversed(messages):
+                                if msg.get("role") != "user":
+                                    continue
+                                content = msg.get("content")
+                                if not isinstance(content, list):
+                                    continue
+                                for block in content:
+                                    if (
+                                        isinstance(block, dict)
+                                        and block.get("type") == "text"
+                                        and isinstance(block.get("text", ""), str)
+                                        and block["text"].startswith("Frame ")
+                                    ):
+                                        msg["content"] = new_user_content[0]["content"]
+                                        replaced = True
+                                        break
+                                if replaced:
+                                    break
+                            if not replaced:
+                                messages.append(new_user_content[0])
+                            self._update_notes_message(messages, self._world_model)
+                            self._sync_pending_notes()
+
+                        # ── Exception flow injection ────────────────────────
+                        pending = getattr(self._sandbox, "_pending_exception_flow", None)
+                        if pending and self._exception_flow_can_fire(
+                            pending["action_id"]
+                        ):
+                            if pending.get("error"):
+                                err_tail = pending["error"]
+                                diagnosis = (
+                                    f"Your simulate() CRASHED on this action:\n"
+                                    f"{err_tail}\n"
+                                    f"Likely cause: a bug in your simulate code "
+                                    f"(with the frozen namespace, helper redefinitions "
+                                    f"can no longer corrupt a registered simulate). "
+                                    f"The traceback line number points into your simulate "
+                                    f"source."
+                                )
+                                diagnosis_hint = (
+                                    "Fix the bug in simulate() and re-register via "
+                                    "set_simulate(). Build it from the provided tools "
+                                    "(find_objects, get_bbox) instead of hand-rolled helpers."
+                                )
+                            elif pending.get("regions"):
+                                lines = []
+                                for reg in pending["regions"]:
+                                    r0, c0, r1, c1 = reg["bbox"]
+                                    trans = reg.get("transitions", "")
+                                    line = f"  rows {r0}-{r1} cols {c0}-{c1}: {reg['n_cells']} cells"
+                                    if trans:
+                                        line += f" ({trans})"
+                                    lines.append(line)
+                                region_text = "\n".join(lines)
+                                n_diff = pending["n_diff"]
+                                n_regions = pending["n_regions"]
+                                diagnosis = (
+                                    f"Your simulate() predicted a result that differs "
+                                    f"from reality by {n_diff} cells in {n_regions} "
+                                    f"regions:\n{region_text}"
+                                )
+                                diagnosis_hint = (
+                                    "A red-boxed image of the diff was attached. "
+                                    "Diffs far from the moved object = unmodeled board "
+                                    "animation (timer, event flash), not a movement error. "
+                                    "Model the trigger in simulate() or exclude those fixed "
+                                    "regions with set_ignore(cells=[...])."
+                                )
+                            else:
+                                n_diff = pending.get("n_diff", 0)
+                                diagnosis = (
+                                    f"Your simulate() prediction differed from reality "
+                                    f"by {n_diff} cells."
+                                )
+                                diagnosis_hint = (
+                                    "Compare your prediction with what actually happened."
+                                )
+                            messages.append(
+                                {
+                                    "role": "user",
+                                    "content": EXCEPTION_FLOW_TEXT.format(
+                                        action_id=pending["action_id"],
+                                        action_name=self._action_name(
+                                            pending["action_id"]
+                                        ),
+                                        diagnosis=diagnosis,
+                                        diagnosis_hint=diagnosis_hint,
+                                    ),
+                                }
+                            )
+                            self._exception_flow_mark_fired(pending["action_id"])
+                            self._workflow.on_exception_flow()
+                        self._sandbox._pending_exception_flow = None
+
+                        # Capture BEFORE the budget guard: if the guard
+                        # broke first, action_taken stayed None here and
+                        # the outer tool loop re-entered (61/30 bug).
+                        if action_taken_id is not None:
+                            action_taken = GameAction.from_id(action_taken_id)
+
+                        # Budget guard: stop the iteration before calling the LLM again.
+                        if self.action_counter >= self.MAX_ACTIONS:
+                            logger.info(
+                                f"simulatorfirst: frame={self.action_counter - 1} guardrail: "
+                                f"budget exhausted mid-turn ({self.action_counter}/{self.MAX_ACTIONS})"
+                                " — ending iteration"
+                            )
+                            return action_taken, messages
+
+                        # Nudge: remind LLM to record notes
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "If you discovered something new about the game "
+                                    "(mechanics, targets, object properties), call "
+                                    "update_notes to record it before continuing."
+                                ),
+                            }
+                        )
+
+                        # If sandbox errored, continue loop
+                        continue
+            else:
+                # No tool call — append assistant text, nudge
+                assistant_text = response.content or ""
+                if assistant_text:
+                    messages.append({"role": "assistant", "content": assistant_text})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": "Please use the python tool to inspect state and call action().",
+                    }
+                )
+                self._non_action_calls += 1
+                if self._non_action_calls >= 12:
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "You have not taken an action in the last 12 tool calls. "
+                                "Use the python tool to call action() now."
+                            ),
+                        }
+                    )
+                if self._non_action_calls >= 24:
+                    logger.warning(
+                        f"simulatorfirst: frame={self.action_counter - 1} guardrail: "
+                        f"{self._non_action_calls} consecutive non-action calls — "
+                        f"set_phase('MODEL')"
+                    )
+                    self._workflow.set_phase("MODEL", reason="consecutive-tool-call-cap")
+                    self._non_action_calls = 0
+                continue
+
+            # Level transition: exit the iteration immediately so the
+            # next iteration handles the reset.
+            if self._transition_ended_turn:
+                return action_taken, messages
+
+        # Loop exhausted without action
+        return action_taken, messages
+
+    # ── Phase 2: main() override — persistent conversation loop ──────────
+
+    def main(self) -> GameAction | None:
+        """Phase 2 persistent-conversation loop.  Replaces per-turn choose_action
+        semantics.
+
+        Architecture:
+        - One persistent LLM conversation (messages list) for the whole game
+        - Each iteration = one LLM call + tool dispatch + (maybe) action(s)
+        - Per-action state updates fire via the _on_action_executed hook from step_env
+        - _end_condition() polled at top of each iteration
+        - No turn-start/teardown machinery; no random-action injection
+        """
+        # iter-0 RESET guard
+        if not self.frames or not getattr(self.frames[-1], "frame", None):
+            self.step_env(GameAction.RESET)
+            return GameAction.RESET
+
+        # Build system prompt ONCE
+        messages: list[dict[str, Any]] = self._trim_messages_for_context(
+            [{"role": "system", "content": AGENT_SYSTEM_PROMPT}]
+        )
+
+        # Initial sandbox state
+        self._sandbox.update_state(
+            objects=self._objects,
+            adjacency=self._adjacency,
+            current_frame=self._current_grid,
+            previous_frame=self._previous_grid or [],
+            valid_actions=self._valid_actions,
+            last_action_result=self._last_action_result,
+            history=self._history_turns,
+        )
+        self._sandbox.reset_turn_counter()
+        self._sandbox._pending_notes = {}
+
+        last_action: GameAction | None = None
+
+        while not self._end_condition(self.frames, self.frames[-1]):
+            # Inject fresh user prompt at top of each iteration
+            grid_b64 = (
+                image_to_base64(grid_to_image(self._current_grid, scale=8))
+                if self._current_grid
+                else ""
+            )
+            user_content = build_agent_user_prompt(
+                grid_image_b64=grid_b64,
+                world_model_text="",
+                available_actions=self._valid_actions,
+                frame_index=self.action_counter - 1,
+                history_summary=self._build_history_summary(),
+                simulate_status=self._build_simulate_status(),
+                phase_directive=self._workflow.directive(),
+            )
+            messages.append(user_content[0])
+
+            # Handle level-transition turn
+            if self._sandbox._transition_pending:
+                transition_msg = LEVEL_TRANSITION_TEXT.format(
+                    levels_completed=self._current_grid_levels_completed,
+                    action_id=self._sandbox._action_taken,
+                )
+                self._history_messages = []
+                self._history_turns = []
+                self._world_model["plan"] = ""
+                self._sandbox.reset_for_level_transition()
+                self._workflow.reset_to_explore(reason="level transition")
+                self._sandbox._transition_pending = False
+                messages.append({"role": "user", "content": transition_msg})
+
+            self._append_notes_message(messages, self._world_model)
+
+            # Run one tool-loop iteration
+            action_taken, messages = self._session_iteration(
+                messages, self.frames, self.frames[-1]
+            )
+
+            if action_taken is not None:
+                last_action = action_taken
+
+        # Game ended; attach last reasoning
+        if last_action is not None:
+            last_action.reasoning = {
+                "world_model": self._world_model,
+                "action_id": last_action.value,
+            }
+        return last_action
 
     def _append_notes_message(
         self, messages: list[dict[str, Any]], world_model: dict[str, str]
