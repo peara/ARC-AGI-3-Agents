@@ -6,6 +6,7 @@ Covers: world_model, check, sandbox (live + offline), agent, registration.
 from __future__ import annotations
 
 import glob
+import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -1977,6 +1978,507 @@ class TestLevelTransition:
         combined = output or ""
         assert "No simulate frames recorded" in combined, (
             f"check() output must report no frames (got: {combined[:120]!r})"
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 8. Event-driven state refactor (T1–T3: per-action history, prompt refresh,
+#    workflow guardrails mid-batch)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestEventDrivenStateRefactor:
+    """Unit tests for the event-driven state refactor (plan T4).
+
+    Tests cover: per-action history entries via _on_action_executed hook,
+    history semantics matching the system prompt, RESET skip policy,
+    fallback path coverage, loop continuation after action (T0),
+    prompt refresh after action (T2), and workflow guardrail mid-batch (T3.b).
+    """
+
+    def _make_event_agent(self, *, llm_stubs=None, step_env_fn=None):
+        """Build a stubbed SimulatorFirstAgent with a real SimulatorSandbox.
+
+        Uses the same pattern as _make_level_transition_agent: __new__,
+        attribute seeding, real sandbox with step_env_callback adapter.
+
+        Parameters
+        ----------
+        llm_stubs : list[callable] | None
+            Each element is a callable ``fake_llm_chat(**kwargs) -> response``
+            called in order. When exhausted, raises RuntimeError("done").
+        step_env_fn : callable | None
+            Optional override for the step_env function. If None, a default
+            that increments action_counter and builds a FrameData with a
+            distinct grid cell is used.
+        """
+        import numpy as np
+        from arcengine import FrameData, GameState, GameAction
+
+        from agents.simulator_agent.sandbox import SimulatorSandbox
+        from agents.simulator_agent.workflow import WorkflowController
+
+        agent = SimulatorFirstAgent.__new__(SimulatorFirstAgent)
+        agent.MAX_ACTIONS = 100
+        agent.action_counter = 0
+        agent.game_id = "test-event"
+        agent.frames: list[FrameData] = []
+        agent._world_model = {"notes": "", "plan": ""}
+        agent._history_messages: list[dict] = []
+        agent._history_turns: list[dict] = []
+        agent._valid_actions = [1, 2, 3, 4]
+        agent._last_action_result: dict = {}
+        agent._current_grid: list[list[int]] | None = None
+        agent._previous_grid: list[list[int]] | None = None
+        agent._context_budget_tokens = 100000
+        agent._exception_flow_fired_for = None
+        agent._llm_calls = 0
+        agent._sandbox_steps = 0
+        agent._current_grid_levels_completed = 0
+        agent._transition_ended_turn = False
+        agent._objects: tuple = ()
+        agent._adjacency = frozenset()
+
+        call_index = [0]  # mutable counter for llm_stubs
+
+        if llm_stubs is None:
+            llm_stubs = []
+
+        def default_llm_chat(**kwargs):
+            agent._llm_calls += 1
+            idx = call_index[0]
+            call_index[0] += 1
+            if idx < len(llm_stubs):
+                return llm_stubs[idx](**kwargs)
+            raise RuntimeError("done")
+
+        if step_env_fn is not None:
+            fake_step_env = step_env_fn
+        else:
+
+            def fake_step_env(action):
+                action_id = action.value if hasattr(action, "value") else int(action)
+                grid = np.zeros((1, 64, 64), dtype=int)
+                grid[0, action_id, 0] = action_id + 10
+                frame = FrameData(
+                    game_id="test-event",
+                    frame=grid,
+                    state=GameState.NOT_FINISHED,
+                    levels_completed=0,
+                    win_levels=7,
+                    available_actions=[1, 2, 3, 4],
+                )
+                agent.frames.append(frame)
+                agent.action_counter += 1
+                agent._current_grid = [list(row) for row in frame.frame[0]]
+                agent._on_action_executed(action_id, frame)
+                return frame
+
+        agent._llm_chat = default_llm_chat
+        agent.step_env = fake_step_env  # type: ignore[method-assign]
+
+        holder: dict = {"agent": None}
+
+        def adapter(action_id: int, action_data):
+            game_action = GameAction.from_id(action_id)
+            ag = holder["agent"]
+            ag.step_env(game_action)
+            if len(ag.frames) >= 2:
+                prev = ag.frames[-2]
+                curr = ag.frames[-1]
+                prev_levels = (
+                    prev.levels_completed if hasattr(prev, "levels_completed") else 0
+                )
+                curr_levels = (
+                    curr.levels_completed if hasattr(curr, "levels_completed") else 0
+                )
+                ag._last_action_result = {
+                    "board_changed": True,
+                    "done": False,
+                    "level_completed": curr_levels > prev_levels,
+                    "game_over": False,
+                    "run_complete": False,
+                    "reward": curr_levels - prev_levels,
+                    "valid_actions": list(curr.available_actions or []),
+                }
+            else:
+                ag._last_action_result = {}
+
+            state_response: dict = {
+                "objects": ag._objects,
+                "adjacency": ag._adjacency,
+                "history": ag._history_turns,
+            }
+            if ag._current_grid is not None:
+                state_response["grid"] = ag._current_grid
+            state_response["valid_actions"] = ag._valid_actions
+            state_response["last_action_result"] = ag._last_action_result
+            return state_response
+
+        sandbox = SimulatorSandbox(step_env_callback=adapter, timeout=30.0)
+        agent._sandbox = sandbox
+        holder["agent"] = agent
+        agent._workflow = WorkflowController(sandbox)
+
+        frame = FrameData(
+            game_id="test-event",
+            frame=np.zeros((1, 64, 64), dtype=int),
+            state=GameState.NOT_FINISHED,
+            levels_completed=0,
+            win_levels=7,
+            available_actions=[1, 2, 3, 4],
+        )
+        return agent, [frame]
+
+    def _python_tool_call(self, code: str, call_id: str = "tc-1"):
+        """Helper: build an LLM response object with a single python tool call."""
+        return type(
+            "R",
+            (),
+            {
+                "tool_calls": [
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": "python",
+                            "arguments": f'{{"code": {json.dumps(code)}}}',
+                        },
+                    }
+                ],
+                "content": None,
+            },
+        )()
+
+    def _text_response(self, text: str = "no action"):
+        """Helper: build an LLM response with no tool calls, just text."""
+        return type("R", (), {"tool_calls": None, "content": text})()
+
+    # ── T4.a: test_history_entry_per_action ────────────────────────────────
+
+    @pytest.mark.unit
+    def test_history_entry_per_action(self):
+        """Batch action(1); action(1); action(2) produces 3 history entries
+        with correct action ids, frame_index, and post-action grids."""
+        import numpy as np
+        from arcengine import FrameData, GameState
+
+        agent, frames = self._make_event_agent()
+
+        # LLM call 1: python tool call with batch of 3 actions.
+        # LLM call 2: raise RuntimeError("done") to break the loop cleanly.
+        captured = {"messages": []}
+
+        def llm_call1(**kwargs):
+            captured["messages"].append([dict(m) for m in kwargs.get("messages", [])])
+            return self._python_tool_call(
+                "for a in [1, 1, 2]:\n    action(a)\n"
+            )
+
+        def llm_call2(**kwargs):
+            captured["messages"].append([dict(m) for m in kwargs.get("messages", [])])
+            raise RuntimeError("done")
+
+        # Re-wire the agent with these stubs.
+        call_index = [0]
+
+        def fake_llm(**kwargs):
+            agent._llm_calls += 1
+            idx = call_index[0]
+            call_index[0] += 1
+            stubs = [llm_call1, llm_call2]
+            if idx < len(stubs):
+                return stubs[idx](**kwargs)
+            raise RuntimeError("done")
+
+        agent._llm_chat = fake_llm
+        agent._sandbox._current_frame = [list(row) for row in frames[0].frame[0]]
+
+        action = agent.choose_action(frames, frames[0])
+
+        # 3 history entries: one per executed action.
+        assert len(agent._history_turns) == 3, (
+            f"expected 3 history entries, got {len(agent._history_turns)}"
+        )
+        assert agent._history_turns[0]["action"] == 1
+        assert agent._history_turns[1]["action"] == 1
+        assert agent._history_turns[2]["action"] == 2
+
+        # frame_index: 0, 1, 2 (action_counter starts at 0, each step +1)
+        assert agent._history_turns[0]["frame_index"] == 0
+        assert agent._history_turns[1]["frame_index"] == 1
+        assert agent._history_turns[2]["frame_index"] == 2
+
+        # Each entry's frame grid has the marker: cell[action_id][0] == action_id + 10
+        for i, entry in enumerate(agent._history_turns):
+            aid = entry["action"]
+            grid = entry["frame"]
+            assert grid[aid][0] == aid + 10, (
+                f"entry {i}: grid[{aid}][0] should be {aid + 10}, "
+                f"got {grid[aid][0]}"
+            )
+
+    # ── T4.b: test_history_semantics_matches_prompt ────────────────────────
+
+    @pytest.mark.unit
+    def test_history_semantics_matches_prompt(self):
+        """action(1); action(2) produces 2 entries where each frame is the
+        post-action grid for that specific action."""
+        import numpy as np
+        from arcengine import FrameData, GameState
+
+        agent, frames = self._make_event_agent()
+
+        def llm_call1(**kwargs):
+            return self._python_tool_call("for a in [1, 2]:\n    action(a)\n")
+
+        def llm_call2(**kwargs):
+            raise RuntimeError("done")
+
+        call_index = [0]
+
+        def fake_llm(**kwargs):
+            agent._llm_calls += 1
+            idx = call_index[0]
+            call_index[0] += 1
+            stubs = [llm_call1, llm_call2]
+            if idx < len(stubs):
+                return stubs[idx](**kwargs)
+            raise RuntimeError("done")
+
+        agent._llm_chat = fake_llm
+        agent._sandbox._current_frame = [list(row) for row in frames[0].frame[0]]
+
+        agent.choose_action(frames, frames[0])
+
+        assert len(agent._history_turns) == 2, (
+            f"expected 2 history entries, got {len(agent._history_turns)}"
+        )
+        # history[0].frame is the post-action-1 grid: cell [1][0] = 11
+        assert agent._history_turns[0]["frame"][1][0] == 11, (
+            f"post-action-1 grid: cell [1][0] should be 11, "
+            f"got {agent._history_turns[0]['frame'][1][0]}"
+        )
+        # history[1].frame is the post-action-2 grid: cell [2][0] = 12
+        assert agent._history_turns[1]["frame"][2][0] == 12, (
+            f"post-action-2 grid: cell [2][0] should be 12, "
+            f"got {agent._history_turns[1]['frame'][2][0]}"
+        )
+
+    # ── T4.c: test_reset_no_history_entry ──────────────────────────────────
+
+    @pytest.mark.unit
+    def test_reset_no_history_entry(self):
+        """action_id=0 (RESET) must NOT produce a history entry. Directly
+        tests the hook's skip-RESET policy."""
+        import numpy as np
+        from arcengine import FrameData, GameState
+
+        agent, _ = self._make_event_agent()
+        agent._history_turns = []
+
+        frame = FrameData(
+            game_id="test-event",
+            frame=np.zeros((1, 64, 64), dtype=int),
+            state=GameState.NOT_FINISHED,
+            levels_completed=0,
+            win_levels=7,
+            available_actions=[1, 2, 3, 4],
+        )
+
+        agent._on_action_executed(0, frame)
+        assert agent._history_turns == [], (
+            f"RESET (action_id=0) must not create a history entry, "
+            f"got {len(agent._history_turns)} entries"
+        )
+
+    # ── T4.d: test_fallback_action_gets_history_entry ─────────────────────
+
+    @pytest.mark.unit
+    def test_fallback_action_gets_history_entry(self):
+        """Fallback random action produces exactly one history entry (I1
+        covers fallback paths — regression guard for the step_env choke-point
+        decision in T1)."""
+        import numpy as np
+        from arcengine import FrameData, GameState
+
+        agent, frames = self._make_event_agent()
+
+        # Force the fallback path: LLM raises immediately → preserve_history=False,
+        # action_taken is None, fallback picks a random action.
+        # choose_action overwrites _valid_actions from frames[-1].available_actions,
+        # so we assert the fallback happened regardless of which action was picked.
+
+        def fake_llm(**kwargs):
+            agent._llm_calls += 1
+            raise RuntimeError("end")
+
+        agent._llm_chat = fake_llm
+
+        agent._sandbox._current_frame = [list(row) for row in frames[0].frame[0]]
+
+        action = agent.choose_action(frames, frames[0])
+
+        # The fallback picks from _valid_actions = [1,2,3,4].
+        assert action.value in (1, 2, 3, 4)
+        assert len(agent._history_turns) == 1
+        assert agent._history_turns[0]["action"] == action.value
+        aid = action.value
+        assert agent._history_turns[0]["frame"][aid][0] == aid + 10
+
+    # ── T4.e: test_loop_continues_after_action ────────────────────────────
+
+    @pytest.mark.unit
+    def test_loop_continues_after_action(self):
+        """T0 verification: after an action() call in python code, the tool
+        loop does NOT exit. A second LLM call happens in the same turn."""
+        import numpy as np
+        from arcengine import FrameData, GameState
+
+        agent, frames = self._make_event_agent()
+
+        # Call 1: python tool call with action(1) — loop continues.
+        # Call 2: python tool call with print("done") — no action, loop continues.
+        # Call 3: raise RuntimeError("end") — break loop.
+        call_index = [0]
+
+        def fake_llm(**kwargs):
+            agent._llm_calls += 1
+            idx = call_index[0]
+            call_index[0] += 1
+            if idx == 0:
+                return self._python_tool_call("action(1)\n")
+            elif idx == 1:
+                return self._python_tool_call('print("done")\n')
+            else:
+                raise RuntimeError("end")
+
+        agent._llm_chat = fake_llm
+        agent._sandbox._current_frame = [list(row) for row in frames[0].frame[0]]
+
+        agent.choose_action(frames, frames[0])
+
+        assert agent._llm_calls >= 3, (
+            f"expected >= 3 LLM calls (loop continues after action), "
+            f"got {agent._llm_calls}"
+        )
+        # Only action(1) creates a history entry; print("done") doesn't.
+        assert len(agent._history_turns) == 1, (
+            f"expected 1 history entry (only action(1)), "
+            f"got {len(agent._history_turns)}"
+        )
+        assert agent._history_turns[0]["action"] == 1
+
+    # ── T4.f: test_prompt_refresh_after_action ──────────────────────────────
+
+    @pytest.mark.unit
+    def test_prompt_refresh_after_action(self):
+        """T2 verification: after action(1), the next LLM call's messages
+        contain a user message whose frame-header text includes the new
+        history entry (action=1) and frame_index matches action_counter-1."""
+        import numpy as np
+        from arcengine import FrameData, GameState
+
+        agent, frames = self._make_event_agent()
+
+        captured = {"messages": []}
+        call_index = [0]
+
+        def fake_llm(**kwargs):
+            agent._llm_calls += 1
+            captured["messages"].append([dict(m) for m in kwargs.get("messages", [])])
+            idx = call_index[0]
+            call_index[0] += 1
+            if idx == 0:
+                return self._python_tool_call("action(1)\n")
+            else:
+                raise RuntimeError("end")
+
+        agent._llm_chat = fake_llm
+        agent._sandbox._current_frame = [list(row) for row in frames[0].frame[0]]
+
+        agent.choose_action(frames, frames[0])
+
+        # Second LLM call's messages (index 1) should contain a refreshed
+        # user message with frame header that includes action=1 in history.
+        assert len(captured["messages"]) >= 2, (
+            f"expected >= 2 LLM calls, got {len(captured['messages'])}"
+        )
+        second_call_msgs = captured["messages"][1]
+
+        # Find the refreshed user message: history summary is a separate
+        # content block from "Frame N", so collect all text from user msgs.
+        all_text_parts: list[str] = []
+        for msg in second_call_msgs:
+            if msg.get("role") != "user":
+                continue
+            content = msg.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if (
+                        isinstance(block, dict)
+                        and block.get("type") == "text"
+                        and isinstance(block.get("text", ""), str)
+                    ):
+                        all_text_parts.append(block["text"])
+            elif isinstance(content, str):
+                all_text_parts.append(content)
+
+        combined = "\n".join(all_text_parts)
+        assert "action=1" in combined, (
+            f"refreshed prompt must include action=1 from history, "
+            f"got text blocks: {all_text_parts!r}"
+        )
+
+    # ── T4.g: test_workflow_guardrail_mid_batch ────────────────────────────
+
+    @pytest.mark.unit
+    def test_workflow_guardrail_mid_batch(self):
+        """T3.b verification: calling _on_action_executed when
+        action_counter crosses 10 while in EXPLORE transitions phase to MODEL."""
+        import numpy as np
+        from arcengine import FrameData, GameState
+        from agents.simulator_agent.workflow import Phase
+
+        agent, _ = self._make_event_agent()
+
+        # Set action_counter to 9 (so after the hook increments via update,
+        # it sees 10 and the guardrail fires).
+        agent.action_counter = 9
+        agent._workflow._phase = Phase.EXPLORE
+
+        frame = FrameData(
+            game_id="test-event",
+            frame=np.zeros((1, 64, 64), dtype=int),
+            state=GameState.NOT_FINISHED,
+            levels_completed=0,
+            win_levels=7,
+            available_actions=[1, 2, 3, 4],
+        )
+
+        # Call the hook directly (action_id=1, not RESET).
+        agent._on_action_executed(1, frame)
+
+        # The hook calls _workflow.update(action_counter) which checks
+        # action_counter >= 10. After step_env the counter was incremented
+        # to 10, so the guardrail should fire.
+        # But note: _on_action_executed is called AFTER step_env, and
+        # step_env already incremented action_counter to 10 (the hook
+        # uses the already-incremented counter). The guardrail in
+        # workflow.update checks action_counter >= 10.
+        # We set action_counter=9 before the hook, but the hook reads
+        # self.action_counter which is 9. The workflow.update(9) won't
+        # fire the guardrail. We need action_counter=10 at the point
+        # the hook calls _workflow.update().
+        # Let's re-do with action_counter=10.
+        agent._workflow._phase = Phase.EXPLORE
+        agent.action_counter = 10
+
+        agent._on_action_executed(1, frame)
+
+        assert agent._workflow.phase == Phase.MODEL, (
+            f"guardrail should transition EXPLORE→MODEL at action_counter=10, "
+            f"got phase={agent._workflow.phase}"
         )
 
 
