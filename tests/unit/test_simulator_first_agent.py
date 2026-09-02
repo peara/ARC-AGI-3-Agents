@@ -971,25 +971,19 @@ class TestActionBudget:
             "tool-loop guard must use the guardrail log format"
 
     @pytest.mark.unit
-    def test_fallback_skips_step_when_budget_exhausted(self):
+    def test_no_fallback_returns_reset_on_exhaustion(self):
+        """P2-T3: when no action taken (tool loop exhausted), choose_action
+        returns RESET(0) placeholder without stepping the environment."""
         import inspect
 
         source = inspect.getsource(SimulatorFirstAgent.choose_action)
-        fallback_idx = source.find("Fallback: random action")
-        assert fallback_idx > 0
 
-        budget_check = source.find("action_counter >= self.MAX_ACTIONS", fallback_idx)
-        assert budget_check > 0
-
-        elif_idx = source.find("elif self._valid_actions", fallback_idx)
-        assert elif_idx > 0
-        budget_to_elif = source[budget_check:elif_idx]
-        assert "self.step_env" not in budget_to_elif, \
-            "budget-exhausted branch must not call step_env"
-        assert "GameAction.from_id(0)" in source[fallback_idx:], \
-            "budget-exhausted branch must return a RESET placeholder"
-        assert "skipping fallback step" in source[fallback_idx:], \
-            "budget-exhausted branch must log 'skipping fallback step'"
+        # P2-T3: the random fallback block is gone. When action_taken is None,
+        # choose_action returns GameAction.from_id(0) (RESET placeholder).
+        assert "random" not in source or "No random fallback" in source, \
+            "choose_action must not inject random actions"
+        assert "GameAction.from_id(0)" in source, \
+            "choose_action must return RESET placeholder when no action taken"
 
     @pytest.mark.unit
     def test_no_max_actions_attr_on_class(self):
@@ -2295,36 +2289,33 @@ class TestEventDrivenStateRefactor:
     # ── T4.d: test_fallback_action_gets_history_entry ─────────────────────
 
     @pytest.mark.unit
-    def test_fallback_action_gets_history_entry(self):
-        """Fallback random action produces exactly one history entry (I1
-        covers fallback paths — regression guard for the step_env choke-point
-        decision in T1)."""
+    def test_no_fallback_returns_reset_placeholder(self):
+        """P2-T3: when LLM fails, no random fallback is injected.
+        choose_action returns RESET(0) and no history entries are created."""
         import numpy as np
         from arcengine import FrameData, GameState
 
         agent, frames = self._make_event_agent()
 
-        # Force the fallback path: LLM raises immediately → preserve_history=False,
-        # action_taken is None, fallback picks a random action.
-        # choose_action overwrites _valid_actions from frames[-1].available_actions,
-        # so we assert the fallback happened regardless of which action was picked.
-
+        # LLM raises immediately → action_taken is None → no random fallback.
         def fake_llm(**kwargs):
             agent._llm_calls += 1
             raise RuntimeError("end")
 
         agent._llm_chat = fake_llm
-
         agent._sandbox._current_frame = [list(row) for row in frames[0].frame[0]]
 
         action = agent.choose_action(frames, frames[0])
 
-        # The fallback picks from _valid_actions = [1,2,3,4].
-        assert action.value in (1, 2, 3, 4)
-        assert len(agent._history_turns) == 1
-        assert agent._history_turns[0]["action"] == action.value
-        aid = action.value
-        assert agent._history_turns[0]["frame"][aid][0] == aid + 10
+        # P2-T3: no random action — RESET placeholder returned instead.
+        assert action.value == 0, (
+            f"expected RESET placeholder (id=0), got action_id={action.value}"
+        )
+        # No history entries created (no real action was executed).
+        assert len(agent._history_turns) == 0, (
+            f"expected 0 history entries (no action taken), "
+            f"got {len(agent._history_turns)}"
+        )
 
     # ── T4.e: test_loop_continues_after_action ────────────────────────────
 
@@ -2624,3 +2615,78 @@ class TestMainOverride:
         # action_counter == MAX_ACTIONS → callback must raise
         with pytest.raises(RuntimeError, match="budget exhausted"):
             agent._step_env_callback(1, None)
+
+    @pytest.mark.unit
+    def test_no_random_fallback(self):
+        """P2-T3: when LLM returns no tool calls, no random action is injected.
+        The _end_condition cap at _non_action_calls >= 36 ends the game instead."""
+        import numpy as np
+        from arcengine import FrameData, GameState
+
+        from agents.simulator_agent.sandbox import SimulatorSandbox
+        from agents.simulator_agent.workflow import WorkflowController
+
+        agent = SimulatorFirstAgent.__new__(SimulatorFirstAgent)
+        agent.MAX_ACTIONS = 100
+        agent.action_counter = 1
+        agent.game_id = "test-no-fallback"
+        agent.frames = [
+            FrameData(
+                game_id="test-no-fallback",
+                frame=np.zeros((1, 64, 64), dtype=int),
+                state=GameState.NOT_FINISHED,
+                levels_completed=0,
+                win_levels=7,
+                available_actions=[1, 2, 3, 4],
+            )
+        ]
+        agent._world_model = {"notes": "", "plan": ""}
+        agent._history_messages = []
+        agent._history_turns = []
+        agent._valid_actions = [1, 2, 3, 4]
+        agent._last_action_result = {}
+        agent._current_grid = [[0] * 64 for _ in range(64)]
+        agent._previous_grid = None
+        agent._context_budget_tokens = 100000
+        agent._exception_flow_fired_for = None
+        agent._non_action_calls = 36  # trigger the cap immediately
+        agent._objects = ()
+        agent._adjacency = frozenset()
+        agent._current_grid_levels_completed = 0
+        agent._transition_ended_turn = False
+
+        holder = {"agent": agent}
+
+        def adapter(action_id: int, action_data):
+            return {
+                "objects": (),
+                "adjacency": frozenset(),
+                "history": [],
+                "grid": agent._current_grid,
+                "valid_actions": [1, 2, 3, 4],
+                "last_action_result": {},
+            }
+
+        sandbox = SimulatorSandbox(step_env_callback=adapter, timeout=30.0)
+        agent._sandbox = sandbox
+        agent._workflow = WorkflowController(sandbox)
+        agent._llm_chat = lambda **kwargs: type(
+            "R", (), {"tool_calls": None, "content": "no action"}
+        )()
+
+        # _end_condition returns True because _non_action_calls >= 36
+        assert agent._end_condition(agent.frames, agent.frames[-1]) is True, (
+            "_end_condition should return True when _non_action_calls >= 36"
+        )
+
+        # main() should return None (no action taken, game ended by cap)
+        result = agent.main()
+
+        assert result is None, (
+            f"main() should return None when game ends via no-action cap, "
+            f"got {result}"
+        )
+        assert agent.action_counter == 1, (
+            f"action_counter should be unchanged (no random fallback), "
+            f"got {agent.action_counter}"
+        )

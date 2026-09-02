@@ -9,14 +9,13 @@ and segmentation into a single per-turn ``choose_action()`` loop:
 4.  When sandbox calls ``action()``, break — the action has already been
     stepped via ``step_env()``.
 5.  Parse 2-block world model (Notes + Plan) from assistant text.
-6.  Fallback to random action on loop exhaustion.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import random
+
 from typing import Any
 
 import numpy as np
@@ -113,12 +112,21 @@ class SimulatorFirstAgent(DirectStepAgent):
         )
 
     def _end_condition(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
-        """Return True when the game should end (WIN/MAX_ACTIONS/budget exhausted).
+        """Return True when the game should end.
 
-        Delegates to ``is_done()`` — no new logic.  Exists so ``main()`` can
-        poll the end condition without the base-class loop.
+        Checks: WIN, MAX_ACTIONS budget exhausted, or consecutive non-action
+        cap exceeded (LLM stuck in a loop refusing to call action()).
         """
-        return self.is_done(frames, latest_frame)
+        if self.is_done(frames, latest_frame):
+            return True
+        if self._non_action_calls >= 36:
+            logger.warning(
+                f"simulatorfirst: frame={self.action_counter - 1} guardrail: "
+                f"consecutive non-action calls {self._non_action_calls} >= 36, "
+                f"ending game"
+            )
+            return True
+        return False
 
     def _exception_flow_can_fire(self, action_id: int) -> bool:
         return self._exception_flow_fired_for != action_id
@@ -139,8 +147,6 @@ class SimulatorFirstAgent(DirectStepAgent):
     ) -> GameAction:
         """Run one turn: render, segment, prompt, tool-loop, act."""
 
-        previous_history = list(self._history_messages)
-        preserve_history = True
         self._transition_ended_turn = False
 
         if latest_frame.levels_completed is not None:
@@ -206,7 +212,6 @@ class SimulatorFirstAgent(DirectStepAgent):
             )
             self._history_messages = []
             self._history_turns = []
-            previous_history = []
             self._world_model["plan"] = ""
             self._sandbox.reset_for_level_transition()
             self._workflow.reset_to_explore(reason="level transition")
@@ -254,7 +259,6 @@ class SimulatorFirstAgent(DirectStepAgent):
         action_taken: GameAction | None = None
         turn_count = 0
         max_tool_steps = 100
-        fallback_reason: str | None = None
 
         for step in range(max_tool_steps):
             turn_count = step + 1
@@ -297,8 +301,9 @@ class SimulatorFirstAgent(DirectStepAgent):
                         )
                         continue
                 logger.warning(f"simulatorfirst: LLM call failed: {exc}")
-                fallback_reason = f"LLM call failed: {exc}"
-                preserve_history = False
+                # P2-T3: break exits the tool loop; action_taken stays None.
+                # No random fallback — the loop exits and choose_action
+                # returns None (handled by caller).
                 break
 
             # Check for tool calls
@@ -616,69 +621,29 @@ class SimulatorFirstAgent(DirectStepAgent):
         # Read structured notes from sandbox (update_notes tool) as fallback/override
         self._sync_pending_notes()
 
-        # ── 11. Fallback: random action ─────────────────────────────────
-        if action_taken is None:
-            if self.action_counter >= self.MAX_ACTIONS:
-                action_taken = GameAction.from_id(0)  # RESET placeholder, never sent
-                logger.warning(
-                    "simulatorfirst: budget exhausted "
-                    f"({self.action_counter}/{self.MAX_ACTIONS}), "
-                    "skipping fallback step — ending game"
-                )
-            elif self._transition_ended_turn:
-                action_taken = GameAction.from_id(0)  # RESET placeholder, never sent
-                logger.warning(
-                    "simulatorfirst: transition turn returned RESET placeholder (no step)"
-                )
-            elif self._valid_actions:
-                fallback_id = random.choice(self._valid_actions)
-                action_taken = GameAction.from_id(fallback_id)
-                self.step_env(action_taken)
-                if fallback_reason is not None:
-                    logger.warning(
-                        f"simulatorfirst: {fallback_reason}, "
-                        f"falling back to random action {action_taken.name} "
-                        f"(id={fallback_id})"
-                    )
-                else:
-                    logger.warning(
-                        f"simulatorfirst: tool loop exhausted ({max_tool_steps} steps, "
-                        f"no action taken), falling back to random action "
-                        f"{action_taken.name} (id={fallback_id})"
-                    )
-            else:
-                fallback_id = 0
-                action_taken = GameAction.from_id(fallback_id)
-                self.step_env(action_taken)
-                if fallback_reason is not None:
-                    logger.warning(
-                        f"simulatorfirst: {fallback_reason}, "
-                        f"falling back to random action {action_taken.name} "
-                        f"(id={fallback_id})"
-                    )
-                else:
-                    logger.warning(
-                        f"simulatorfirst: tool loop exhausted ({max_tool_steps} steps, "
-                        f"no action taken), falling back to random action "
-                        f"{action_taken.name} (id={fallback_id})"
-                    )
-
         # ── 14. Set reasoning ───────────────────────────────────────────
-        action_taken.reasoning = {
-            "world_model": self._world_model,
-            "action_id": action_taken.value,
-            "tool_calls": turn_count,
-        }
+        if action_taken is not None:
+            action_taken.reasoning = {
+                "world_model": self._world_model,
+                "action_id": action_taken.value,
+                "tool_calls": turn_count,
+            }
+        else:
+            # P2-T3: no random fallback. Return a no-op RESET placeholder.
+            # The base-class loop will re-evaluate is_done() on the next
+            # iteration, which catches budget exhaustion and WIN states.
+            action_taken = GameAction.from_id(0)
+            action_taken.reasoning = {
+                "world_model": self._world_model,
+                "action_id": 0,
+                "tool_calls": turn_count,
+            }
 
         # ── 15. Return action ──────────────────────────────────────────
         if self._transition_ended_turn:
-            # Transition turn: keep _history_messages = [] as set by the
-            # transition block at lines 186-208. Don't overwrite with a save.
             pass
-        elif preserve_history:
-            self._history_messages = self._persistent_history_messages(messages)
         else:
-            self._history_messages = previous_history
+            self._history_messages = self._persistent_history_messages(messages)
 
         return action_taken
 
