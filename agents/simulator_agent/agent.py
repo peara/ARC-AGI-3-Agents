@@ -670,11 +670,7 @@ class SimulatorFirstAgent(DirectStepAgent):
             "tool_calls": turn_count,
         }
 
-        # ── 15. Clear world model on WIN/GAME_OVER ─────────────────────
-        if latest_frame.state in (GameState.WIN, GameState.GAME_OVER):
-            self._world_model = {"notes": "", "plan": ""}
-
-        # ── 16. Return action ──────────────────────────────────────────
+        # ── 15. Return action ──────────────────────────────────────────
         if self._transition_ended_turn:
             # Transition turn: keep _history_messages = [] as set by the
             # transition block at lines 186-208. Don't overwrite with a save.
@@ -1247,6 +1243,13 @@ class SimulatorFirstAgent(DirectStepAgent):
         This is wired into ``SimulatorSandbox.__init__`` as ``step_env_callback``.
         It steps the environment and returns the refreshed state dict.
         """
+        if self.action_counter >= self.MAX_ACTIONS:
+            raise RuntimeError(
+                f"simulatorfirst: MAX_ACTIONS budget exhausted "
+                f"({self.action_counter}/{self.MAX_ACTIONS}), "
+                f"cannot execute action {action_id}"
+            )
+
         game_action = GameAction.from_id(action_id)
 
         # Handle complex actions (ACTION6) with coordinates
