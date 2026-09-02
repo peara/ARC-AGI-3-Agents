@@ -541,9 +541,10 @@ class SimulatorFirstAgent(DirectStepAgent):
                 )
                 continue
 
-            # If we broke out of the inner for-loop because an action was
-            # taken, exit the outer loop too
-            if action_taken is not None:
+            # Level transition: exit the tool loop immediately so the
+            # next turn handles the reset. Precedent: the old
+            # action_taken break (T0.a removal) kept this exit path.
+            if self._transition_ended_turn:
                 break
         else:
             # Loop exhausted without action
@@ -617,20 +618,6 @@ class SimulatorFirstAgent(DirectStepAgent):
                         f"{action_taken.name} (id={fallback_id})"
                     )
 
-        # Append this turn to history
-        self._history_turns.append(
-            {
-                "action": action_taken.value,
-                "frame_index": self.action_counter - 1,
-                "frame": [list(row) for row in grid] if grid else [],
-            }
-        )
-
-        # Trim history
-        max_hist = 30
-        if len(self._history_turns) > max_hist:
-            self._history_turns = self._history_turns[-max_hist:]
-
         # ── 14. Set reasoning ───────────────────────────────────────────
         action_taken.reasoning = {
             "world_model": self._world_model,
@@ -669,27 +656,45 @@ class SimulatorFirstAgent(DirectStepAgent):
     # ── step_env override ─────────────────────────────────────────────────
 
     def step_env(self, action: GameAction) -> FrameData | None:
-        """Step the environment, then re-segment for the next sandbox call.
-
-        ``action_counter`` is incremented here (not in ``main()``) because
-        the sandbox may call ``action()`` multiple times in a single
-        ``choose_action()`` (multi-action batching).
-
-        No budget check here: committed batches must complete; the tool-loop
-        guard and ``is_done()`` enforce the budget at turn boundaries. Clock
-        time is the real constraint in live games.
+        """Step the environment, re-segment for the sandbox, and notify the
+        conversation layer via ``_on_action_executed`` so LLM-visible state
+        (history entries, guardrails) mirrors every executed action in one
+        place. See plan T0+T1.
         """
-        frame = self.take_action(action)
+        frame = super().step_env(action)
         if frame is not None:
-            self.action_counter += 1
-            self.append_frame(frame, action)
-            logger.info(
-                f"{self.game_id} - {action.name}: count {self.action_counter}, "
-                f"levels completed {frame.levels_completed}, avg fps {self.fps})"
-            )
-            # Re-segment the new frame for the sandbox's next use
             self._update_segmentation(frame)
+            self._on_action_executed(action.value, frame)
         return frame
+
+    def _append_history(self, action_id: int, frame: FrameData) -> None:
+        """Append one history entry for an executed action. Entries follow the
+        system prompt's semantics: ``{action, frame: grid AFTER that action}``.
+        Trims to max_hist=30 to bound growth.
+        """
+        max_hist = 30
+        self._history_turns.append({
+            "action": action_id,
+            "frame_index": self.action_counter - 1,
+            "frame": [list(row) for row in frame.frame[0]],
+        })
+        if len(self._history_turns) > max_hist:
+            self._history_turns = self._history_turns[-max_hist:]
+
+    def _on_action_executed(self, action_id: int, frame: FrameData) -> None:
+        """Single hook fired by ``step_env`` after every executed action. Owns
+        ALL conversation-layer state that must mirror every executed action.
+
+        Skips RESET (action 0): a re-observe, not a world transition. Preserves
+        I3 (history 1:1 with ``check()``'s ``_actions``, which never sees the
+        iter-0 RESET) and keeps the derivation chain
+        ``sim(hist[i].frame, hist[i+1].action) == hist[i+1].frame`` intact.
+        Precedent: ``predict_and_compare`` skips RESET at sandbox.py:633.
+        """
+        if action_id == 0:
+            return
+        self._append_history(action_id, frame)
+        self._workflow.update(self.action_counter)
 
     # ── Sandbox callback ──────────────────────────────────────────────────
 
