@@ -1827,12 +1827,13 @@ class TestLevelTransition:
         assert agent._history_messages == [], (
             f"history_messages must be cleared (got {len(agent._history_messages)} msgs)"
         )
-        # _history_turns is cleared by the transition block at line 199, but
-        # then a new turn entry is appended at the end of choose_action
-        # (line 620). So after turn 2 there should be exactly ONE entry
-        # (this transition turn's placeholder), not the stale 2.
-        assert len(agent._history_turns) == 1, (
-            f"history_turns must contain only the transition turn's entry "
+        # _history_turns is cleared by the transition block at line 199.
+        # With T1 per-action history (hook skips RESET), the transition
+        # turn's RESET placeholder produces no entry. So after turn 2 the
+        # list should be empty — the stale 2 entries from the dead level
+        # are gone and no new entry is added.
+        assert len(agent._history_turns) == 0, (
+            f"history_turns must be empty after transition turn "
             f"(got {len(agent._history_turns)})"
         )
         # The stale entries must be gone.

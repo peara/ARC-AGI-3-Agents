@@ -421,6 +421,46 @@ class SimulatorFirstAgent(DirectStepAgent):
                             }
                         )
 
+                        # ── Mid-turn prompt refresh (T2) ────────────────────
+                        if action_taken_id is not None:
+                            new_grid_b64 = image_to_base64(
+                                grid_to_image(self._current_grid, scale=8)
+                            ) if self._current_grid else grid_b64
+                            new_user_content = build_agent_user_prompt(
+                                grid_image_b64=new_grid_b64,
+                                world_model_text="",
+                                available_actions=self._valid_actions,
+                                frame_index=self.action_counter - 1,
+                                history_summary=self._build_history_summary(),
+                                simulate_status=self._build_simulate_status(),
+                                phase_directive=self._workflow.directive(),
+                            )
+                            # Replace the last frame-bearing user message in-place
+                            # rather than appending a duplicate.
+                            replaced = False
+                            for msg in reversed(messages):
+                                if msg.get("role") != "user":
+                                    continue
+                                content = msg.get("content")
+                                if not isinstance(content, list):
+                                    continue
+                                for block in content:
+                                    if (
+                                        isinstance(block, dict)
+                                        and block.get("type") == "text"
+                                        and isinstance(block.get("text", ""), str)
+                                        and block["text"].startswith("Frame ")
+                                    ):
+                                        msg["content"] = new_user_content[0]["content"]
+                                        replaced = True
+                                        break
+                                if replaced:
+                                    break
+                            if not replaced:
+                                messages.append(new_user_content[0])
+                            self._update_notes_message(messages, self._world_model)
+                            self._sync_pending_notes()
+
                         # ── Exception flow injection ────────────────────────
                         pending = getattr(self._sandbox, "_pending_exception_flow", None)
                         if pending and self._exception_flow_can_fire(
@@ -565,11 +605,7 @@ class SimulatorFirstAgent(DirectStepAgent):
                     self._world_model[key] = value
 
         # Read structured notes from sandbox (update_notes tool) as fallback/override
-        pending = self._sandbox._pending_notes
-        if pending:
-            for key, value in pending.items():
-                if value:
-                    self._world_model[key] = value
+        self._sync_pending_notes()
 
         # ── 11. Fallback: random action ─────────────────────────────────
         if action_taken is None:
@@ -630,7 +666,11 @@ class SimulatorFirstAgent(DirectStepAgent):
             self._world_model = {"notes": "", "plan": ""}
 
         # ── 16. Return action ──────────────────────────────────────────
-        if preserve_history:
+        if self._transition_ended_turn:
+            # Transition turn: keep _history_messages = [] as set by the
+            # transition block at lines 186-208. Don't overwrite with a save.
+            pass
+        elif preserve_history:
             self._history_messages = self._persistent_history_messages(messages)
         else:
             self._history_messages = previous_history
@@ -695,6 +735,17 @@ class SimulatorFirstAgent(DirectStepAgent):
             return
         self._append_history(action_id, frame)
         self._workflow.update(self.action_counter)
+
+    def _sync_pending_notes(self) -> None:
+        """Merge sandbox-collected pending notes (from ``update_notes()`` calls
+        inside python code) into ``self._world_model``. Called per tool call so
+        notes from batched actions don't wait for turn end.
+        """
+        pending = self._sandbox._pending_notes
+        if pending:
+            for key, value in pending.items():
+                if value:
+                    self._world_model[key] = value
 
     # ── Sandbox callback ──────────────────────────────────────────────────
 
