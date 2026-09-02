@@ -236,6 +236,10 @@ jq 'select(.ok == false)' recordings/*.llm.jsonl
 jq '{frame: .frame_index, kind: .kind, chars: (.messages | map(.content | if type == "string" then length else (map(.text // "") | join("") | length) end) | add)}' recordings/*.llm.jsonl
 ```
 
+### LLM logger frame_indexer and multi-action batches
+
+The simulator-first agent's LLM call logger uses `frame_indexer = action_counter - 1`. During a turn that batches multiple `action()` calls inside one python block, multiple LLM calls can occur between actions (the tool loop continues after each action — see T0/T1 of `.omo/plans/event-driven-state-refactor.md`). All mid-batch LLM calls share the same `frame_indexer` value — the index of the most recently executed action. For example, a turn that batches `action(1); action(2); action(3)` produces 3 actions but possibly multiple LLM calls (e.g. one for the batched python tool call and one or more for follow-up analysis or re-prompting); all log entries within that turn carry `frame_index = 2` (the index of action 2 when action 3 is the latest, or `0` after action 1, etc.). Consumers correlating `.llm.jsonl` events with recording frames should match by turn (per-action grouping via `_history_turns`), not by `frame_index` alone.
+
 ---
 
 ## 6. Color palette
