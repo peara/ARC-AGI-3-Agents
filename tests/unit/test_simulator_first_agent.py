@@ -2533,6 +2533,15 @@ class TestMainOverride:
         agent._current_grid_levels_completed = 0
         agent._transition_ended_turn = False
 
+        # Base Agent.__init__ defaults required by super().main()
+        agent._log_handler = None
+        agent.arc_env = None
+        agent._cleanup = True
+        agent.agent_name = "test-agent"
+        agent.timer = 0.0
+        agent.headers = {}
+        agent.guid = ""
+
         holder = {"agent": agent}
 
         def adapter(action_id: int, action_data):
@@ -2554,6 +2563,9 @@ class TestMainOverride:
 
         # Override _end_condition to return True immediately
         agent._end_condition = lambda frames, latest_frame: True  # type: ignore[method-assign]
+        # With the thin-shim reversion, main() delegates to DuckHarnessBase.main()
+        # which calls is_done() — stub it to exit the loop immediately.
+        agent.is_done = lambda frames, latest_frame: True  # type: ignore[method-assign]
 
         result = agent.main()
 
@@ -2655,6 +2667,15 @@ class TestMainOverride:
         agent._current_grid_levels_completed = 0
         agent._transition_ended_turn = False
 
+        # Base Agent.__init__ defaults required by super().main()
+        agent._log_handler = None
+        agent.arc_env = None
+        agent._cleanup = True
+        agent.agent_name = "test-agent"
+        agent.timer = 0.0
+        agent.headers = {}
+        agent.guid = ""
+
         holder = {"agent": agent}
 
         def adapter(action_id: int, action_data):
@@ -2679,6 +2700,10 @@ class TestMainOverride:
             "_end_condition should return True when _non_action_calls >= 36"
         )
 
+        # With the thin-shim reversion, main() delegates to DuckHarnessBase.main()
+        # which calls is_done() — stub it to exit the loop immediately.
+        agent.is_done = lambda frames, latest_frame: True  # type: ignore[method-assign]
+
         # main() should return None (no action taken, game ended by cap)
         result = agent.main()
 
@@ -2695,8 +2720,9 @@ class TestMainOverride:
     def test_end_condition_checked_per_iteration(self):
         """P2-T5.a: budget exhaustion ends the game; no random action injected.
 
-        Mocks _session_iteration to return no action each time, with
-        _non_action_calls incrementing. Sets MAX_ACTIONS=5 with
+        Stubs choose_action (the method main() calls per turn) to increment
+        _non_action_calls. is_done returns True when _non_action_calls >= 36,
+        causing main() to exit the loop. Sets MAX_ACTIONS=5 with
         action_counter starting at 0. Expects main() to terminate after
         the non-action cap fires, returning None with no random action.
         """
@@ -2735,6 +2761,18 @@ class TestMainOverride:
         agent._current_grid_levels_completed = 0
         agent._transition_ended_turn = False
 
+        # Base Agent.__init__ defaults required by super().main()
+        agent._log_handler = None
+        agent.arc_env = None
+        agent._cleanup = True
+        agent.agent_name = "test-agent"
+        agent.timer = 0.0
+        agent.headers = {}
+        agent.guid = ""
+        # _convert_raw_frame_data would fail with arc_env=None; stub it out
+        # since choose_action is stubbed and the return value is unused.
+        agent._convert_raw_frame_data = lambda raw: agent.frames[-1]  # type: ignore[method-assign]
+
         def adapter(action_id: int, action_data):
             return {
                 "objects": (),
@@ -2749,17 +2787,23 @@ class TestMainOverride:
         agent._sandbox = sandbox
         agent._workflow = WorkflowController(sandbox)
 
-        # Stub _session_iteration to return (None, []) each time,
-        # incrementing _non_action_calls by 6 per call. After 6 calls
-        # (36 total), _end_condition returns True.
+        # With the thin-shim reversion, main() delegates to DuckHarnessBase.main()
+        # which calls choose_action() per turn and is_done() for the loop guard.
+        # Stub choose_action to increment _non_action_calls by 6 per call.
         call_count = [0]
 
-        def fake_session_iteration(messages, frames, latest_frame):
+        def fake_choose_action(frames, latest_frame):
             call_count[0] += 1
             agent._non_action_calls += 6
-            return None, messages
+            return None
 
-        agent._session_iteration = fake_session_iteration  # type: ignore[method-assign]
+        agent.choose_action = fake_choose_action  # type: ignore[method-assign]
+
+        # is_done returns True once _non_action_calls >= 36, ending the loop.
+        def fake_is_done(frames, latest_frame):
+            return agent._non_action_calls >= 36 or agent.action_counter >= agent.MAX_ACTIONS
+
+        agent.is_done = fake_is_done  # type: ignore[method-assign]
 
         result = agent.main()
 
