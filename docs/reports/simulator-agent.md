@@ -1,7 +1,7 @@
 # Simulator-First Agent — Design Document
 
 > Architecture and data flow for the SimulatorFirstAgent (simulatorfirst) and the SimulatorSandbox.
-> Last updated: 2026-08-25
+> Last updated: 2026-09-02
 
 ---
 
@@ -26,30 +26,68 @@ Enable grid images with `LLM_VISION=true`.
 
 ## 2. Architecture
 
+The SimulatorFirstAgent overrides `main()` to run one persistent LLM conversation
+for the entire game. There are no per-turn boundaries — the outer loop polls
+end conditions and drives `_session_iteration` (one LLM-call-and-dispatch
+cycle) repeatedly. Per-action state updates (history, guardrails) fire through
+the `_on_action_executed` hook from `step_env`.
+
+### One persistent conversation
+
 ```
-┌─────────────────┐     ┌──────────────────────┐     ┌─────────────────┐
-│  Agent.main()   │────▶│ DirectStepAgent.main │────▶│ choose_action() │
-└─────────────────┘     └──────────────────────┘     └─────────────────┘
-                                                               │
-                                                               ▼
-┌─────────────────┐     ┌──────────────────────┐     ┌─────────────────┐
-│  step_env()     │◀────│  _step_env_callback  │◀────│ SimulatorSandbox│
-│ (take_action +  │     │  (in-process call)   │     │ .run_code()     │
-│  append_frame)  │     └──────────────────────┘     │ (exec LLM code) │
-└─────────────────┘                                  └─────────────────┘
+main():
+    iter-0 RESET guard
+    build system prompt ONCE
+    messages = [system]
+    while not _end_condition():
+        inject fresh user prompt (grid image + state)
+        action_taken, messages = _session_iteration(messages, ...)
+        if action_taken: last_action = action_taken
+    return last_action
 ```
 
-**Base class:** `DirectStepAgent` (`agents/duck_harness_agent/base.py`) overrides
-`Agent.main()` so the loop body is just:
+- **No turn boundary.** The `_session_iteration` method is the loop body — one
+  LLM call + tool dispatch. It is NOT a turn; it may or may not produce an
+  action. The outer `main()` loop calls it repeatedly until `_end_condition`
+  returns True.
+- **`_on_action_executed` hook.** Every executed action funnels through
+  `step_env()`, which calls `_on_action_executed(action_id, frame)`. This hook
+  appends history entries and fires workflow guardrails — the single choke
+  point for per-action conversation-state updates.
+- **No random-action fallback.** When the LLM never calls `action()`, the loop
+  exits via `_end_condition` (budget exhaustion or non-action cap at 36). No
+  random actions are injected.
+- **Context management.** `_trim_messages_for_context` runs before each LLM
+  call. `_strip_old_images` removes image_url blocks from all but the last 2
+  user messages in persistent history. `_trim_old_non_tool_messages` rewrites
+  old frame user messages to `"[frame]"` (string-only). The mid-turn prompt
+  refresh (T2) replaces the last frame-bearing user message in-place after
+  each action, preventing image bloat.
 
-```python
-self.choose_action(frames, latest_frame)
-self.action_counter += 1
+### Data flow
+
 ```
-
-There is no `take_action()` call in `main()`. The subclass calls `step_env()`
-from within `choose_action()` (or from the sandbox callback) to advance the
-environment.
+┌────────────────────────────────────────────────────────────────┐
+│  main() persistent conversation loop                           │
+│                                                                │
+│  while not _end_condition():                                   │
+│      ┌──────────────────────────────────────────────────────┐  │
+│      │ inject user prompt (grid image + state)             │  │
+│      │ _session_iteration(messages, frames, latest_frame)  │  │
+│      │   ├─ LLM call (python / update_notes / set_phase)  │  │
+│      │   ├─ sandbox.run_code → _step_env_callback          │  │
+│      │   │     └─ step_env(action)                          │  │
+│      │   │           └─ _on_action_executed(hook)            │  │
+│      │   │                 ├─ _append_history                │  │
+│      │   │                 └─ workflow.update(guardrails)   │  │
+│      │   ├─ prompt refresh (in-place, T2) if action taken  │  │
+│      │   └─ consecutive non-action cap (12: nudge, 24:      │  │
+│      │      set_phase MODEL + reset)                        │  │
+│      └──────────────────────────────────────────────────────┘  │
+│                                                                │
+│  _end_condition: is_done() OR _non_action_calls >= 36          │
+└────────────────────────────────────────────────────────────────┘
+```
 
 **In-process sandbox:** Unlike the duck harness (which uses `multiprocessing.Pipe` for IPC), SimulatorSandbox runs in the same process. `action()` calls `step_env_callback` directly. This is simpler and faster, at the cost of weaker isolation (SIGALRM timeout instead of process kill).
 
@@ -58,71 +96,44 @@ environment.
 1. **Offline** (experiment): pass `harness=ReplayHarness(...)` to replay a recording. No `action()` tool.
 2. **Live** (agent): pass `step_env_callback=callable` to enable `action()` for real-time environment interaction.
 
-**The single-tool approach:** Each turn, the LLM receives one system prompt and one multimodal user message (grid image + state text). It can make up to `max_tool_steps=100` calls to the `python` tool. Each call executes code in `SimulatorSandbox`. When the code calls `action(id)`, the sandbox calls the agent's `_step_env_callback`, which steps the environment and returns refreshed state. The tool loop breaks immediately because the turn is over.
+**The single-tool approach:** Each iteration, the LLM receives a fresh user prompt and can make tool calls (`python`, `update_notes`, `set_phase`). When `python` code calls `action(id)`, the sandbox calls `_step_env_callback`, which steps the environment and returns refreshed state. The `_on_action_executed` hook fires immediately after, appending the history entry and updating guardrails — no turn-end batch.
 
 **Segmentation:** Reuses `optitrack/atoms.py` for connected-component labeling.
-Atoms are converted to dicts and adjacency is computed before each turn.
-
----
-
-## 3. Per-Turn Flow
-
-### Step-by-step
-
-1. **Iteration-0 guard:** If `frames[-1]` has no grid, return `GameAction.RESET`.
-2. **Extract grid:** Pull the 64×64 grid from `frames[-1].frame[0]`, cache previous grid if available.
-3. **Render image:** Convert grid to a scaled PNG via `grid_to_image(grid, scale=8)`.
-4. **Segment:** Run `extract_atoms()` on the grid, convert to dicts, compute adjacency.
-5. **Build history summary:** Summarize the last 10 history turns.
-6. **Build prompts:** Assemble `AGENT_SYSTEM_PROMPT` (7 addendums) + multimodal user message (image + frame index + actions + world model + simulate status + history).
-7. **Update sandbox state:** Push `objects`, `adjacency`, `current_frame`, `previous_frame`, `valid_actions`, `last_action_result`, `history` into the sandbox namespace via `update_state()`.
-8. **Reset turn counter:** `reset_turn_counter()` sets `actions_this_turn=0` and `_action_taken=None`.
-9. **Tool loop** (up to `max_tool_steps=100` iterations):
-   - Trim old tool results (keep last 3), trim old non-tool messages (nudges, frame prompts, assistant code).
-   - Call LLM with `tools=[AGENT_PYTHON_TOOL_SCHEMA, UPDATE_NOTES_TOOL_SCHEMA]`.
-   - If `update_notes` tool called — update `_world_model` dict, append tool result, continue.
-   - If `python` tool called — run code in sandbox, append output + pending images as tool result.
-   - If sandbox took an action (`action_taken_id is not None`) — break.
-   - If no action taken, inject a nudge: "If you discovered something new... call update_notes."
-   - If no tool call — nudge: "Please use the python tool to inspect state and call action()."
-10. **Parse world model:** Extract Notes + Plan from last assistant message (fallback). Structured `update_notes` calls override this.
-11. **Fallback:** If no action taken, pick a random valid action and step env.
-12. **History:** Append `(action, frame_index, frame)` to `_history_turns`, trim to 30 entries.
-13. **Set reasoning:** Attach `world_model`, `action_id`, `tool_calls` count to the action.
-14. **Clear world model on WIN/GAME_OVER.**
-15. **Persist history messages** via `_persistent_history_messages()` for the next turn.
+Atoms are converted to dicts and adjacency is computed per action via `_update_segmentation` (called from `step_env`).
 
 ### Mermaid diagram
 
 ```mermaid
 flowchart TD
-    START([Start of turn]) --> GUARD{frames[-1].frame?}
+    START([main: start game]) --> GUARD{frames[-1].frame?}
     GUARD -->|No| RESET[Return RESET]
-    GUARD -->|Yes| RENDER[Render grid image<br/>Segment objects + adjacency]
-    RENDER --> BUILD[Build system + user prompts]
-    BUILD --> STATE[Update sandbox state<br/>Reset turn counter]
-    STATE --> LOOP{tool step < max?}
-    LOOP -->|Yes| TRIM[Trim old tool results<br/>Trim old non-tool messages]
-    TRIM --> LLM[Call LLM with python + update_notes tools]
-    LLM --> TOOL{tool_calls?}
-    TOOL -->|update_notes| NOTES[Update world_model<br/>Append tool result]
-    NOTES --> LOOP
-    TOOL -->|python| SANDBOX[Execute code in SimulatorSandbox]
-    SANDBOX --> ACTION{action() called?}
-    ACTION -->|Yes| STEP[step_env(action)<br/>Refresh state in-process]
-    ACTION -->|No| NUDGE[Append output + nudge<br/>"Call update_notes if new discovery"]
-    NUDGE --> LOOP
-    STEP --> BREAK[Break tool loop]
-    TOOL -->|None| NUDGE2[Append assistant text<br/>Nudge: use python tool]
-    NUDGE2 --> LOOP
-    LOOP -->|No| FALLBACK[Random fallback action]
-    BREAK --> PARSE[Parse world model<br/>from assistant text (fallback)]
-    FALLBACK --> PARSE
-    PARSE --> UPDATE[Update history<br/>Set reasoning]
-    UPDATE --> CHECK{WIN or GAME_OVER?}
-    CHECK -->|Yes| CLEAR[Clear world model]
-    CHECK -->|No| RETURN[Return GameAction]
-    CLEAR --> RETURN
+    GUARD -->|Yes| SYS[Build system prompt ONCE]
+    SYS --> INIT[Update sandbox state]
+    INIT --> LOOP{_end_condition?}
+    LOOP -->|False| INJECT[Inject fresh user prompt<br/>grid image + state + notes]
+    INJECT --> ITER[_session_iteration]
+    ITER --> ITER_DETAIL[LLM call + tool dispatch]
+    ITER_DETAIL --> ACTION_TAKEN{action_taken?}
+    ACTION_TAKEN -->|Yes| SAVE_LAST[last_action = action_taken]
+    ACTION_TAKEN -->|No| LOOP
+    SAVE_LAST --> LOOP
+    LOOP -->|True| RETURN[Return last_action or None]
+
+    subgraph _session_iteration
+        LLM[Call LLM with python + update_notes + set_phase]
+        LLM --> TOOL{tool_calls?}
+        TOOL -->|python| SANDBOX[run_code in sandbox]
+        SANDBOX --> ACT_CHECK{action() called?}
+        ACT_CHECK -->|Yes| HOOK[_on_action_executed<br/>append history + guardrails]
+        ACT_CHECK -->|No| NUDGE[nudge message]
+        HOOK --> REFRESH[prompt refresh in-place]
+        REFRESH --> LOOP_ITER[continue iteration]
+        NUDGE --> LOOP_ITER
+        TOOL -->|update_notes| NOTES[Update world_model]
+        NOTES --> LOOP_ITER
+        TOOL -->|None| NUDGE2[nudge: use python tool]
+        NUDGE2 --> LOOP_ITER
+    end
 ```
 
 ---

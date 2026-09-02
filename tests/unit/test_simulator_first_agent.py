@@ -2690,3 +2690,245 @@ class TestMainOverride:
             f"action_counter should be unchanged (no random fallback), "
             f"got {agent.action_counter}"
         )
+
+    @pytest.mark.unit
+    def test_end_condition_checked_per_iteration(self):
+        """P2-T5.a: budget exhaustion ends the game; no random action injected.
+
+        Mocks _session_iteration to return no action each time, with
+        _non_action_calls incrementing. Sets MAX_ACTIONS=5 with
+        action_counter starting at 0. Expects main() to terminate after
+        the non-action cap fires, returning None with no random action.
+        """
+        import numpy as np
+        from arcengine import FrameData, GameState
+
+        from agents.simulator_agent.sandbox import SimulatorSandbox
+        from agents.simulator_agent.workflow import WorkflowController
+
+        agent = SimulatorFirstAgent.__new__(SimulatorFirstAgent)
+        agent.MAX_ACTIONS = 5
+        agent.action_counter = 0
+        agent.game_id = "test-end-condition"
+        agent.frames = [
+            FrameData(
+                game_id="test-end-condition",
+                frame=np.zeros((1, 64, 64), dtype=int),
+                state=GameState.NOT_FINISHED,
+                levels_completed=0,
+                win_levels=7,
+                available_actions=[1, 2, 3, 4],
+            )
+        ]
+        agent._world_model = {"notes": "", "plan": ""}
+        agent._history_messages = []
+        agent._history_turns = []
+        agent._valid_actions = [1, 2, 3, 4]
+        agent._last_action_result = {}
+        agent._current_grid = [[0] * 64 for _ in range(64)]
+        agent._previous_grid = None
+        agent._context_budget_tokens = 100000
+        agent._exception_flow_fired_for = None
+        agent._non_action_calls = 0
+        agent._objects = ()
+        agent._adjacency = frozenset()
+        agent._current_grid_levels_completed = 0
+        agent._transition_ended_turn = False
+
+        def adapter(action_id: int, action_data):
+            return {
+                "objects": (),
+                "adjacency": frozenset(),
+                "history": [],
+                "grid": agent._current_grid,
+                "valid_actions": [1, 2, 3, 4],
+                "last_action_result": {},
+            }
+
+        sandbox = SimulatorSandbox(step_env_callback=adapter, timeout=30.0)
+        agent._sandbox = sandbox
+        agent._workflow = WorkflowController(sandbox)
+
+        # Stub _session_iteration to return (None, []) each time,
+        # incrementing _non_action_calls by 6 per call. After 6 calls
+        # (36 total), _end_condition returns True.
+        call_count = [0]
+
+        def fake_session_iteration(messages, frames, latest_frame):
+            call_count[0] += 1
+            agent._non_action_calls += 6
+            return None, messages
+
+        agent._session_iteration = fake_session_iteration  # type: ignore[method-assign]
+
+        result = agent.main()
+
+        # main() returns None — no action to return
+        assert result is None, (
+            f"main() should return None when game ends via non-action cap, "
+            f"got {result}"
+        )
+        # _non_action_calls > 0 confirms the cap fired
+        assert agent._non_action_calls >= 36, (
+            f"_non_action_calls should be >= 36 (cap fired), "
+            f"got {agent._non_action_calls}"
+        )
+        # action_counter < MAX_ACTIONS — no random action was injected
+        assert agent.action_counter < agent.MAX_ACTIONS, (
+            f"action_counter should be < MAX_ACTIONS (no random action), "
+            f"got {agent.action_counter} >= {agent.MAX_ACTIONS}"
+        )
+
+    @pytest.mark.unit
+    def test_consecutive_tool_call_cap(self):
+        """P2-T5.c: 12 non-action tool calls triggers nudge; 24 triggers set_phase('MODEL').
+
+        Stubs _llm_chat to return python() calls (no action taken), and
+        _sandbox.run_code to return (output, None, None) (no action).
+        Calls _session_iteration and inspects messages for the nudge text
+        and workflow for set_phase('MODEL').
+        """
+        import numpy as np
+        from arcengine import FrameData, GameState
+
+        from agents.simulator_agent.sandbox import SimulatorSandbox
+        from agents.simulator_agent.workflow import WorkflowController
+
+        agent = SimulatorFirstAgent.__new__(SimulatorFirstAgent)
+        agent.MAX_ACTIONS = 100
+        agent.action_counter = 1
+        agent.game_id = "test-cap"
+        agent.frames = [
+            FrameData(
+                game_id="test-cap",
+                frame=np.zeros((1, 64, 64), dtype=int),
+                state=GameState.NOT_FINISHED,
+                levels_completed=0,
+                win_levels=7,
+                available_actions=[1, 2, 3, 4],
+            )
+        ]
+        agent._world_model = {"notes": "", "plan": ""}
+        agent._history_messages = []
+        agent._history_turns = []
+        agent._valid_actions = [1, 2, 3, 4]
+        agent._last_action_result = {}
+        agent._current_grid = [[0] * 64 for _ in range(64)]
+        agent._previous_grid = None
+        agent._context_budget_tokens = 100000
+        agent._exception_flow_fired_for = None
+        agent._non_action_calls = 0
+        agent._objects = ()
+        agent._adjacency = frozenset()
+        agent._current_grid_levels_completed = 0
+        agent._transition_ended_turn = False
+
+        def adapter(action_id: int, action_data):
+            return {
+                "objects": (),
+                "adjacency": frozenset(),
+                "history": [],
+                "grid": agent._current_grid,
+                "valid_actions": [1, 2, 3, 4],
+                "last_action_result": {},
+            }
+
+        sandbox = SimulatorSandbox(step_env_callback=adapter, timeout=30.0)
+        sandbox._current_frame = agent._current_grid
+        agent._sandbox = sandbox
+        agent._workflow = WorkflowController(sandbox)
+
+        # Track set_phase calls on the workflow
+        set_phase_calls: list[tuple[str, str]] = []
+
+        original_set_phase = agent._workflow.set_phase
+
+        def tracking_set_phase(phase: str, reason: str = ""):
+            set_phase_calls.append((phase, reason))
+            return original_set_phase(phase, reason)
+
+        agent._workflow.set_phase = tracking_set_phase  # type: ignore[method-assign]
+
+        # Stub _llm_chat to return python() tool calls that don't call action().
+        # Each call returns one python() tool call with no code that calls action().
+        call_index = [0]
+
+        def fake_llm_chat(**kwargs):
+            call_index[0] += 1
+            # Return a python tool call with no action
+            return type(
+                "R",
+                (),
+                {
+                    "tool_calls": [
+                        {
+                            "id": f"tc-{call_index[0]}",
+                            "type": "function",
+                            "function": {
+                                "name": "python",
+                                "arguments": '{"code": "x = 1"}',
+                            },
+                        }
+                    ],
+                    "content": None,
+                },
+            )()
+
+        agent._llm_chat = fake_llm_chat
+
+        # Stub run_code to return no action (action_taken_id=None)
+        sandbox_run_code_calls = [0]
+
+        def fake_run_code(code):
+            sandbox_run_code_calls[0] += 1
+            return ("x = 1", None, None)  # output, error, action_taken_id
+
+        sandbox.run_code = fake_run_code  # type: ignore[method-assign]
+
+        # Build initial messages
+        messages: list[dict] = [
+            {"role": "system", "content": "test"},
+            {"role": "user", "content": "Frame 0 test"},
+        ]
+
+        # Run _session_iteration
+        action_taken, messages_out = agent._session_iteration(
+            messages, agent.frames, agent.frames[-1]
+        )
+
+        # _non_action_calls should be > 0 (all calls were non-action)
+        assert agent._non_action_calls > 0, (
+            f"_non_action_calls should be > 0, got {agent._non_action_calls}"
+        )
+
+        # Check that the nudge message was added (at 12 non-action calls)
+        nudge_msgs = [
+            m
+            for m in messages_out
+            if m.get("role") == "user"
+            and isinstance(m.get("content"), str)
+            and "have not taken an action" in m.get("content", "")
+        ]
+        assert len(nudge_msgs) >= 1, (
+            f"Expected at least 1 nudge message at 12 non-action calls, "
+            f"found {len(nudge_msgs)}"
+        )
+
+        # Check that set_phase('MODEL') was called (at 24 non-action calls)
+        model_calls = [
+            (phase, reason)
+            for phase, reason in set_phase_calls
+            if phase == "MODEL"
+        ]
+        assert len(model_calls) >= 1, (
+            f"Expected set_phase('MODEL') call at 24 non-action calls, "
+            f"got {model_calls}"
+        )
+
+        # Verify the counter was reset after set_phase
+        # (counter resets to 0 at 24, then may have incremented again)
+        # The important thing is that set_phase('MODEL') was called.
+        # No random action was injected
+        assert action_taken is None, (
+            f"action_taken should be None (no action), got {action_taken}"
+        )
