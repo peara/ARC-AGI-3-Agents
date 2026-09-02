@@ -1040,93 +1040,18 @@ class SimulatorFirstAgent(DirectStepAgent):
         # Loop exhausted without action
         return action_taken, messages
 
-    # ── Phase 2: main() override — persistent conversation loop ──────────
+    # ── Phase 2: main() thin shim — delegate to base ────────────────────
 
-    def main(self) -> GameAction | None:
-        """Phase 2 persistent-conversation loop.  Replaces per-turn choose_action
-        semantics.
+    def main(self) -> None:
+        """Delegate to base Agent.main() which drives ``choose_action()`` per turn.
 
-        Architecture:
-        - One persistent LLM conversation (messages list) for the whole game
-        - Each iteration = one LLM call + tool dispatch + (maybe) action(s)
-        - Per-action state updates fire via the _on_action_executed hook from step_env
-        - _end_condition() polled at top of each iteration
-        - No turn-start/teardown machinery; no random-action injection
+        The persistent-conversation semantics are achieved via
+        ``self._history_messages`` (persisted across turns by
+        ``_persistent_history_messages``) — NOT by overriding main().
+        Overriding main() breaks the base flow (recording, append_frame,
+        action_counter, cleanup).
         """
-        # iter-0 RESET guard
-        if not self.frames or not getattr(self.frames[-1], "frame", None):
-            self.step_env(GameAction.RESET)
-            return GameAction.RESET
-
-        # Build system prompt ONCE
-        messages: list[dict[str, Any]] = self._trim_messages_for_context(
-            [{"role": "system", "content": AGENT_SYSTEM_PROMPT}]
-        )
-
-        # Initial sandbox state
-        self._sandbox.update_state(
-            objects=self._objects,
-            adjacency=self._adjacency,
-            current_frame=self._current_grid,
-            previous_frame=self._previous_grid or [],
-            valid_actions=self._valid_actions,
-            last_action_result=self._last_action_result,
-            history=self._history_turns,
-        )
-        self._sandbox.reset_turn_counter()
-        self._sandbox._pending_notes = {}
-
-        last_action: GameAction | None = None
-
-        while not self._end_condition(self.frames, self.frames[-1]):
-            # Inject fresh user prompt at top of each iteration
-            grid_b64 = (
-                image_to_base64(grid_to_image(self._current_grid, scale=8))
-                if self._current_grid
-                else ""
-            )
-            user_content = build_agent_user_prompt(
-                grid_image_b64=grid_b64,
-                world_model_text="",
-                available_actions=self._valid_actions,
-                frame_index=self.action_counter - 1,
-                history_summary=self._build_history_summary(),
-                simulate_status=self._build_simulate_status(),
-                phase_directive=self._workflow.directive(),
-            )
-            messages.append(user_content[0])
-
-            # Handle level-transition turn
-            if self._sandbox._transition_pending:
-                transition_msg = LEVEL_TRANSITION_TEXT.format(
-                    levels_completed=self._current_grid_levels_completed,
-                    action_id=self._sandbox._action_taken,
-                )
-                self._history_messages = []
-                self._history_turns = []
-                self._world_model["plan"] = ""
-                self._sandbox.reset_for_level_transition()
-                self._workflow.reset_to_explore(reason="level transition")
-                self._sandbox._transition_pending = False
-                messages.append({"role": "user", "content": transition_msg})
-
-            self._append_notes_message(messages, self._world_model)
-
-            # Run one tool-loop iteration
-            action_taken, messages = self._session_iteration(
-                messages, self.frames, self.frames[-1]
-            )
-
-            if action_taken is not None:
-                last_action = action_taken
-
-        # Game ended; attach last reasoning
-        if last_action is not None:
-            last_action.reasoning = {
-                "world_model": self._world_model,
-                "action_id": last_action.value,
-            }
-        return last_action
+        super().main()
 
     def _append_notes_message(
         self, messages: list[dict[str, Any]], world_model: dict[str, str]
