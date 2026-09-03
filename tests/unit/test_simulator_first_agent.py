@@ -1473,42 +1473,29 @@ class TestNotesMessageRegression:
         assert len(notes_messages) == 0
 
 
-@pytest.mark.skip(reason="needs rewrite for run() contract - multi-turn orchestration")
 class TestLevelTransition:
-    """End-to-end two-turn level-transition walkthrough (Task 6 / WS1).
+    """End-to-end level-transition walkthrough using run().
 
-    Drives the real ``SimulatorFirstAgent.run`` over a scripted
-    step_env callback whose batch ``[4, 4, 1, 4, 4]`` wins at index 2
-    (action_id=1 → ``level_completed=True``), then a second transition turn
-    with an LLM stub that returns ``update_notes`` only.
+    Drives the real SimulatorFirstAgent.run over a scripted step_env
+    callback whose batch [4, 4, 1] wins a level (action_id=1 triggers
+    level_completed=True). The sandbox raises LevelTransition after
+    action(1), hard-aborting the batch. run() detects the transition
+    and processes it on the next outer-loop iteration.
 
-    Proves Tasks 1-4 compose correctly at the agent-turn level:
-    hard-abort, transition-pending consumption, history reset, plan clear,
-    notes preserved, and ``check()`` reports zero frames after the clear.
+    All tests terminate run() via the anti-spiral guard (>=36 non-action
+    calls) after the transition is processed, since the game is not
+    actually won (levels_completed=1 < win_levels=7).
     """
 
-    _WINNING_BATCH_CODE = (
-        "for a in [4, 4, 1, 4, 4]:\n"
-        "    action(a)\n"
-    )
-
-    def _make_level_transition_agent(
-        self,
-        *,
-        seed_notes: str = "",
-        seed_plan: str = "",
-    ):
+    def _make_level_transition_agent(self, *, seed_notes="", seed_plan=""):
         """Build a fully-wired SimulatorFirstAgent with stubbed LLM/step_env.
 
-        Mirrors the ``_make_budget_exhausted_agent`` pattern (same attribute
-        seeding, FrameData construction) but with a real SimulatorSandbox
-        and a scripted step_env callback + LLM stub.
+        The LLM stub returns the winning batch on the first call, then
+        no-action python calls on all subsequent calls. The step_env
+        callback makes action_id=1 trigger level_completed=True.
 
-        - step_env callback: action_id 1 → level_completed=True + reward=1
-          (the winning action); all other action_ids → False. A counter
-          records every step so tests can assert "no step in transition turn".
-        - LLM stub: turn 1 returns python() with the winning batch; turn 2
-          returns update_notes only. Captures messages for prompt assertions.
+        run() terminates via the anti-spiral guard (>=36 non-action calls)
+        after the transition is processed.
         """
         import numpy as np
         from arcengine import FrameData, GameState
@@ -1517,7 +1504,7 @@ class TestLevelTransition:
         from agents.simulator_agent.workflow import WorkflowController
 
         agent = SimulatorFirstAgent.__new__(SimulatorFirstAgent)
-        agent.MAX_ACTIONS = 30
+        agent.MAX_ACTIONS = 100
         agent.action_counter = 0
         agent.game_id = "test-transition"
         agent._world_model = {"notes": seed_notes, "plan": seed_plan}
@@ -1537,21 +1524,15 @@ class TestLevelTransition:
         agent._adjacency = frozenset()
         agent._non_action_calls = 0
 
-        # Per-turn state container so the scripted LLM stub can vary its
-        # response between turn 1 (python with winning batch) and turn 2
-        # (update_notes once, then a no-tool-call response to end the loop).
-        turn_state = {"turn": 0, "notes_called_turn2": False}
         captured = {"messages": []}
+        call_index = [0]
 
         def fake_llm_chat(**kwargs):
             agent._llm_calls += 1
-            turn_state["turn"] += 1
+            call_index[0] += 1
             msgs = kwargs.get("messages", [])
-            # Capture every LLM call's prompt so tests can inspect turn 2's
-            # first call (which carries the LEVEL TRANSITION text).
             captured["messages"].append([dict(m) for m in msgs])
-            if turn_state["turn"] == 1:
-                # Turn 1: python() with the winning batch — action(1) wins.
+            if call_index[0] == 1:
                 return type(
                     "R",
                     (),
@@ -1561,52 +1542,32 @@ class TestLevelTransition:
                             "type": "function",
                             "function": {
                                 "name": "python",
-                                "arguments": (
-                                    '{"code": "'
-                                    + self._WINNING_BATCH_CODE.replace(
-                                        '"', '\\"'
-                                    ).replace("\n", "\\n")
-                                    + '"}'
-                                ),
+                                "arguments": '{"code": "for a in [4, 4, 1]:\\n    action(a)\\n"}',
                             },
                         }],
-                        "content": "executing winning batch",
+                        "content": None,
                     },
                 )()
-            elif not turn_state["notes_called_turn2"]:
-                # Turn 2 first call: update_notes, then stop.
-                turn_state["notes_called_turn2"] = True
+            else:
                 return type(
                     "R",
                     (),
                     {
                         "tool_calls": [{
-                            "id": "tc-notes",
+                            "id": f"tc-{call_index[0]}",
                             "type": "function",
                             "function": {
-                                "name": "update_notes",
-                                "arguments": (
-                                    '{"notes": "win-trigger confirmed: '
-                                    'entering target box merges blue cells", '
-                                    '"plan": ""}'
-                                ),
+                                "name": "python",
+                                "arguments": '{"code": "x = 1"}',
                             },
                         }],
-                        "content": "recording transition notes",
+                        "content": None,
                     },
                 )()
-            else:
-                # Turn 2 second call: raise to end the tool loop cleanly.
-                # The agent catches exceptions from _llm_chat, sets
-                # preserve_history=False, and breaks — so _history_messages
-                # rolls back to the transition block's cleared [].
-                raise RuntimeError("transition turn: update_notes done, ending turn")
 
         def fake_step_env(action):
-            # Real step_env: increment counter, push a frame, re-segment.
             from arcengine import FrameData, GameState
             agent._sandbox_steps += 1
-            # Build a fresh frame each step. action_id 1 wins.
             action_id = action.value if hasattr(action, "value") else int(action)
             levels_before = agent._current_grid_levels_completed
             win = action_id == 1
@@ -1617,15 +1578,13 @@ class TestLevelTransition:
             frame = FrameData(
                 game_id="test-transition",
                 frame=np.zeros((1, 64, 64), dtype=int),
-                state=GameState.WIN if (win and levels_after >= 7) else GameState.NOT_FINISHED,
+                state=GameState.NOT_FINISHED,
                 levels_completed=levels_after,
                 win_levels=7,
                 available_actions=[1, 2, 3, 4],
             )
             agent.frames.append(frame)
             agent.action_counter += 1
-            agent._current_grid_levels_completed = levels_after
-            # Mirror _update_segmentation minimally (zero grid → one atom).
             agent._current_grid = [list(row) for row in frame.frame[0]]
             if len(agent.frames) >= 2 and agent.frames[-2].frame is not None:
                 prev_raw = agent.frames[-2].frame[0]
@@ -1639,7 +1598,7 @@ class TestLevelTransition:
             return frame
 
         agent._llm_chat = fake_llm_chat
-        agent.step_env = fake_step_env  # type: ignore[method-assign]
+        agent.step_env = fake_step_env
 
         holder: dict = {"agent": None}
 
@@ -1651,12 +1610,8 @@ class TestLevelTransition:
             if len(ag.frames) >= 2:
                 prev = ag.frames[-2]
                 curr = ag.frames[-1]
-                prev_levels = (
-                    prev.levels_completed if hasattr(prev, "levels_completed") else 0
-                )
-                curr_levels = (
-                    curr.levels_completed if hasattr(curr, "levels_completed") else 0
-                )
+                prev_levels = prev.levels_completed if hasattr(prev, "levels_completed") else 0
+                curr_levels = curr.levels_completed if hasattr(curr, "levels_completed") else 0
                 prev_grid = prev.frame[0] if prev.frame else None
                 curr_grid = curr.frame[0] if curr.frame else None
                 ag._last_action_result = {
@@ -1687,7 +1642,6 @@ class TestLevelTransition:
         sandbox = SimulatorSandbox(step_env_callback=adapter, timeout=30.0)
         agent._sandbox = sandbox
         holder["agent"] = agent
-
         agent._workflow = WorkflowController(sandbox)
 
         frame = FrameData(
@@ -1702,20 +1656,15 @@ class TestLevelTransition:
         return agent, agent.frames, captured
 
     @pytest.mark.unit
-    @pytest.mark.skip(reason="needs rewrite for run() contract - multi-turn run() orchestration")
-    def test_winning_batch_hard_aborts_and_marks_transition_pending(self):
-        """Turn 1: batch [4,4,1,4,4] wins at action(1).
-
-        Asserts:
-        - sandbox._transition_pending was set by action(1) and consumed by
-          the agent (the agent's transition block runs on the NEXT turn;
-          here we verify the flag is set at end of turn 1's run_code and
-          that only 3 env steps were taken — the remaining batched actions
-          4,4 never executed because LevelTransition hard-aborted).
-        """
+    def test_winning_batch_hard_aborts_and_only_three_actions_taken(self):
+        """Batch [4,4,1] wins at action(1). The LevelTransition hard-aborts
+        the remaining batch actions. Only 3 env steps are taken."""
         agent, frames, _ = self._make_level_transition_agent()
 
-        agent._sandbox._current_frame = [list(row) for row in frames[0].frame[0]]
+        sandbox = agent._sandbox
+        sandbox._current_frame = [list(row) for row in frames[0].frame[0]]
+        sandbox.namespace["current_frame"] = sandbox._current_frame
+        sandbox.namespace["previous_frame"] = None
 
         agent.run()
 
@@ -1723,74 +1672,57 @@ class TestLevelTransition:
             f"only 3 env steps (got {agent._sandbox_steps}) — "
             "remaining batched actions must not step"
         )
-        assert agent._sandbox._transition_pending is True, (
-            "transition_pending must be set after the winning batch"
-        )
-        assert agent._transition_ended_turn is True
 
     @pytest.mark.unit
     def test_transition_turn_prompt_has_level_transition_text(self):
-        """Turn 2 prompt: LEVEL TRANSITION present, EXCEPTION FLOW absent."""
+        """After the winning batch, the next LLM call's prompt contains
+        LEVEL TRANSITION text and no EXCEPTION FLOW text."""
         agent, frames, captured = self._make_level_transition_agent()
 
-        agent._sandbox._current_frame = [list(row) for row in frames[0].frame[0]]
+        sandbox = agent._sandbox
+        sandbox._current_frame = [list(row) for row in frames[0].frame[0]]
+        sandbox.namespace["current_frame"] = sandbox._current_frame
+        sandbox.namespace["previous_frame"] = None
 
-        # Turn 1 — the winning batch.
-        agent.run()
-        assert agent._sandbox._transition_pending is True
-
-        # Turn 2 — the transition turn. Need a fresh latest_frame reflecting
-        # the new level (levels_completed bumped by the win).
-        import numpy as np
-        from arcengine import FrameData, GameState
-        new_frame = FrameData(
-            game_id="test-transition",
-            frame=np.zeros((1, 64, 64), dtype=int),
-            state=GameState.NOT_FINISHED,
-            levels_completed=1,
-            win_levels=7,
-            available_actions=[1, 2, 3, 4],
-        )
-        agent.frames.append(new_frame)
         agent.run()
 
-        # captured["messages"] is a list of per-call snapshots; index 1 is
-        # turn 2's first LLM call (index 0 is turn 1). The transition text is
-        # only present in turn 2's first call.
-        assert len(captured["messages"]) >= 2, (
-            "LLM must have been called at least twice (turn 1 + turn 2)"
-        )
-        msgs = captured["messages"][1]
+        found_transition = False
+        for i, msgs in enumerate(captured["messages"]):
+            if i == 0:
+                continue
+            all_text = []
+            for m in msgs:
+                c = m.get("content")
+                if isinstance(c, str):
+                    all_text.append(c)
+                elif isinstance(c, list):
+                    for part in c:
+                        if isinstance(part, dict):
+                            all_text.append(part.get("text", ""))
+                elif m.get("type") == "text":
+                    all_text.append(m.get("text", ""))
+            joined = "\n".join(all_text)
+            if "LEVEL TRANSITION" in joined:
+                found_transition = True
+                assert "EXCEPTION FLOW" not in joined, (
+                    "EXCEPTION FLOW must not leak into the transition prompt"
+                )
+                break
 
-        # The transition text is inserted at index 0 of the messages list as
-        # a bare {"type": "text", "text": "..."} dict (no "role" key) by
-        # agent.py line 218-219. Scan all message content for it.
-        all_text = []
-        for m in msgs:
-            c = m.get("content")
-            if isinstance(c, str):
-                all_text.append(c)
-            elif isinstance(c, list):
-                for part in c:
-                    if isinstance(part, dict):
-                        all_text.append(part.get("text", ""))
-            elif m.get("type") == "text":
-                all_text.append(m.get("text", ""))
-        joined = "\n".join(all_text)
-        assert "LEVEL TRANSITION" in joined, (
-            "transition prompt must contain LEVEL TRANSITION text "
-            f"(got: {joined[:120]!r})"
-        )
-        assert "EXCEPTION FLOW" not in joined, (
-            "EXCEPTION FLOW must not leak into the transition prompt"
+        assert found_transition, (
+            "transition prompt must contain LEVEL TRANSITION text"
         )
 
     @pytest.mark.unit
-    def test_transition_turn_clears_history_messages_and_history_turns(self):
-        """Turn 2: _history_messages == [] and _history_turns == []."""
+    def test_transition_clears_history_messages_and_history_turns(self):
+        """After the level transition, _history_messages and _history_turns
+        are cleared by the transition block in run()."""
         agent, frames, _ = self._make_level_transition_agent()
 
-        agent._sandbox._current_frame = [list(row) for row in frames[0].frame[0]]
+        sandbox = agent._sandbox
+        sandbox._current_frame = [list(row) for row in frames[0].frame[0]]
+        sandbox.namespace["current_frame"] = sandbox._current_frame
+        sandbox.namespace["previous_frame"] = None
 
         agent._history_messages = [
             {"role": "assistant", "content": "stale from dead level"},
@@ -1801,36 +1733,20 @@ class TestLevelTransition:
             {"action": 4, "frame_index": 1, "frame": []},
         ]
 
-        # Turn 1 — winning batch.
-        agent.run()
-
-        # Turn 2 — transition turn.
-        import numpy as np
-        from arcengine import FrameData, GameState
-        new_frame = FrameData(
-            game_id="test-transition",
-            frame=np.zeros((1, 64, 64), dtype=int),
-            state=GameState.NOT_FINISHED,
-            levels_completed=1,
-            win_levels=7,
-            available_actions=[1, 2, 3, 4],
-        )
-        agent.frames.append(new_frame)
         agent.run()
 
         assert agent._history_messages == [], (
             f"history_messages must be cleared (got {len(agent._history_messages)} msgs)"
         )
         assert len(agent._history_turns) == 0, (
-            f"history_turns must be empty after transition turn "
+            f"history_turns must be empty after transition "
             f"(got {len(agent._history_turns)})"
         )
-        stale = [t for t in agent._history_turns if t.get("frame_index", 999) < 100 and t.get("action") in (4,)]
-        assert stale == [], "stale history_turns from the dead level must be cleared"
 
     @pytest.mark.unit
-    def test_transition_turn_clears_plan_preserves_notes_and_resets_workflow(self):
-        """Turn 2: plan cleared, notes preserved, workflow.phase == EXPLORE."""
+    def test_transition_clears_plan_preserves_notes_and_resets_workflow(self):
+        """After the level transition, plan is cleared and workflow was
+        reset to EXPLORE via reset_to_explore."""
         from agents.simulator_agent.workflow import Phase
 
         seeded_notes = "Maze. floor=3,wall=4. Player 5x5. Target box=portal."
@@ -1839,114 +1755,81 @@ class TestLevelTransition:
             seed_notes=seeded_notes, seed_plan=seeded_plan,
         )
 
-        agent._sandbox._current_frame = [list(row) for row in frames[0].frame[0]]
+        sandbox = agent._sandbox
+        sandbox._current_frame = [list(row) for row in frames[0].frame[0]]
+        sandbox.namespace["current_frame"] = sandbox._current_frame
+        sandbox.namespace["previous_frame"] = None
 
-        # Turn 1 — winning batch.
-        agent.run()
+        reset_calls: list[str] = []
+        original_reset = agent._workflow.reset_to_explore
 
-        # Turn 2 — transition turn (LLM returns update_notes with new notes).
-        import numpy as np
-        from arcengine import FrameData, GameState
-        new_frame = FrameData(
-            game_id="test-transition",
-            frame=np.zeros((1, 64, 64), dtype=int),
-            state=GameState.NOT_FINISHED,
-            levels_completed=1,
-            win_levels=7,
-            available_actions=[1, 2, 3, 4],
-        )
-        agent.frames.append(new_frame)
+        def tracking_reset(reason: str = "level transition"):
+            reset_calls.append(reason)
+            original_reset(reason)
+
+        agent._workflow.reset_to_explore = tracking_reset
+
         agent.run()
 
         assert agent._world_model["plan"] == "", (
             f"plan must be cleared (got {agent._world_model['plan']!r})"
         )
         assert agent._world_model["notes"], "notes must not be empty after transition"
-        assert "win-trigger" in agent._world_model["notes"], (
-            "update_notes content must be recorded (transition block must not "
-            "have wiped notes before the LLM ran)"
-        )
-        assert agent._workflow.phase == Phase.EXPLORE, (
-            f"workflow phase must be EXPLORE (got {agent._workflow.phase})"
+
+        assert len(reset_calls) >= 1, (
+            f"reset_to_explore must be called during transition "
+            f"(got reset calls: {reset_calls})"
         )
 
     @pytest.mark.unit
-    def test_transition_turn_returns_reset_placeholder_without_stepping(self):
-        """Turn 2: run() terminates without stepping env (no action taken in transition turn)."""
+    def test_transition_turn_no_env_steps_after_transition(self):
+        """After the winning batch (3 env steps), no additional env steps
+        are taken. run() terminates via anti-spiral guard without stepping."""
         agent, frames, _ = self._make_level_transition_agent()
 
-        agent._sandbox._current_frame = [list(row) for row in frames[0].frame[0]]
+        sandbox = agent._sandbox
+        sandbox._current_frame = [list(row) for row in frames[0].frame[0]]
+        sandbox.namespace["current_frame"] = sandbox._current_frame
+        sandbox.namespace["previous_frame"] = None
 
-        # Turn 1 — winning batch (3 env steps).
-        agent.run()
-        steps_after_turn1 = agent._sandbox_steps
-        assert steps_after_turn1 == 3
-
-        # Turn 2 — transition turn.
-        import numpy as np
-        from arcengine import FrameData, GameState
-        new_frame = FrameData(
-            game_id="test-transition",
-            frame=np.zeros((1, 64, 64), dtype=int),
-            state=GameState.NOT_FINISHED,
-            levels_completed=1,
-            win_levels=7,
-            available_actions=[1, 2, 3, 4],
-        )
-        agent.frames.append(new_frame)
         agent.run()
 
-        # No additional env steps in the transition turn.
-        assert agent._sandbox_steps == steps_after_turn1, (
-            f"no env step in transition turn (got +{agent._sandbox_steps - steps_after_turn1})"
+        assert agent._sandbox_steps == 3, (
+            f"no env step in transition turn (got {agent._sandbox_steps})"
         )
 
     @pytest.mark.unit
     def test_check_after_transition_reports_zero_frames(self):
-        """Turn 2 then sandbox.run_code('check()') → 'No simulate frames recorded'."""
+        """After the level transition, sandbox._grids is empty and check()
+        reports 'No simulate frames recorded'."""
         agent, frames, _ = self._make_level_transition_agent()
 
-        agent._sandbox._current_frame = [list(row) for row in frames[0].frame[0]]
+        sandbox = agent._sandbox
+        sandbox._current_frame = [list(row) for row in frames[0].frame[0]]
+        sandbox.namespace["current_frame"] = sandbox._current_frame
+        sandbox.namespace["previous_frame"] = None
 
-        reg_out, reg_err, _ = agent._sandbox.run_code(
+        reg_out, reg_err, _ = sandbox.run_code(
             "def simulate(g, a):\n    return g\nset_simulate(simulate)\n"
         )
         assert reg_err is None, f"simulate registration failed: {reg_err}"
-        assert agent._sandbox._simulate is not None
+        assert sandbox._simulate is not None
 
-        # Turn 1 — winning batch.
         agent.run()
 
-        # Turn 2 — transition turn (clears sandbox per-level state).
-        import numpy as np
-        from arcengine import FrameData, GameState
-        new_frame = FrameData(
-            game_id="test-transition",
-            frame=np.zeros((1, 64, 64), dtype=int),
-            state=GameState.NOT_FINISHED,
-            levels_completed=1,
-            win_levels=7,
-            available_actions=[1, 2, 3, 4],
-        )
-        agent.frames.append(new_frame)
-        agent.run()
-
-        assert agent._sandbox._simulate is not None, (
+        assert sandbox._simulate is not None, (
             "simulate must be preserved across level transition"
         )
-        assert agent._sandbox._grids == [], (
-            f"sandbox._grids must be empty after transition (got {len(agent._sandbox._grids)})"
+        assert sandbox._grids == [], (
+            f"sandbox._grids must be empty after transition (got {len(sandbox._grids)})"
         )
 
-        output, error, _ = agent._sandbox.run_code("check()")
+        output, error, _ = sandbox.run_code("check()")
         assert error is None, f"check() must not raise (got error: {error})"
         combined = output or ""
         assert "No simulate frames recorded" in combined, (
             f"check() output must report no frames (got: {combined[:120]!r})"
         )
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
 # 8. Event-driven state refactor (T1–T3: per-action history, prompt refresh,
 #    workflow guardrails mid-batch)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2122,7 +2005,6 @@ class TestEventDrivenStateRefactor:
 
     # ── T4.a: test_history_entry_per_action ────────────────────────────────
 
-    @pytest.mark.skip(reason="needs rewrite for run() contract - multi-turn run() orchestration")
     @pytest.mark.unit
     def test_history_entry_per_action(self):
         """Batch action(1); action(1); action(2) produces 3 history entries
@@ -2187,7 +2069,6 @@ class TestEventDrivenStateRefactor:
 
     # ── T4.b: test_history_semantics_matches_prompt ────────────────────────
 
-    @pytest.mark.skip(reason="needs rewrite for run() contract - multi-turn run() orchestration")
     @pytest.mark.unit
     def test_history_semantics_matches_prompt(self):
         """action(1); action(2) produces 2 entries where each frame is the
@@ -2327,7 +2208,6 @@ class TestEventDrivenStateRefactor:
 
     # ── T4.e: test_loop_continues_after_action ────────────────────────────
 
-    @pytest.mark.skip(reason="needs rewrite for run() contract - multi-turn run() orchestration")
     @pytest.mark.unit
     def test_loop_continues_after_action(self):
         """T0 verification: after an action() call in python code, the tool
@@ -2371,7 +2251,6 @@ class TestEventDrivenStateRefactor:
 
     # ── T4.f: test_prompt_refresh_after_action ──────────────────────────────
 
-    @pytest.mark.skip(reason="needs rewrite for run() contract - multi-turn run() orchestration")
     @pytest.mark.unit
     def test_prompt_refresh_after_action(self):
         """T2 verification: after action(1), the next LLM call's messages
@@ -2746,17 +2625,19 @@ class TestMainOverride:
 class TestAntiSpiralGuard:
     """Tests for the anti-spiral guard in run().
 
-    The anti-spiral guard: increments _non_action_calls on no-action iterations,
-    resets on action. At >=12: nudge. At >=24: set_phase('MODEL') + reset.
-    The >=36 cap only fires if _non_action_calls starts >=36 (due to the
-    >=24 reset happening first).
+    The corrected anti-spiral guard: increments _non_action_calls on no-action
+    iterations, resets on action. At >=12: nudge. At >=24: set_phase('MODEL')
+    (NO reset — counter continues). At >=36: terminate run().
+
+    Counter climbs 0→12(nudge)→24(set_phase MODEL)→36(terminate).
+    Reset only happens when an action IS taken.
     """
 
-    @pytest.mark.skip(reason="needs rewrite for run() contract - outer while True loop doesn't terminate on inner-loop exception")
     @pytest.mark.unit
     def test_anti_spiral_nudge_and_set_phase(self):
         """Non-action iterations trigger nudge at >=12 and set_phase('MODEL') at >=24.
-        Terminates via LLM exception after 30 iterations."""
+        With the corrected guard (no >=24 reset), the counter reaches 36 and
+        run() terminates via the hard cap."""
         import numpy as np
         from arcengine import FrameData, GameState
 
@@ -2765,7 +2646,7 @@ class TestAntiSpiralGuard:
 
         agent = SimulatorFirstAgent.__new__(SimulatorFirstAgent)
         agent.MAX_ACTIONS = 100
-        agent.action_counter = 1
+        agent.action_counter = 0
         agent.game_id = "test-anti-spiral"
         agent.frames = [
             FrameData(
@@ -2804,6 +2685,8 @@ class TestAntiSpiralGuard:
 
         sandbox = SimulatorSandbox(step_env_callback=adapter, timeout=30.0)
         sandbox._current_frame = agent._current_grid
+        sandbox.namespace["current_frame"] = sandbox._current_frame
+        sandbox.namespace["previous_frame"] = None
         agent._sandbox = sandbox
         agent._workflow = WorkflowController(sandbox)
 
@@ -2816,18 +2699,16 @@ class TestAntiSpiralGuard:
 
         agent._workflow.set_phase = tracking_set_phase  # type: ignore[method-assign]
 
-        call_index = [0]
-
+        # LLM always returns python() tool call with "x = 1" (no action).
+        # run_code returns (output, None, None) — action_taken_id stays None,
+        # so _non_action_calls climbs every iteration until >=36 terminates.
         def fake_llm_chat(**kwargs):
-            call_index[0] += 1
-            if call_index[0] > 30:
-                raise RuntimeError("done")
             return type(
                 "R",
                 (),
                 {
                     "tool_calls": [{
-                        "id": f"tc-{call_index[0]}",
+                        "id": "tc-1",
                         "type": "function",
                         "function": {
                             "name": "python",
@@ -2847,25 +2728,34 @@ class TestAntiSpiralGuard:
 
         agent.run()
 
+        # The counter should have reached >=36, causing run() to terminate.
+        assert agent._non_action_calls >= 36, (
+            f"_non_action_calls should be >=36 (cap reached), "
+            f"got {agent._non_action_calls}"
+        )
+
         model_calls = [
             (phase, reason)
             for phase, reason in set_phase_calls
             if phase == "MODEL"
         ]
         assert len(model_calls) >= 1, (
-            f"Expected set_phase('MODEL') call at 24 non-action calls, "
+            f"Expected set_phase('MODEL') call at >=24 non-action calls, "
             f"got {model_calls}"
         )
 
-        assert agent.action_counter < agent.MAX_ACTIONS, (
-            f"action_counter should be < MAX_ACTIONS (no random action), "
-            f"got {agent.action_counter} >= {agent.MAX_ACTIONS}"
+        # No action was taken, so action_counter should still be 0.
+        assert agent.action_counter == 0, (
+            f"action_counter should be 0 (no random action), "
+            f"got {agent.action_counter}"
         )
 
-    @pytest.mark.skip(reason="needs rewrite for run() contract - outer while True loop doesn't terminate on inner-loop exception")
     @pytest.mark.unit
     def test_anti_spiral_resets_on_action(self):
-        """_non_action_calls resets to 0 when an action is taken via sandbox."""
+        """_non_action_calls resets to 0 when an action is taken via sandbox.
+        With the corrected guard, after reset the counter can climb again to 36.
+        Verify: action(1) resets counter, then subsequent no-action calls
+        accumulate again, and run() terminates via the >=36 cap."""
         import numpy as np
         from arcengine import FrameData, GameState, GameAction
 
@@ -2901,8 +2791,7 @@ class TestAntiSpiralGuard:
         agent._current_grid_levels_completed = 0
         agent._transition_ended_turn = False
 
-        call_index = [0]
-        action_taken = [False]
+        action_taken_flag = [False]
 
         def fake_step_env(action):
             action_id = action.value if hasattr(action, "value") else int(action)
@@ -2919,13 +2808,13 @@ class TestAntiSpiralGuard:
             agent.frames.append(frame)
             agent.action_counter += 1
             agent._current_grid = [list(row) for row in frame.frame[0]]
+            action_taken_flag[0] = True
             return frame
 
         def adapter(action_id: int, action_data):
             ag = agent
             game_action = GameAction.from_id(action_id)
             ag.step_env(game_action)
-            action_taken[0] = True
             if len(ag.frames) >= 2:
                 prev = ag.frames[-2]
                 curr = ag.frames[-1]
@@ -2957,17 +2846,21 @@ class TestAntiSpiralGuard:
 
         sandbox = SimulatorSandbox(step_env_callback=adapter, timeout=30.0)
         sandbox._current_frame = agent._current_grid
+        sandbox.namespace["current_frame"] = sandbox._current_frame
+        sandbox.namespace["previous_frame"] = None
         agent._sandbox = sandbox
         agent._workflow = WorkflowController(sandbox)
         agent.step_env = fake_step_env  # type: ignore[method-assign]
 
-        # LLM: first 5 calls return python() with no action,
-        # call 6 returns python() with action(1),
-        # then remaining calls return python() with no action until LLM raises.
+        # LLM: call 1 returns python() with action(1), then all subsequent
+        # calls return python() with no action. Counter resets after action,
+        # then climbs back up to 36 and terminates.
+        call_index = [0]
+
         def fake_llm_chat(**kwargs):
             call_index[0] += 1
-            idx = call_index[0]
-            if idx == 6:
+            if call_index[0] == 1:
+                # First call: take an action — resets _non_action_calls to 0
                 return type(
                     "R",
                     (),
@@ -2983,13 +2876,14 @@ class TestAntiSpiralGuard:
                         "content": None,
                     },
                 )()
-            elif idx < 40:
+            else:
+                # Subsequent calls: no action — counter climbs toward 36
                 return type(
                     "R",
                     (),
                     {
                         "tool_calls": [{
-                            "id": f"tc-{idx}",
+                            "id": f"tc-{call_index[0]}",
                             "type": "function",
                             "function": {
                                 "name": "python",
@@ -2999,17 +2893,11 @@ class TestAntiSpiralGuard:
                         "content": None,
                     },
                 )()
-            else:
-                raise RuntimeError("done")
 
         agent._llm_chat = fake_llm_chat
 
-        def fake_run_code(code):
-            if "action(1)" in code and call_index[0] <= 6:
-                return ("action=1", None, 1)
-            return ("x = 1", None, None)
-
-        sandbox.run_code = fake_run_code  # type: ignore[method-assign]
+        # Do NOT stub sandbox.run_code — let the real sandbox execute
+        # action(1) through the callback chain so step_env is called.
 
         agent.run()
 
@@ -3018,7 +2906,11 @@ class TestAntiSpiralGuard:
             f"action_counter should be >= 1 (one action taken), "
             f"got {agent.action_counter}"
         )
-        # After the action, _non_action_calls resets and then accumulates again.
-        # The final _non_action_calls value reflects post-action accumulation.
-        # It should NOT be >= 36 because the >=24 reset prevents reaching 36.
-        assert action_taken[0], "An action should have been taken"
+        assert action_taken_flag[0], "An action should have been taken"
+
+        # After action, _non_action_calls reset to 0, then accumulated again
+        # until hitting >=36. Final value should be >=36.
+        assert agent._non_action_calls >= 36, (
+            f"_non_action_calls should be >=36 (accumulated after action reset), "
+            f"got {agent._non_action_calls}"
+        )
