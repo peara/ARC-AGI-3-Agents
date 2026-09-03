@@ -253,7 +253,7 @@ Plan: <content>
 - Revise anything above if it contradicts what you see now.
 ```
 
-**Clearing:** World model is cleared on WIN/GAME_OVER (both in `choose_action` and `_step_env_callback`).
+**Clearing:** World model is cleared on WIN/GAME_OVER (both in `run()` and `_step_env_callback`).
 
 **Simulate status:** Each turn's user prompt includes a simulate status line: `Simulator: registered.` + last `check()` accuracy, or empty if no simulate function is registered yet.
 
@@ -354,7 +354,7 @@ Result vs the same transition in production (which consumed 23 LLM calls /
     namespace vars) while **preserving** `_simulate`, `_simulate_source`
     (the carried-forward hypothesis) and `_pending_notes` (transition-turn notes
     survive the clear).
-  - **Consume flag at the top of `choose_action`** — when
+  - **Consume flag at the top of `run()`** — when
     `_sandbox._transition_pending` is set the agent clears `_history_messages`,
     `_history_turns`, and `world_model['plan']`, runs
     `reset_for_level_transition()` + `WorkflowController.reset_to_explore(

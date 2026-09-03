@@ -279,7 +279,6 @@ class SimulatorFirstAgent(LoopAgent):
                             f"set_phase('MODEL')"
                         )
                         self._workflow.set_phase("MODEL", reason="consecutive-tool-call-cap")
-                        self._non_action_calls = 0
 
                 # ── End condition check (per iteration) ────────────────
                 latest_frame = self.frames[-1]
