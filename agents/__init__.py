@@ -29,7 +29,7 @@ load_dotenv()
 AVAILABLE_AGENTS: dict[str, Type[Agent]] = {
     cls.__name__.lower(): cast(Type[Agent], cls)
     for cls in Agent.__subclasses__()
-    if cls.__name__ not in ("Playback", "LlmCuriosity", "DirectStepAgent")
+    if cls.__name__ not in ("Playback", "LlmCuriosity", "DirectStepAgent", "LoopAgent")  # LoopAgent is an intermediate base, not a runnable agent
 }
 
 AVAILABLE_AGENTS["langgraphvision"] = cast(Type[Agent], LangGraphVisionAgent)
