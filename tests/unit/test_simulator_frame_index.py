@@ -45,8 +45,8 @@ def test_frame_index_jumps_mid_turn() -> None:
 def test_no_frame_index_attribute_remains() -> None:
     """No ``_frame_index`` attribute assignment remains in the source."""
     init_source = inspect.getsource(SimulatorFirstAgent.__init__)
-    choose_action_source = inspect.getsource(SimulatorFirstAgent.choose_action)
-    combined = init_source + "\n" + choose_action_source
+    run_source = inspect.getsource(SimulatorFirstAgent.run)
+    combined = init_source + "\n" + run_source
 
     assert "_frame_index" not in combined
     assert "self.action_counter - 1" in combined
