@@ -9,7 +9,7 @@
 
 A simulator-first LLM agent for ARC-AGI-3. The design premise: the LLM writes a Python `simulate(grid, action) -> next_grid` function that predicts grid transitions, tests it with `check()`, then uses BFS with the learned simulator to plan winning action sequences.
 
-The agent is **LLM-only** — no perception pipeline, no rule engine, no symbolic planning. All reasoning happens in the LLM. It subclasses `DirectStepAgent` (from `agents/duck_harness_agent/base.py`), whose `main()` loop calls `choose_action()` which steps the environment directly via the sandbox's `action()` callback.
+The agent is **LLM-only** — no perception pipeline, no rule engine, no symbolic planning. All reasoning happens in the LLM. It subclasses `LoopAgent` (a new base class in `agents/loop_agent.py`), whose `main()` calls `run()` (the owned loop). `run()` owns the persistent conversation, tool dispatch, and action execution for the entire game.
 
 **Key differences from the duck harness agent:**
 
@@ -26,68 +26,54 @@ Enable grid images with `LLM_VISION=true`.
 
 ## 2. Architecture
 
-The SimulatorFirstAgent overrides `main()` to run one persistent LLM conversation
-for the entire game. There are no per-turn boundaries — the outer loop polls
-end conditions and drives `_session_iteration` (one LLM-call-and-dispatch
-cycle) repeatedly. Per-action state updates (history, guardrails) fire through
-the `_on_action_executed` hook from `step_env`.
+The SimulatorFirstAgent implements `run()` to own one persistent LLM
+conversation for the entire game. `LoopAgent.main()` is a final, traced wrapper
+that calls `run()` inside `try…finally: self.cleanup()`. There are no per-turn
+boundaries — `run()` repeatedly builds/renews the user prompt, enters the
+inner tool loop, and executes actions through the sandbox's `action()` callback.
+Per-action state updates (history, guardrails) still fire through the
+`_on_action_executed` hook from `step_env`.
 
 ### One persistent conversation
 
 ```
-main():
+LoopAgent.main() (final, traced):
+    try:
+        self.run()
+    finally:
+        self.cleanup()
+
+SimulatorFirstAgent.run():
     iter-0 RESET guard
     build system prompt ONCE
-    messages = [system]
-    while not _end_condition():
-        inject fresh user prompt (grid image + state)
-        action_taken, messages = _session_iteration(messages, ...)
-        if action_taken: last_action = action_taken
-    return last_action
+    while True:
+        build/refresh user prompt (grid image + state)
+        for step in range(max_tool_steps):
+            end-condition check (WIN, MAX_ACTIONS, non-action cap)
+            anti-spiral guard
+            LLM call + tool dispatch
+            if action taken: break inner loop and continue outer loop
+        if terminal end condition: break
 ```
 
-- **No turn boundary.** The `_session_iteration` method is the loop body — one
-  LLM call + tool dispatch. It is NOT a turn; it may or may not produce an
-  action. The outer `main()` loop calls it repeatedly until `_end_condition`
-  returns True.
+- **No turn boundary.** `run()` is both the game loop and the conversation
+  loop. Each outer-loop iteration builds a fresh user prompt; the inner
+  `for step in range(max_tool_steps)` loop is the tool loop. An iteration may
+  or may not produce an action. End conditions are checked at the top of the
+  inner loop.
 - **`_on_action_executed` hook.** Every executed action funnels through
   `step_env()`, which calls `_on_action_executed(action_id, frame)`. This hook
   appends history entries and fires workflow guardrails — the single choke
   point for per-action conversation-state updates.
-- **No random-action fallback.** When the LLM never calls `action()`, the loop
-  exits via `_end_condition` (budget exhaustion or non-action cap at 36). No
-  random actions are injected.
+- **No random-action fallback.** When the LLM never calls `action()`, `run()`
+  exits via the non-action cap (36 non-action tool calls). No random actions
+  are injected.
 - **Context management.** `_trim_messages_for_context` runs before each LLM
   call. `_strip_old_images` removes image_url blocks from all but the last 2
   user messages in persistent history. `_trim_old_non_tool_messages` rewrites
   old frame user messages to `"[frame]"` (string-only). The mid-turn prompt
   refresh (T2) replaces the last frame-bearing user message in-place after
   each action, preventing image bloat.
-
-### Data flow
-
-```
-┌────────────────────────────────────────────────────────────────┐
-│  main() persistent conversation loop                           │
-│                                                                │
-│  while not _end_condition():                                   │
-│      ┌──────────────────────────────────────────────────────┐  │
-│      │ inject user prompt (grid image + state)             │  │
-│      │ _session_iteration(messages, frames, latest_frame)  │  │
-│      │   ├─ LLM call (python / update_notes / set_phase)  │  │
-│      │   ├─ sandbox.run_code → _step_env_callback          │  │
-│      │   │     └─ step_env(action)                          │  │
-│      │   │           └─ _on_action_executed(hook)            │  │
-│      │   │                 ├─ _append_history                │  │
-│      │   │                 └─ workflow.update(guardrails)   │  │
-│      │   ├─ prompt refresh (in-place, T2) if action taken  │  │
-│      │   └─ consecutive non-action cap (12: nudge, 24:      │  │
-│      │      set_phase MODEL + reset)                        │  │
-│      └──────────────────────────────────────────────────────┘  │
-│                                                                │
-│  _end_condition: is_done() OR _non_action_calls >= 36          │
-└────────────────────────────────────────────────────────────────┘
-```
 
 **In-process sandbox:** Unlike the duck harness (which uses `multiprocessing.Pipe` for IPC), SimulatorSandbox runs in the same process. `action()` calls `step_env_callback` directly. This is simpler and faster, at the cost of weaker isolation (SIGALRM timeout instead of process kill).
 
@@ -105,36 +91,65 @@ Atoms are converted to dicts and adjacency is computed per action via `_update_s
 
 ```mermaid
 flowchart TD
-    START([main: start game]) --> GUARD{frames[-1].frame?}
+    START([LoopAgent.main: traced wrapper]) --> RUN[call run]
+    RUN --> GUARD{frames[-1].frame?}
     GUARD -->|No| RESET[Return RESET]
     GUARD -->|Yes| SYS[Build system prompt ONCE]
-    SYS --> INIT[Update sandbox state]
-    INIT --> LOOP{_end_condition?}
-    LOOP -->|False| INJECT[Inject fresh user prompt<br/>grid image + state + notes]
-    INJECT --> ITER[_session_iteration]
-    ITER --> ITER_DETAIL[LLM call + tool dispatch]
-    ITER_DETAIL --> ACTION_TAKEN{action_taken?}
-    ACTION_TAKEN -->|Yes| SAVE_LAST[last_action = action_taken]
-    ACTION_TAKEN -->|No| LOOP
-    SAVE_LAST --> LOOP
-    LOOP -->|True| RETURN[Return last_action or None]
+    SYS --> OUTER[Outer while True game loop]
+    OUTER --> INJECT[Build/refresh user prompt<br/>grid image + state + notes]
+    INJECT --> INNER[Inner for step in max_tool_steps]
+    INNER --> ENDCHECK{WIN / GAME_OVER /<br/>non-action cap?}
+    ENDCHECK -->|Yes| RETURN[break outer loop / end game]
+    ENDCHECK -->|No| ANTISPIRAL[Anti-spiral guard]
+    ANTISPIRAL --> LLM[Call LLM with python + update_notes + set_phase]
+    LLM --> TOOL{tool_calls?}
+    TOOL -->|python| SANDBOX[run_code in sandbox]
+    SANDBOX --> ACT_CHECK{action() called?}
+    ACT_CHECK -->|Yes| HOOK[_on_action_executed<br/>append history + guardrails]
+    ACT_CHECK -->|No| NUDGE[nudge message]
+    HOOK --> REFRESH[prompt refresh in-place]
+    REFRESH --> BREAK_INNER[break inner loop<br/>continue outer loop]
+    NUDGE --> LOOP_ITER[continue inner loop]
+    TOOL -->|update_notes| NOTES[Update world_model]
+    NOTES --> LOOP_ITER
+    TOOL -->|None| NUDGE2[nudge: use python tool]
+    NUDGE2 --> LOOP_ITER
 
-    subgraph _session_iteration
-        LLM[Call LLM with python + update_notes + set_phase]
-        LLM --> TOOL{tool_calls?}
-        TOOL -->|python| SANDBOX[run_code in sandbox]
-        SANDBOX --> ACT_CHECK{action() called?}
-        ACT_CHECK -->|Yes| HOOK[_on_action_executed<br/>append history + guardrails]
-        ACT_CHECK -->|No| NUDGE[nudge message]
-        HOOK --> REFRESH[prompt refresh in-place]
-        REFRESH --> LOOP_ITER[continue iteration]
-        NUDGE --> LOOP_ITER
-        TOOL -->|update_notes| NOTES[Update world_model]
-        NOTES --> LOOP_ITER
-        TOOL -->|None| NUDGE2[nudge: use python tool]
-        NUDGE2 --> LOOP_ITER
+    subgraph AntiSpiralGuard
+        A1["_non_action_calls++ per non-action tool call"]
+        A2["action taken → reset to 0"]
+        A3["≥12: append nudge message"]
+        A4["≥24: set_phase MODEL + reset counter"]
+        A5["≥36: terminate loop"]
+        A1 --> A2
+        A2 --> A3
+        A3 --> A4
+        A4 --> A5
     end
 ```
+
+### Anti-spiral guard
+
+`run()` tracks `_non_action_calls` to prevent infinite tool-call spirals when
+the LLM keeps thinking but never acts:
+
+- **Counter semantics.** The counter increments by 1 for every non-action tool
+  call (`python`, `update_notes`, etc.) that does **not** result in an
+  environment action. It resets to 0 whenever an action is executed.
+- **Nudge at ≥12.** A user nudge message is appended: "You have not taken an
+  action in the last 12 tool calls...". This reminds the LLM to act.
+- **Phase reset at ≥24.** `set_phase("MODEL", reason="consecutive-tool-call-cap")`
+  is called and the counter resets to 0. This forces the agent back into
+  model-building mode without ending the game.
+- **Hard cap at ≥36.** The inner tool loop breaks, the outer game loop ends,
+  and the agent returns. The game terminates because the LLM exceeded the
+  non-action budget.
+
+### Vestigial base-class stubs
+
+`is_done()` and `choose_action()` are inherited from `LoopAgent` as empty/no-op
+stubs. They exist only to satisfy the `Agent` base-class contract. The live
+execution path never calls them: `LoopAgent.main()` invokes `run()` directly.
 
 ---
 
@@ -364,24 +379,30 @@ Result vs the same transition in production (which consumed 23 LLM calls /
 ## 10. Module Layout
 
 ```
-agents/simulator_agent/
-├── __init__.py          — exports SimulatorFirstAgent, SimulatorSandbox, run_experiment, prompts
-├── agent.py             — SimulatorFirstAgent(DirectStepAgent): choose_action, step_env, context trimming
-├── sandbox.py           — SimulatorSandbox: in-process exec, action(), bfs(), check(), diagnose(), two modes
-├── prompts.py           — AGENT_SYSTEM_PROMPT (7 addendums), build_agent_user_prompt, tool schemas
-├── tools.py             — 11 pure grid functions (segment_atoms, find_color, compute_delta, etc.)
-├── check.py             — run_check, diagnose, cluster_cells (grid-based simulate)
-├── world_model.py       — extract_notes, format_notes (2-block Notes + Plan regex parser)
-└── experiment.py        — run_experiment, TurnResult, ExperimentResult (offline replay harness)
+agents/
+├── loop_agent.py        — LoopAgent base class: final traced main(), abstract run(), vestigial stubs
+└── simulator_agent/
+    ├── __init__.py          — exports SimulatorFirstAgent, SimulatorSandbox, run_experiment, prompts
+    ├── agent.py             — SimulatorFirstAgent(LoopAgent): run(), step_env, context trimming
+    ├── sandbox.py           — SimulatorSandbox: in-process exec, action(), bfs(), check(), diagnose(), two modes
+    ├── prompts.py           — AGENT_SYSTEM_PROMPT (7 addendums), build_agent_user_prompt, tool schemas
+    ├── tools.py             — 11 pure grid functions (segment_atoms, find_color, compute_delta, etc.)
+    ├── check.py             — run_check, diagnose, cluster_cells (grid-based simulate)
+    ├── world_model.py       — extract_notes, format_notes (2-block Notes + Plan regex parser)
+    └── experiment.py        — run_experiment, TurnResult, ExperimentResult (offline replay harness)
 ```
 
 ---
 
 ## 11. Relationship to the Duck Harness Agent
 
-The simulator-first agent shares the `DirectStepAgent` base class and the single-`python()`-tool pattern with the duck harness agent. Key shared elements:
+The simulator-first agent now subclasses `LoopAgent` (introduced to own the
+game loop), while the duck harness agent remains on its original turn-stepping
+base class from `agents/duck_harness_agent/base.py`. The single-`python()`-tool
+pattern is still shared. Key shared elements:
 
-- `DirectStepAgent.main()` loop (no `take_action()` in main)
+- `main()` is a final loop wrapper that delegates to the owned loop (`run()` for
+  `LoopAgent`, an internal turn loop for the duck harness)
 - `_step_env_callback` pattern (action -> step_env -> state response)
 - Context trimming methods (ported and extended)
 - Multimodal user prompt (grid image + state text)
@@ -414,7 +435,7 @@ Key differences:
 | Context trimming | 1-layer | 3-layer |
 | Max tool steps | 12 | 100 |
 | Max actions per turn | 10 | None (global 80) |
-| Base class | `DirectStepAgent` | `DirectStepAgent` |
+| Base class | Duck harness base (`agents/duck_harness_agent/base.py`) | `LoopAgent` |
 | Segmentation | `optitrack/atoms.py` | `optitrack/atoms.py` (reused) |
 
 ---
@@ -447,7 +468,7 @@ Key differences:
 
 2. **Grid-based signature reversal**: Changed `simulate(frame_index, action)` to `simulate(grid, action) -> next_grid` to enable BFS on hypothetical states. This broke `check()` for offline mode (no frame history), so offline `check()` was adapted to iterate recorded grids directly.
 
-3. **Live agent construction**: Built `SimulatorFirstAgent` on `DirectStepAgent` base, added in-process `SimulatorSandbox`, `action()` callback, and `update_notes` tool.
+3. **Live agent construction**: Built `SimulatorFirstAgent` on `LoopAgent` base, added in-process `SimulatorSandbox`, `action()` callback, and `update_notes` tool.
 
 4. **BFS integration**: Added `bfs()` as a sandbox function using the registered simulate. Goal function stdout captured and shown to LLM. Node cap at 50,000.
 
