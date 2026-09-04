@@ -4,8 +4,7 @@ These tests verify that the agent no longer tracks a separate ``_frame_index``
 attribute and instead derives frame indices dynamically from
 ``self.action_counter - 1``. They use ``__new__()`` to avoid the full
 ``__init__`` (which needs API keys/env vars) and ``inspect.getsource()`` for
-source-level assertions, matching the patterns in ``test_simulator_prompt.py``
-and ``test_llm_logging.py``.
+source-level assertions, matching the patterns in ``test_prompts.py``.
 """
 
 from __future__ import annotations

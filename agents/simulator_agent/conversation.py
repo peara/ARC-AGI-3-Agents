@@ -11,7 +11,7 @@ Two entry points take the only piece of agent state the pipeline ever used
 explicitly: ``trim_messages_for_context`` and ``persistent_history_messages``
 take ``budget_tokens``.
 
-Invariants (pinned by ``tests/unit/test_simulator_first_agent.py``):
+Invariants (pinned by ``tests/unit/simulator_agent/test_agent.py``):
 - Mutators (``drop_oldest_history_block``, ``strip_old_images``,
   ``trim_old_tool_results``, ``trim_old_non_tool_messages``) never delete
   messages — the API pairing requirement (every ``role:tool`` message keeps a
