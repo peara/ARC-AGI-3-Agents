@@ -75,7 +75,7 @@ SimulatorFirstAgent.run():
   refresh (T2) replaces the last frame-bearing user message in-place after
   each action, preventing image bloat.
 
-**In-process sandbox:** Unlike the duck harness (which uses `multiprocessing.Pipe` for IPC), SimulatorSandbox runs in the same process. `action()` calls `step_env_callback` directly. This is simpler and faster, at the cost of weaker isolation (SIGALRM timeout instead of process kill).
+**In-process sandbox:** Unlike the duck harness (which uses `multiprocessing.Pipe` for IPC), SimulatorSandbox runs in the same process. `action()` calls `step_env_callback` directly. This is simpler and faster; isolation is two-layer instead of a process boundary: (1) a per-thread line tracer budgets sandbox-tagged code (`timeout` × 1e6 line events) and raises an uncatchable `SandboxBudgetExceeded` — the fast path for plain loops and `except Exception` swallows; (2) wall-clock containment — the exec runs in a worker thread the caller joins with 4× `timeout`; a worker that survives the budget (bare `except:` can swallow the tracer raise on CPython 3.12) gets its namespace quarantined (tools neutered, fresh namespace swapped in) and `run_code()` returns a `SandboxTimeout` error, so the tool loop always resumes. The pre-composite SIGALRM timeout was removed: it was structurally dead in production — agents run in daemon threads (`swarm.py:94`) and CPython delivers signals only in the main thread's bytecode loop.
 
 **Two construction modes:**
 
@@ -265,7 +265,7 @@ Plan: <content>
 
 - **Grid-based simulate** (`simulate(grid, action) -> next_grid`): The simulate function takes a grid, not a frame index. This allows BFS to call simulate on hypothetical states without accessing frame history. The original experiment used `simulate(frame_index, action)` — this was reversed to support BFS.
 
-- **In-process action()**: `action()` calls `step_env_callback` directly in the same process. No IPC, no `multiprocessing.Pipe`. Simpler and faster than the duck harness's IPC approach. Timeout is via `SIGALRM` (30s) instead of process kill.
+- **In-process action()**: `action()` calls `step_env_callback` directly in the same process. No IPC, no `multiprocessing.Pipe`. Simpler and faster than the duck harness's IPC approach. Runaway protection is a per-thread tracer budget (fast path) plus wall-clock containment with zombie-namespace quarantine (last resort); the earlier SIGALRM (30s) never fired in production because agents run in daemon threads.
 
 - **BFS in sandbox**: `bfs(start_grid, goal_fn, max_depth=20)` is a sandbox function, not a separate tool. It uses the registered `simulate()` to search. stdout from `goal_fn` at the goal state is captured and shown to the LLM. Max 50,000 nodes. This lets the LLM write custom goal functions inline.
 
@@ -455,7 +455,7 @@ Key differences:
 
 - **Simulator correctness**: The LLM-written simulate may be approximate. `check()` reports accuracy but the agent does not automatically revise simulate on failure. The LLM must notice and fix errors itself.
 
-- **In-process isolation**: Running in the same process means a buggy simulate or infinite loop can hang the agent. SIGALRM timeout (30s) is weaker than process kill.
+- **In-process isolation**: A runaway exec can no longer hang the agent (tracer budget + containment quarantine guarantee `run_code()` returns), but the quarantined zombie thread keeps spinning until process exit, and C-level spans inside sandbox code (e.g. catastrophic `re` backtracking, a huge `itertools.product` materialization) are not interruptible in-process — the tracer only fires at bytecode boundaries of sandbox frames. Subprocess isolation (duck-harness style) remains the endgame for full soundness.
 
 - **No cross-level learning**: State resets between levels. The simulator must be rewritten for each level.
 
