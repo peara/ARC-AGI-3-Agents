@@ -167,40 +167,20 @@ class TestClusterCells:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-def _mock_step_env_callback(action_id: int, action_data: dict | None = None) -> dict:
-    """Minimal step_env_callback for live mode tests."""
-    return {
-        "objects": (),
-        "adjacency": frozenset(),
-        "history": [],
-        "grid": [[0] * 64 for _ in range(64)],
-        "valid_actions": [0, 1, 2],
-        "last_action_result": {},
-    }
-
-
-def _make_live_sandbox(**kwargs) -> SimulatorSandbox:
-    return SimulatorSandbox(
-        step_env_callback=_mock_step_env_callback,
-        timeout=10.0,
-        **kwargs,
-    )
-
-
 class TestSandboxLiveMode:
-    def test_construction(self):
-        sandbox = _make_live_sandbox()
+    def test_construction(self, live_sandbox):
+        sandbox = live_sandbox()
         assert sandbox._step_env_callback is not None
         assert sandbox._grids == []
         assert sandbox._actions == []
 
-    def test_both_modes_raises(self):
+    def test_both_modes_raises(self, mock_step_env):
         """Cannot provide both harness and step_env_callback."""
         mock_harness = MagicMock()
         with pytest.raises(ValueError, match="either"):
             SimulatorSandbox(
                 harness=mock_harness,
-                step_env_callback=_mock_step_env_callback,
+                step_env_callback=mock_step_env,
             )
 
     def test_neither_mode_raises(self):
@@ -208,12 +188,12 @@ class TestSandboxLiveMode:
         with pytest.raises(ValueError, match="either"):
             SimulatorSandbox()
 
-    def test_action_calls_callback(self):
+    def test_action_calls_callback(self, mock_step_env):
         received: list[tuple[int, dict | None]] = []
 
         def capture_callback(action_id: int, data: dict | None = None) -> dict:
             received.append((action_id, data))
-            return _mock_step_env_callback(action_id, data)
+            return mock_step_env(action_id, data)
 
         sandbox = SimulatorSandbox(step_env_callback=capture_callback, timeout=10.0)
         # Need to set _current_frame for action() to work with grid history
@@ -225,16 +205,16 @@ class TestSandboxLiveMode:
         assert len(received) == 1
         assert received[0][0] == 1
 
-    def test_run_code_returns_3_tuple(self):
-        sandbox = _make_live_sandbox()
+    def test_run_code_returns_3_tuple(self, live_sandbox):
+        sandbox = live_sandbox()
         output, error, action_taken = sandbox.run_code("x = 42")
         assert isinstance(output, str)
         assert error is None
         assert action_taken is None
 
-    def test_action_blocked_after_win(self):
+    def test_action_blocked_after_win(self, mock_step_env):
         """action() should be blocked after a winning result."""
-        sandbox = SimulatorSandbox(step_env_callback=_mock_step_env_callback)
+        sandbox = SimulatorSandbox(step_env_callback=mock_step_env)
         sandbox._current_frame = [[0] * 4 for _ in range(4)]
         sandbox._last_action_result = {"run_complete": True}
         sandbox.namespace["current_frame"] = sandbox._current_frame
@@ -242,9 +222,9 @@ class TestSandboxLiveMode:
         output, error, _ = sandbox.run_code("action(0)")
         assert "Game already won/over" in (error or "")
 
-    def test_action_blocked_after_game_over(self):
+    def test_action_blocked_after_game_over(self, mock_step_env):
         """action() should be blocked after a game-over result."""
-        sandbox = SimulatorSandbox(step_env_callback=_mock_step_env_callback)
+        sandbox = SimulatorSandbox(step_env_callback=mock_step_env)
         sandbox._current_frame = [[0] * 4 for _ in range(4)]
         sandbox._last_action_result = {"game_over": True}
         sandbox.namespace["current_frame"] = sandbox._current_frame
@@ -252,15 +232,15 @@ class TestSandboxLiveMode:
         output, error, _ = sandbox.run_code("action(0)")
         assert "Game already won/over" in (error or "")
 
-    def test_dunder_guard_rejects_import(self):
-        sandbox = _make_live_sandbox()
+    def test_dunder_guard_rejects_import(self, live_sandbox):
+        sandbox = live_sandbox()
         output, error, action_taken = sandbox.run_code("__import__('os')")
         assert error is not None
         assert "dunder" in error.lower()
         assert action_taken is None
 
-    def test_update_state_sets_namespace(self):
-        sandbox = _make_live_sandbox()
+    def test_update_state_sets_namespace(self, live_sandbox):
+        sandbox = live_sandbox()
         sandbox.update_state(
             objects=({"id": 1},),
             adjacency=frozenset({(1, 2)}),
@@ -275,9 +255,9 @@ class TestSandboxLiveMode:
         assert sandbox.namespace["previous_frame"] == [[1]]
         assert sandbox.namespace["valid_actions"] == [0, 3]
 
-    def test_reset_turn_counter(self):
+    def test_reset_turn_counter(self, mock_step_env):
         sandbox = SimulatorSandbox(
-            step_env_callback=_mock_step_env_callback,
+            step_env_callback=mock_step_env,
             timeout=10.0,
         )
         sandbox._current_frame = [[0] * 4 for _ in range(4)]
@@ -289,9 +269,9 @@ class TestSandboxLiveMode:
         assert sandbox.actions_this_turn == 0
         assert sandbox._action_taken is None
 
-    def test_simulate_in_namespace(self):
+    def test_simulate_in_namespace(self, live_sandbox):
         """set_simulate + simulate works in sandbox namespace."""
-        sandbox = _make_live_sandbox()
+        sandbox = live_sandbox()
         code = """
 def my_sim(grid, action):
     return [row[:] for row in grid]
@@ -302,16 +282,16 @@ result = simulate([[0,0],[0,0]], 0)
         assert error is None, f"Unexpected error: {error}"
         assert action_taken is None
 
-    def test_simulate_not_set_raises(self):
+    def test_simulate_not_set_raises(self, live_sandbox):
         """simulate() without set_simulate raises RuntimeError."""
-        sandbox = _make_live_sandbox()
+        sandbox = live_sandbox()
         output, error, action_taken = sandbox.run_code("simulate([[0]], 0)")
         assert error is not None
         assert "No simulate function" in error
 
-    def test_check_in_namespace(self):
+    def test_check_in_namespace(self, live_sandbox):
         """check() in namespace works after set_simulate."""
-        sandbox = _make_live_sandbox()
+        sandbox = live_sandbox()
         # Add some grids manually
         sandbox._grids = [[[0] * 4 for _ in range(4)] for _ in range(3)]
         sandbox._actions = [0, 0]
@@ -325,9 +305,9 @@ result = check()
         output, error, action_taken = sandbox.run_code(code)
         assert error is None, f"Unexpected error: {error}"
 
-    def test_update_notes_sandbox(self):
+    def test_update_notes_sandbox(self, live_sandbox):
         """update_notes() records structured notes in the sandbox."""
-        sandbox = _make_live_sandbox()
+        sandbox = live_sandbox()
         assert sandbox._pending_notes == {}
         output, error, _ = sandbox.run_code(
             "update_notes(notes='test notes', plan='test plan')"
@@ -1758,7 +1738,6 @@ class TestLevelTransition:
     def test_transition_clears_plan_preserves_notes_and_resets_workflow(self):
         """After the level transition, plan is cleared and workflow was
         reset to EXPLORE via reset_to_explore."""
-        from agents.simulator_agent.workflow import Phase
 
         seeded_notes = "Maze. floor=3,wall=4. Player 5x5. Target box=portal."
         seeded_plan = "Execute path [1,4,4,4,4,1,1,1] in real env."
@@ -1872,7 +1851,7 @@ class TestEventDrivenStateRefactor:
             distinct grid cell is used.
         """
         import numpy as np
-        from arcengine import FrameData, GameState, GameAction
+        from arcengine import FrameData, GameAction, GameState
 
         from agents.simulator_agent.sandbox import SimulatorSandbox
         from agents.simulator_agent.workflow import WorkflowController
@@ -2020,8 +1999,6 @@ class TestEventDrivenStateRefactor:
     def test_history_entry_per_action(self):
         """Batch action(1); action(1); action(2) produces 3 history entries
         with correct action ids, frame_index, and post-action grids."""
-        import numpy as np
-        from arcengine import FrameData, GameState
 
         agent, frames = self._make_event_agent()
 
@@ -2084,8 +2061,6 @@ class TestEventDrivenStateRefactor:
     def test_history_semantics_matches_prompt(self):
         """action(1); action(2) produces 2 entries where each frame is the
         post-action grid for that specific action."""
-        import numpy as np
-        from arcengine import FrameData, GameState
 
         agent, frames = self._make_event_agent()
 
@@ -2223,8 +2198,6 @@ class TestEventDrivenStateRefactor:
     def test_loop_continues_after_action(self):
         """T0 verification: after an action() call in python code, the tool
         loop does NOT exit. A second LLM call happens in the same turn."""
-        import numpy as np
-        from arcengine import FrameData, GameState
 
         agent, frames = self._make_event_agent()
 
@@ -2267,8 +2240,6 @@ class TestEventDrivenStateRefactor:
         """T2 verification: after action(1), the next LLM call's messages
         contain a user message whose frame-header text includes the new
         history entry (action=1) and frame_index matches action_counter-1."""
-        import numpy as np
-        from arcengine import FrameData, GameState
 
         agent, frames = self._make_event_agent()
 
@@ -2329,6 +2300,7 @@ class TestEventDrivenStateRefactor:
         action_counter crosses 10 while in EXPLORE transitions phase to MODEL."""
         import numpy as np
         from arcengine import FrameData, GameState
+
         from agents.simulator_agent.workflow import Phase
 
         agent, _ = self._make_event_agent()
@@ -2453,7 +2425,7 @@ class TestMainOverride:
     def test_callback_enforces_max_actions(self):
         """P2-T2.d: callback raises before step_env when MAX_ACTIONS budget exhausted."""
         import numpy as np
-        from arcengine import FrameData, GameState, GameAction
+        from arcengine import FrameData, GameState
 
         from agents.simulator_agent.sandbox import SimulatorSandbox
         from agents.simulator_agent.workflow import WorkflowController
@@ -2768,7 +2740,7 @@ class TestAntiSpiralGuard:
         Verify: action(1) resets counter, then subsequent no-action calls
         accumulate again, and run() terminates via the >=36 cap."""
         import numpy as np
-        from arcengine import FrameData, GameState, GameAction
+        from arcengine import FrameData, GameAction, GameState
 
         from agents.simulator_agent.sandbox import SimulatorSandbox
         from agents.simulator_agent.workflow import WorkflowController

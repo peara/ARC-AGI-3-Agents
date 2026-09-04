@@ -27,26 +27,12 @@ from agents.simulator_agent.sandbox import (
 )
 
 
-def _make_sandbox(budget_seconds: float = 1.0) -> SimulatorSandbox:
-    def fake_step(action_id: int, action_data: object) -> dict[str, object]:
-        return {
-            "objects": (),
-            "adjacency": frozenset(),
-            "history": [],
-            "grid": [[0] * 8 for _ in range(8)],
-            "valid_actions": [1],
-            "last_action_result": {},
-        }
-
-    return SimulatorSandbox(step_env_callback=fake_step, timeout=budget_seconds)
-
-
 class TestTracerBudget:
-    def test_busy_loop_stops_via_tracer(self):
+    def test_busy_loop_stops_via_tracer(self, budget_sandbox):
         """Primary regression: infinite loop with no try/except — the tracer
         budget fires and run_code returns an error quickly, in a worker
         thread (where the old SIGALRM never fired at all)."""
-        sb = _make_sandbox(budget_seconds=0.2)
+        sb = budget_sandbox(budget_seconds=0.2)
         t0 = time.monotonic()
         _, error, _ = sb.run_code("x = 0\nwhile True:\n    x += 1\n")
         elapsed = time.monotonic() - t0
@@ -54,10 +40,10 @@ class TestTracerBudget:
         assert "exceeded the execution budget" in error
         assert elapsed < 1.0, f"budget should fire fast, took {elapsed:.2f}s"
 
-    def test_ls20_incident_pattern_recovers(self):
+    def test_ls20_incident_pattern_recovers(self, budget_sandbox):
         """The exact 2026-09-04 pattern: while-loop on simulate() output with
         no step cap, simulate never satisfies the exit condition."""
-        sb = _make_sandbox(budget_seconds=0.2)
+        sb = budget_sandbox(budget_seconds=0.2)
         sb._current_frame = [[3] * 8 for _ in range(16)]
         sb.namespace["current_frame"] = sb._current_frame
         sb.namespace["previous_frame"] = None
@@ -73,10 +59,10 @@ class TestTracerBudget:
         )
         assert "exceeded the execution budget" in (error or "")
 
-    def test_cannot_swallow_via_except_exception(self):
+    def test_cannot_swallow_via_except_exception(self, budget_sandbox):
         """SandboxBudgetExceeded derives from BaseException, so user code
         cannot trap it with `except Exception` and keep spinning."""
-        sb = _make_sandbox(budget_seconds=0.2)
+        sb = budget_sandbox(budget_seconds=0.2)
         _, error, _ = sb.run_code(
             "x = 0\n"
             "while True:\n"
@@ -88,10 +74,10 @@ class TestTracerBudget:
         assert error is not None
         assert "exceeded the execution budget" in error
 
-    def test_honest_heavy_loop_passes(self):
+    def test_honest_heavy_loop_passes(self, budget_sandbox):
         """Legitimate heavy compute stays far under the budget
         (timeout=1.0 -> 1M line events; this loop burns ~600k)."""
-        sb = _make_sandbox(budget_seconds=1.0)
+        sb = budget_sandbox(budget_seconds=1.0)
         sb._current_frame = [[0] * 8 for _ in range(8)]
         sb.namespace["current_frame"] = sb._current_frame
         output, error, _ = sb.run_code(
@@ -116,13 +102,13 @@ class TestContainment:
             "        pass\n"
         )
 
-    def test_bare_except_swallow_is_contained(self):
+    def test_bare_except_swallow_is_contained(self, budget_sandbox):
         """Worst case: bare `except:` can swallow the tracer raise (CPython
         3.12 pathology at high event counts). Either the tracer raise
         escapes (budget error) or containment fires (SandboxTimeout) —
         either way run_code RETURNS within the containment bound and the
         game loop never hangs."""
-        sb = _make_sandbox(budget_seconds=0.05)
+        sb = budget_sandbox(budget_seconds=0.05)
         t0 = time.monotonic()
         _, error, _ = sb.run_code(self._bare_except_loop_code())
         elapsed = time.monotonic() - t0
@@ -134,11 +120,11 @@ class TestContainment:
             f"run_code must return within the containment bound, took {elapsed:.2f}s"
         )
 
-    def test_quarantine_neuters_tools_in_orphan(self):
+    def test_quarantine_neuters_tools_in_orphan(self, budget_sandbox):
         """_quarantine_zombie replaces orphaned tools (incl. action()) with
         raisers — a zombie cannot step the real environment — and swaps in a
         fresh namespace."""
-        sb = _make_sandbox(budget_seconds=0.05)
+        sb = budget_sandbox(budget_seconds=0.05)
         orphan_ns = sb.namespace
         sb._quarantine_zombie()
         assert sb.namespace is not orphan_ns
@@ -150,10 +136,10 @@ class TestContainment:
         assert raised
         assert sb.namespace.get("action") is not orphan_ns["action"]
 
-    def test_sandbox_usable_after_containment(self):
+    def test_sandbox_usable_after_containment(self, budget_sandbox):
         """After a timeout+quarantine, the next run_code works normally on
         the fresh namespace (agent tool loop can resume)."""
-        sb = _make_sandbox(budget_seconds=0.05)
+        sb = budget_sandbox(budget_seconds=0.05)
         sb.run_code(self._bare_except_loop_code())
         sb._current_frame = [[0] * 8 for _ in range(8)]
         sb.namespace["current_frame"] = sb._current_frame
@@ -163,17 +149,17 @@ class TestContainment:
 
 
 class TestStdoutSafety:
-    def test_global_stdout_untouched_after_budget_fire(self):
+    def test_global_stdout_untouched_after_budget_fire(self, budget_sandbox):
         """The old sys.stdout global swap let a hanging exec steal process-wide
         stdout. With namespace-scoped shadow print, sys.stdout is identical
         before/after."""
-        sb = _make_sandbox(budget_seconds=0.2)
+        sb = budget_sandbox(budget_seconds=0.2)
         before = sys.stdout
         sb.run_code("x = 0\nwhile True:\n    x += 1\n")
         assert before is sys.stdout
 
-    def test_global_stdout_untouched_after_containment(self):
-        sb = _make_sandbox(budget_seconds=0.05)
+    def test_global_stdout_untouched_after_containment(self, budget_sandbox):
+        sb = budget_sandbox(budget_seconds=0.05)
         before = sys.stdout
         sb.run_code(
             "x = 0\n"
@@ -185,8 +171,8 @@ class TestStdoutSafety:
         )
         assert before is sys.stdout
 
-    def test_print_goes_to_tool_output_not_fd1(self):
-        sb = _make_sandbox(budget_seconds=1.0)
+    def test_print_goes_to_tool_output_not_fd1(self, budget_sandbox):
+        sb = budget_sandbox(budget_seconds=1.0)
         sb._current_frame = [[0] * 8 for _ in range(8)]
         sb.namespace["current_frame"] = sb._current_frame
         output, _, _ = sb.run_code("print('captured', 1 + 1)\n")
@@ -194,8 +180,8 @@ class TestStdoutSafety:
 
 
 class TestAgentLoopResume:
-    def test_followup_run_code_works_after_budget_fire(self):
-        sb = _make_sandbox(budget_seconds=0.2)
+    def test_followup_run_code_works_after_budget_fire(self, budget_sandbox):
+        sb = budget_sandbox(budget_seconds=0.2)
         sb.run_code("x = 0\nwhile True:\n    x += 1\n")
         output, error, _ = sb.run_code("print('resumed')\n")
         assert error is None
@@ -229,9 +215,9 @@ class TestAgentLoopResume:
 
 class TestBudgetScale:
     @pytest.mark.unit
-    def test_budget_scales_with_timeout(self):
-        sb_small = _make_sandbox(budget_seconds=0.5)
-        sb_big = _make_sandbox(budget_seconds=10.0)
+    def test_budget_scales_with_timeout(self, budget_sandbox):
+        sb_small = budget_sandbox(budget_seconds=0.5)
+        sb_big = budget_sandbox(budget_seconds=10.0)
         assert sb_big._exec_budget == sb_small._exec_budget * 20
 
     @pytest.mark.unit

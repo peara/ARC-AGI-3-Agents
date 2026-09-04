@@ -6,22 +6,12 @@ import logging
 
 import pytest
 
-from agents.simulator_agent.sandbox import SimulatorSandbox
 from agents.simulator_agent.workflow import Phase, WorkflowController
 
 
-def make_sandbox() -> SimulatorSandbox:
-    """Create a sandbox without running __init__."""
-    s = SimulatorSandbox.__new__(SimulatorSandbox)
-    s._simulate = None
-    s._last_check_result = None
-    s._last_bfs_result = None
-    return s
-
-
 @pytest.mark.unit
-def test_auto_advance_explore_after_10_actions() -> None:
-    sandbox = make_sandbox()
+def test_auto_advance_explore_after_10_actions(plain_sandbox) -> None:
+    sandbox = plain_sandbox()
     controller = WorkflowController(sandbox)
     controller.update(action_counter=9)
     assert controller.phase == Phase.EXPLORE
@@ -30,8 +20,8 @@ def test_auto_advance_explore_after_10_actions() -> None:
 
 
 @pytest.mark.unit
-def test_explore_below_10_stays_explore() -> None:
-    sandbox = make_sandbox()
+def test_explore_below_10_stays_explore(plain_sandbox) -> None:
+    sandbox = plain_sandbox()
     controller = WorkflowController(sandbox)
     for n in range(10):
         controller.update(action_counter=n)
@@ -39,8 +29,8 @@ def test_explore_below_10_stays_explore() -> None:
 
 
 @pytest.mark.unit
-def test_plan_gate_blocks_without_simulate() -> None:
-    sandbox = make_sandbox()
+def test_plan_gate_blocks_without_simulate(plain_sandbox) -> None:
+    sandbox = plain_sandbox()
     controller = WorkflowController(sandbox)
     ok, msg = controller.set_phase("PLAN", "ready")
     assert ok is False
@@ -49,8 +39,8 @@ def test_plan_gate_blocks_without_simulate() -> None:
 
 
 @pytest.mark.unit
-def test_plan_gate_allows_with_simulate() -> None:
-    sandbox = make_sandbox()
+def test_plan_gate_allows_with_simulate(plain_sandbox) -> None:
+    sandbox = plain_sandbox()
     sandbox._simulate = lambda grid, action: grid
     controller = WorkflowController(sandbox)
     ok, msg = controller.set_phase("PLAN", "ready")
@@ -59,8 +49,8 @@ def test_plan_gate_allows_with_simulate() -> None:
 
 
 @pytest.mark.unit
-def test_execute_gate_requires_manual_without_simulate() -> None:
-    sandbox = make_sandbox()
+def test_execute_gate_requires_manual_without_simulate(plain_sandbox) -> None:
+    sandbox = plain_sandbox()
     controller = WorkflowController(sandbox)
 
     ok, msg = controller.set_phase("EXECUTE", "go")
@@ -73,8 +63,8 @@ def test_execute_gate_requires_manual_without_simulate() -> None:
 
 
 @pytest.mark.unit
-def test_check_failure_escape_hatch() -> None:
-    sandbox = make_sandbox()
+def test_check_failure_escape_hatch(plain_sandbox) -> None:
+    sandbox = plain_sandbox()
     controller = WorkflowController(sandbox)
     controller.set_phase("MODEL", "ready to model")
 
@@ -89,8 +79,8 @@ def test_check_failure_escape_hatch() -> None:
 
 
 @pytest.mark.unit
-def test_exception_flow_resets_to_model() -> None:
-    sandbox = make_sandbox()
+def test_exception_flow_resets_to_model(plain_sandbox) -> None:
+    sandbox = plain_sandbox()
     sandbox._simulate = lambda grid, action: grid
     controller = WorkflowController(sandbox)
     controller.set_phase("PLAN", "ready")
@@ -103,8 +93,8 @@ def test_exception_flow_resets_to_model() -> None:
 
 
 @pytest.mark.unit
-def test_invalid_phase_string_returns_error() -> None:
-    sandbox = make_sandbox()
+def test_invalid_phase_string_returns_error(plain_sandbox) -> None:
+    sandbox = plain_sandbox()
     controller = WorkflowController(sandbox)
     ok, msg = controller.set_phase("INVALID", "test")
     assert ok is False
@@ -112,8 +102,8 @@ def test_invalid_phase_string_returns_error() -> None:
 
 
 @pytest.mark.unit
-def test_directive_returns_current_phase() -> None:
-    sandbox = make_sandbox()
+def test_directive_returns_current_phase(plain_sandbox) -> None:
+    sandbox = plain_sandbox()
     controller = WorkflowController(sandbox)
     controller.set_phase("MODEL", "ready")
     directive = controller.directive()
@@ -121,8 +111,8 @@ def test_directive_returns_current_phase() -> None:
 
 
 @pytest.mark.unit
-def test_turn_start_log(caplog: pytest.LogCaptureFixture) -> None:
-    sandbox = make_sandbox()
+def test_turn_start_log(plain_sandbox, caplog: pytest.LogCaptureFixture) -> None:
+    sandbox = plain_sandbox()
     controller = WorkflowController(sandbox)
     with caplog.at_level(logging.INFO, logger="agents.simulator_agent.workflow"):
         controller.update(action_counter=5)
@@ -133,8 +123,8 @@ def test_turn_start_log(caplog: pytest.LogCaptureFixture) -> None:
 
 
 @pytest.mark.unit
-def test_auto_advance_guardrail_log(caplog: pytest.LogCaptureFixture) -> None:
-    sandbox = make_sandbox()
+def test_auto_advance_guardrail_log(plain_sandbox, caplog: pytest.LogCaptureFixture) -> None:
+    sandbox = plain_sandbox()
     controller = WorkflowController(sandbox)
     with caplog.at_level(logging.INFO, logger="agents.simulator_agent.workflow"):
         controller.update(action_counter=10)
@@ -146,8 +136,8 @@ def test_auto_advance_guardrail_log(caplog: pytest.LogCaptureFixture) -> None:
 
 
 @pytest.mark.unit
-def test_check_failure_escape_log(caplog: pytest.LogCaptureFixture) -> None:
-    sandbox = make_sandbox()
+def test_check_failure_escape_log(plain_sandbox, caplog: pytest.LogCaptureFixture) -> None:
+    sandbox = plain_sandbox()
     controller = WorkflowController(sandbox)
     controller.set_phase("MODEL", "ready to model")
     with caplog.at_level(logging.WARNING, logger="agents.simulator_agent.workflow"):
@@ -163,8 +153,8 @@ def test_check_failure_escape_log(caplog: pytest.LogCaptureFixture) -> None:
 
 
 @pytest.mark.unit
-def test_exception_flow_escape_log_uses_old_phase(caplog: pytest.LogCaptureFixture) -> None:
-    sandbox = make_sandbox()
+def test_exception_flow_escape_log_uses_old_phase(plain_sandbox, caplog: pytest.LogCaptureFixture) -> None:
+    sandbox = plain_sandbox()
     sandbox._simulate = lambda grid, action: grid
     controller = WorkflowController(sandbox)
     controller.set_phase("EXECUTE", "manual play")
@@ -189,8 +179,8 @@ def test_exception_flow_escape_log_uses_old_phase(caplog: pytest.LogCaptureFixtu
 
 
 @pytest.mark.unit
-def test_set_phase_accepted_log(caplog: pytest.LogCaptureFixture) -> None:
-    sandbox = make_sandbox()
+def test_set_phase_accepted_log(plain_sandbox, caplog: pytest.LogCaptureFixture) -> None:
+    sandbox = plain_sandbox()
     controller = WorkflowController(sandbox)
     with caplog.at_level(logging.INFO, logger="agents.simulator_agent.workflow"):
         controller.update(action_counter=3)
@@ -203,8 +193,8 @@ def test_set_phase_accepted_log(caplog: pytest.LogCaptureFixture) -> None:
 
 
 @pytest.mark.unit
-def test_set_phase_plan_rejection_log(caplog: pytest.LogCaptureFixture) -> None:
-    sandbox = make_sandbox()
+def test_set_phase_plan_rejection_log(plain_sandbox, caplog: pytest.LogCaptureFixture) -> None:
+    sandbox = plain_sandbox()
     controller = WorkflowController(sandbox)
     with caplog.at_level(logging.INFO, logger="agents.simulator_agent.workflow"):
         controller.set_phase("PLAN", "ready")
@@ -216,8 +206,8 @@ def test_set_phase_plan_rejection_log(caplog: pytest.LogCaptureFixture) -> None:
 
 
 @pytest.mark.unit
-def test_set_phase_execute_rejection_log(caplog: pytest.LogCaptureFixture) -> None:
-    sandbox = make_sandbox()
+def test_set_phase_execute_rejection_log(plain_sandbox, caplog: pytest.LogCaptureFixture) -> None:
+    sandbox = plain_sandbox()
     controller = WorkflowController(sandbox)
     with caplog.at_level(logging.INFO, logger="agents.simulator_agent.workflow"):
         controller.set_phase("EXECUTE", "go")
@@ -229,8 +219,8 @@ def test_set_phase_execute_rejection_log(caplog: pytest.LogCaptureFixture) -> No
 
 
 @pytest.mark.unit
-def test_check_ok_log(caplog: pytest.LogCaptureFixture) -> None:
-    sandbox = make_sandbox()
+def test_check_ok_log(plain_sandbox, caplog: pytest.LogCaptureFixture) -> None:
+    sandbox = plain_sandbox()
     controller = WorkflowController(sandbox)
     with caplog.at_level(logging.DEBUG, logger="agents.simulator_agent.workflow"):
         controller.update(action_counter=2)
@@ -244,8 +234,8 @@ def test_check_ok_log(caplog: pytest.LogCaptureFixture) -> None:
 
 
 @pytest.mark.unit
-def test_reset_to_explore_resets_all_state(caplog: pytest.LogCaptureFixture) -> None:
-    sandbox = make_sandbox()
+def test_reset_to_explore_resets_all_state(plain_sandbox, caplog: pytest.LogCaptureFixture) -> None:
+    sandbox = plain_sandbox()
     sandbox._simulate = lambda grid, action: grid
     controller = WorkflowController(sandbox)
     controller.set_phase("EXECUTE", "manual play")
@@ -275,9 +265,10 @@ def test_reset_to_explore_resets_all_state(caplog: pytest.LogCaptureFixture) -> 
 
 @pytest.mark.unit
 def test_reset_to_explore_default_reason_truncates_long_reason(
+    plain_sandbox,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    sandbox = make_sandbox()
+    sandbox = plain_sandbox()
     controller = WorkflowController(sandbox)
     controller.update(action_counter=5)
     long_reason = "x" * 200
