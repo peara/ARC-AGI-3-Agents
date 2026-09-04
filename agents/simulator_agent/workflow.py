@@ -8,6 +8,7 @@ escape hatches. Phase directives are injected into the user message each turn.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
@@ -238,3 +239,38 @@ SET_PHASE_TOOL_SCHEMA: dict[str, Any] = {
         },
     },
 }
+
+
+@dataclass(frozen=True)
+class SpiralGuardVerdict:
+    """Outcome of one SpiralGuard.record() call."""
+
+    count: int
+    nudge: bool
+    phase_model: bool
+    terminate: bool
+
+
+class SpiralGuard:
+    """Anti-spiral policy for consecutive non-action tool calls.
+
+    Pure policy, no I/O: ``record()`` takes the current counter and returns
+    the new counter plus which thresholds were crossed. The agent performs
+    the side effects (nudge message, set_phase('MODEL'), terminate).
+    """
+
+    NUDGE_AT = 12
+    PHASE_MODEL_AT = 24
+    TERMINATE_AT = 36
+
+    @classmethod
+    def record(cls, count: int, *, took_action: bool) -> SpiralGuardVerdict:
+        if took_action:
+            return SpiralGuardVerdict(0, False, False, False)
+        count += 1
+        return SpiralGuardVerdict(
+            count,
+            count >= cls.NUDGE_AT,
+            count >= cls.PHASE_MODEL_AT,
+            count >= cls.TERMINATE_AT,
+        )

@@ -26,16 +26,33 @@ from arcengine import FrameData, GameAction, GameState
 from agents.langgraph_vision_agent.sandbox import atoms_to_dicts, compute_adjacency
 from agents.llm_client import LLMClient
 from agents.loop_agent import LoopAgent
+from agents.simulator_agent.conversation import (
+    IMAGE_TOKEN_COST,
+    drop_oldest_history_block,
+    drop_until_first_user_message,
+    estimate_tokens,
+    keep_recent_assistant_turns,
+    persistent_history_messages,
+    strip_notes_messages,
+    strip_old_images,
+    trim_messages_for_context,
+    trim_old_non_tool_messages,
+    trim_old_tool_results,
+)
+from agents.simulator_agent.exception_flow import build_exception_flow_message
 from agents.simulator_agent.prompts import (
     AGENT_PYTHON_TOOL_SCHEMA,
     AGENT_SYSTEM_PROMPT,
-    EXCEPTION_FLOW_TEXT,
     LEVEL_TRANSITION_TEXT,
     UPDATE_NOTES_TOOL_SCHEMA,
     build_agent_user_prompt,
 )
 from agents.simulator_agent.sandbox import SimulatorSandbox
-from agents.simulator_agent.workflow import SET_PHASE_TOOL_SCHEMA, WorkflowController
+from agents.simulator_agent.workflow import (
+    SET_PHASE_TOOL_SCHEMA,
+    SpiralGuard,
+    WorkflowController,
+)
 from agents.simulator_agent.world_model import format_notes
 from agents.templates.llm_logging import LlmCallLogger, wrap_llm_call
 from optitrack.atoms import extract_atoms
@@ -112,24 +129,18 @@ class SimulatorFirstAgent(LoopAgent):
     def _exception_flow_mark_fired(self, action_id: int) -> None:
         self._exception_flow_fired_for = action_id
 
-    @staticmethod
-    def _action_name(action_id: int) -> str:
-        return {1: "up", 2: "down", 3: "left", 4: "right"}.get(
-            action_id, f"action_{action_id}"
-        )
-
     # ── run() — owned game loop ──────────────────────────────────────────
 
     def run(self) -> None:
-        """Owned game loop with persistent conversation + per-iteration end conditions.
+        """Owned game loop with persistent conversation.
 
-        End conditions checked at the top of each iteration:
-        - WIN state
-        - MAX_ACTIONS budget exhausted
-        - _non_action_calls >= 36 (anti-spiral cap)
+        Outer loop: end conditions (WIN state, MAX_ACTIONS budget), per-turn
+        setup, level-transition handling, prompt build, then the inner tool
+        loop (``_run_tool_loop``) and the persistent-history save.
 
-        Anti-spiral guard: increments _non_action_calls on no-action iterations,
-        resets on action. At >=12: nudge. At >=24: set_phase('MODEL') + reset.
+        Anti-spiral policy lives in ``SpiralGuard`` (workflow.py): on
+        consecutive non-action tool calls, nudge at 12, set_phase('MODEL')
+        at 24, terminate the game at 36.
         """
 
         self._transition_ended_turn = False
@@ -252,378 +263,392 @@ class SimulatorFirstAgent(LoopAgent):
             self._sandbox._pending_notes = {}
 
             # ── 9. Tool loop ───────────────────────────────────────────
-            action_taken_id: int | None = None
-            max_tool_steps = 100
-
-            for step in range(max_tool_steps):
-
-                # ── Anti-spiral guard (per iteration) ──────────────────
-                if action_taken_id is not None:
-                    self._non_action_calls = 0
-                else:
-                    self._non_action_calls += 1
-                    if self._non_action_calls >= 12:
-                        messages.append(
-                            {
-                                "role": "user",
-                                "content": (
-                                    "You have not taken an action in the last 12 tool calls. "
-                                    "Use the python tool to call action() now."
-                                ),
-                            }
-                        )
-                    if self._non_action_calls >= 24:
-                        logger.warning(
-                            f"simulatorfirst: frame={self.action_counter - 1} guardrail: "
-                            f"{self._non_action_calls} consecutive non-action calls — "
-                            f"set_phase('MODEL')"
-                        )
-                        self._workflow.set_phase("MODEL", reason="consecutive-tool-call-cap")
-
-                # ── End condition check (per iteration) ────────────────
-                latest_frame = self.frames[-1]
-                if latest_frame.state is GameState.WIN:
-                    return
-                if self.action_counter >= self.MAX_ACTIONS:
-                    return
-                if self._non_action_calls >= 36:
-                    logger.warning(
-                        f"simulatorfirst: frame={self.action_counter - 1} guardrail: "
-                        f"consecutive non-action calls {self._non_action_calls} >= 36, "
-                        f"ending game"
-                    )
-                    return
-
-                # Top-of-loop budget guard: before ANY further LLM call. The
-                # post-run_code() guard alone left a re-entry hole when
-                # action_taken stayed None (LLM calls python() without
-                # action()) — the 61/30 bug.
-                if self.action_counter >= self.MAX_ACTIONS:
-                    logger.info(
-                        f"simulatorfirst: frame={self.action_counter - 1} guardrail: "
-                        f"budget exhausted pre-LLM ({self.action_counter}/{self.MAX_ACTIONS})"
-                        " — ending turn"
-                    )
-                    break
-
-                try:
-                    self._trim_old_tool_results(messages, keep_last_n=3)
-                    self._trim_old_non_tool_messages(messages)
-                    messages = self._trim_messages_for_context(messages)
-                    response = self._llm_chat(
-                        messages=messages,
-                        tools=[AGENT_PYTHON_TOOL_SCHEMA, UPDATE_NOTES_TOOL_SCHEMA, SET_PHASE_TOOL_SCHEMA],
-                        tool_choice="auto",
-                    )
-                except Exception as exc:
-                    exc_str = str(exc).lower()
-                    if (
-                        "context_length" in exc_str
-                        or "context length" in exc_str
-                        or "too long" in exc_str
-                    ):
-                        trimmed = self._trim_messages_for_context(
-                            messages, extra_safety_tokens=512
-                        )
-                        if len(trimmed) < len(messages):
-                            messages = trimmed
-                            logger.warning(
-                                "simulatorfirst: context overflow — trimmed history, retrying"
-                            )
-                            continue
-                    logger.warning(f"simulatorfirst: LLM call failed: {exc}")
-                    break
-
-                # Check for tool calls
-                if response.tool_calls:
-                    for tc in response.tool_calls:
-                        if tc["function"]["name"] == "set_phase":
-                            try:
-                                args = json.loads(tc["function"]["arguments"])
-                            except Exception:
-                                args = {}
-                            phase_str = args.get("phase", "")
-                            reason = args.get("reason", "")
-                            success, msg = self._workflow.set_phase(phase_str, reason)
-                            messages.append(
-                                {
-                                    "role": "assistant",
-                                    "content": response.content or None,
-                                    "tool_calls": [tc],
-                                }
-                            )
-                            messages.append(
-                                {
-                                    "role": "tool",
-                                    "tool_call_id": tc["id"],
-                                    "content": msg,
-                                }
-                            )
-                        if tc["function"]["name"] == "update_notes":
-                            try:
-                                args = json.loads(tc["function"]["arguments"])
-                            except Exception:
-                                args = {}
-                            notes = args.get("notes", "")
-                            plan = args.get("plan", "")
-                            if notes:
-                                self._world_model["notes"] = notes
-                            if plan:
-                                self._world_model["plan"] = plan
-                            self._update_notes_message(messages, self._world_model)
-                            messages.append(
-                                {
-                                    "role": "assistant",
-                                    "content": response.content or None,
-                                    "tool_calls": [tc],
-                                }
-                            )
-                            messages.append(
-                                {
-                                    "role": "tool",
-                                    "tool_call_id": tc["id"],
-                                    "content": f"Notes updated: notes={len(notes)} chars, plan={len(plan)} chars",
-                                }
-                            )
-                            continue
-                        if tc["function"]["name"] == "python":
-                            try:
-                                args = json.loads(tc["function"]["arguments"])
-                            except Exception:
-                                args = {}
-                            code = args.get("code", "")
-
-                            # Add assistant message with tool call
-                            messages.append(
-                                {
-                                    "role": "assistant",
-                                    "content": response.content or None,
-                                    "tool_calls": [tc],
-                                }
-                            )
-
-                            # Run code in sandbox (in-process)
-                            had_simulate = self._sandbox._simulate is not None
-                            check_before = self._sandbox._last_check_result
-                            bfs_before = self._sandbox._last_bfs_result
-                            output, error, action_taken_id = self._sandbox.run_code(code)
-                            if output and "LEVEL COMPLETED" in output:
-                                self._transition_ended_turn = True
-                            if not had_simulate and self._sandbox._simulate is not None:
-                                logger.info(
-                                    f"simulatorfirst: simulate function registered at frame {self.action_counter - 1}"
-                                )
-                            if self._sandbox._last_check_result is not check_before:
-                                self._workflow.on_check_result(self._sandbox._last_check_result)
-                            if self._sandbox._last_bfs_result is not bfs_before:
-                                self._workflow.on_bfs_result(self._sandbox._last_bfs_result)
-
-                            # Build tool result
-                            tool_result_parts: list[str] = []
-                            if output:
-                                tool_result_parts.append(output)
-                            if error:
-                                logger.warning(f"simulatorfirst: sandbox error: {error}")
-                                tool_result_parts.append(f"Error: {error}")
-
-                            tool_result_text = (
-                                "\n".join(tool_result_parts)
-                                if tool_result_parts
-                                else "(no output)"
-                            )
-
-                            # Append pending images from sandbox (show_frame, show_grid)
-                            content_parts: list[dict[str, Any]] = [
-                                {"type": "text", "text": tool_result_text},
-                            ]
-                            for img in self._sandbox.pending_images:
-                                content_parts.append(
-                                    {
-                                        "type": "image_url",
-                                        "image_url": {
-                                            "url": f"data:image/png;base64,{img['b64']}"
-                                        },
-                                    }
-                                )
-                                content_parts.append(
-                                    {
-                                        "type": "text",
-                                        "text": img.get("caption", ""),
-                                    }
-                                )
-                            self._sandbox.pending_images.clear()
-
-                            messages.append(
-                                {
-                                    "role": "tool",
-                                    "tool_call_id": tc["id"],
-                                    "content": content_parts
-                                    if len(content_parts) > 1
-                                    else tool_result_text,
-                                }
-                            )
-
-                            # ── Mid-turn prompt refresh (T2) ────────────────────
-                            if action_taken_id is not None:
-                                new_grid_b64 = image_to_base64(
-                                    grid_to_image(self._current_grid, scale=8)
-                                ) if self._current_grid else grid_b64
-                                new_user_content = build_agent_user_prompt(
-                                    grid_image_b64=new_grid_b64,
-                                    world_model_text="",
-                                    available_actions=self._valid_actions,
-                                    frame_index=self.action_counter - 1,
-                                    history_summary=self._build_history_summary(),
-                                    simulate_status=self._build_simulate_status(),
-                                    phase_directive=self._workflow.directive(),
-                                )
-                                # Replace the last frame-bearing user message in-place
-                                # rather than appending a duplicate.
-                                replaced = False
-                                for msg in reversed(messages):
-                                    if msg.get("role") != "user":
-                                        continue
-                                    content = msg.get("content")
-                                    if not isinstance(content, list):
-                                        continue
-                                    for block in content:
-                                        if (
-                                            isinstance(block, dict)
-                                            and block.get("type") == "text"
-                                            and isinstance(block.get("text", ""), str)
-                                            and block["text"].startswith("Frame ")
-                                        ):
-                                            msg["content"] = new_user_content[0]["content"]
-                                            replaced = True
-                                            break
-                                    if replaced:
-                                        break
-                                if not replaced:
-                                    messages.append(new_user_content[0])
-                                self._update_notes_message(messages, self._world_model)
-                                self._sync_pending_notes()
-
-                            # ── Exception flow injection ────────────────────────
-                            pending = getattr(self._sandbox, "_pending_exception_flow", None)
-                            if pending and self._exception_flow_can_fire(
-                                pending["action_id"]
-                            ):
-                                # Build diagnosis + hint from pending dict
-                                if pending.get("error"):
-                                    err_tail = pending["error"]
-                                    diagnosis = (
-                                        f"Your simulate() CRASHED on this action:\n"
-                                        f"{err_tail}\n"
-                                        f"Likely cause: a bug in your simulate code "
-                                        f"(with the frozen namespace, helper redefinitions "
-                                        f"can no longer corrupt a registered simulate). "
-                                        f"The traceback line number points into your simulate "
-                                        f"source."
-                                    )
-                                    diagnosis_hint = (
-                                        "Fix the bug in simulate() and re-register via "
-                                        "set_simulate(). Build it from the provided tools "
-                                        "(find_objects, get_bbox) instead of hand-rolled helpers."
-                                    )
-                                elif pending.get("regions"):
-                                    lines = []
-                                    for reg in pending["regions"]:
-                                        r0, c0, r1, c1 = reg["bbox"]
-                                        trans = reg.get("transitions", "")
-                                        line = f"  rows {r0}-{r1} cols {c0}-{c1}: {reg['n_cells']} cells"
-                                        if trans:
-                                            line += f" ({trans})"
-                                        lines.append(line)
-                                    region_text = "\n".join(lines)
-                                    n_diff = pending["n_diff"]
-                                    n_regions = pending["n_regions"]
-                                    diagnosis = (
-                                        f"Your simulate() predicted a result that differs "
-                                        f"from reality by {n_diff} cells in {n_regions} "
-                                        f"regions:\n{region_text}"
-                                    )
-                                    diagnosis_hint = (
-                                        "A red-boxed image of the diff was attached. "
-                                        "Diffs far from the moved object = unmodeled board "
-                                        "animation (timer, event flash), not a movement error. "
-                                        "Model the trigger in simulate() or exclude those fixed "
-                                        "regions with set_ignore(cells=[...])."
-                                    )
-                                else:
-                                    n_diff = pending.get("n_diff", 0)
-                                    diagnosis = (
-                                        f"Your simulate() prediction differed from reality "
-                                        f"by {n_diff} cells."
-                                    )
-                                    diagnosis_hint = (
-                                        "Compare your prediction with what actually happened."
-                                    )
-                                messages.append(
-                                    {
-                                        "role": "user",
-                                        "content": EXCEPTION_FLOW_TEXT.format(
-                                            action_id=pending["action_id"],
-                                            action_name=self._action_name(
-                                                pending["action_id"]
-                                            ),
-                                            diagnosis=diagnosis,
-                                            diagnosis_hint=diagnosis_hint,
-                                        ),
-                                    }
-                                )
-                                self._exception_flow_mark_fired(pending["action_id"])
-                                self._workflow.on_exception_flow()
-                            self._sandbox._pending_exception_flow = None
-
-                            # Budget guard: stop the turn before calling the LLM again.
-                            # Committed batches complete; this fires after run_code() returns.
-                            if self.action_counter >= self.MAX_ACTIONS:
-                                logger.info(
-                                    f"simulatorfirst: frame={self.action_counter - 1} guardrail: "
-                                    f"budget exhausted mid-turn ({self.action_counter}/{self.MAX_ACTIONS})"
-                                    " — ending turn"
-                                )
-                                break
-
-                            # Nudge: remind LLM to record notes if it discovered something new
-                            messages.append(
-                                {
-                                    "role": "user",
-                                    "content": (
-                                        "If you discovered something new about the game "
-                                        "(mechanics, targets, object properties), call "
-                                        "update_notes to record it before continuing."
-                                    ),
-                                }
-                            )
-
-                            # If sandbox errored, continue loop (tool result
-                            # already appended)
-                            continue
-                else:
-                    # No tool call — append assistant text, nudge
-                    assistant_text = response.content or ""
-                    if assistant_text:
-                        messages.append({"role": "assistant", "content": assistant_text})
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": "Please use the python tool to inspect state and call action().",
-                        }
-                    )
-                    continue
-
-                # Level transition: exit the tool loop immediately so the
-                # outer game loop handles the reset.
-                if self._transition_ended_turn:
-                    break
-            else:
-                # Loop exhausted without action
-                pass
+            messages, terminate_run = self._run_tool_loop(messages, grid_b64)
+            if terminate_run:
+                return
 
             # ── Save persistent history for next outer-loop iteration ──
             if not self._transition_ended_turn:
                 self._history_messages = self._persistent_history_messages(messages)
+
+    # ── Inner tool loop (extracted from run()) ────────────────────────────
+
+    def _run_tool_loop(
+        self, messages: list[dict[str, Any]], grid_b64: str
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """Inner tool loop for one turn. Returns the (possibly rebound)
+        messages list for persistent-history saving, plus a terminate flag:
+        True when ``run()`` must return immediately — the original inline
+        loop returned from ``run()`` directly in those paths (spiral cap,
+        WIN, budget end-conditions, mid-turn budget without a pending
+        transition), skipping the history save and the outer loop. False
+        paths fall back to run()'s save + outer loop, exactly like the
+        original ``break`` paths. ``action_taken_id`` persists across
+        iterations until the next python call — the guard resets on the
+        iteration AFTER an action (original inline-loop semantics
+        preserved).
+        """
+        action_taken_id: int | None = None
+        max_tool_steps = 100
+
+        for step in range(max_tool_steps):
+
+            # ── Anti-spiral guard (per iteration) ──────────────────
+            verdict = SpiralGuard.record(
+                self._non_action_calls, took_action=action_taken_id is not None
+            )
+            self._non_action_calls = verdict.count
+            if verdict.nudge:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "You have not taken an action in the last 12 tool calls. "
+                            "Use the python tool to call action() now."
+                        ),
+                    }
+                )
+            if verdict.phase_model:
+                logger.warning(
+                    f"simulatorfirst: frame={self.action_counter - 1} guardrail: "
+                    f"{self._non_action_calls} consecutive non-action calls — "
+                    f"set_phase('MODEL')"
+                )
+                self._workflow.set_phase("MODEL", reason="consecutive-tool-call-cap")
+
+            # ── End condition check (per iteration) ────────────────
+            latest_frame = self.frames[-1]
+            if latest_frame.state is GameState.WIN:
+                return messages, True
+            if self.action_counter >= self.MAX_ACTIONS:
+                return messages, True
+            if verdict.terminate:
+                logger.warning(
+                    f"simulatorfirst: frame={self.action_counter - 1} guardrail: "
+                    f"consecutive non-action calls {self._non_action_calls} >= 36, "
+                    f"ending game"
+                )
+                return messages, True
+
+            # Top-of-loop budget guard: before ANY further LLM call. The
+            # post-run_code() guard alone left a re-entry hole when
+            # action_taken stayed None (LLM calls python() without
+            # action()) — the 61/30 bug.
+            if self.action_counter >= self.MAX_ACTIONS:
+                logger.info(
+                    f"simulatorfirst: frame={self.action_counter - 1} guardrail: "
+                    f"budget exhausted pre-LLM ({self.action_counter}/{self.MAX_ACTIONS})"
+                    " — ending turn"
+                )
+                return messages, False
+
+            try:
+                self._trim_old_tool_results(messages, keep_last_n=3)
+                self._trim_old_non_tool_messages(messages)
+                messages = self._trim_messages_for_context(messages)
+                response = self._llm_chat(
+                    messages=messages,
+                    tools=[AGENT_PYTHON_TOOL_SCHEMA, UPDATE_NOTES_TOOL_SCHEMA, SET_PHASE_TOOL_SCHEMA],
+                    tool_choice="auto",
+                )
+            except Exception as exc:
+                exc_str = str(exc).lower()
+                if (
+                    "context_length" in exc_str
+                    or "context length" in exc_str
+                    or "too long" in exc_str
+                ):
+                    trimmed = self._trim_messages_for_context(
+                        messages, extra_safety_tokens=512
+                    )
+                    if len(trimmed) < len(messages):
+                        messages = trimmed
+                        logger.warning(
+                            "simulatorfirst: context overflow — trimmed history, retrying"
+                        )
+                        continue
+                logger.warning(f"simulatorfirst: LLM call failed: {exc}")
+                return messages, False
+
+            # Check for tool calls
+            if response.tool_calls:
+                for tc in response.tool_calls:
+                    name = tc["function"]["name"]
+                    if name == "set_phase":
+                        self._handle_set_phase(tc, response, messages)
+                    if name == "update_notes":
+                        self._handle_update_notes(tc, response, messages)
+                        continue
+                    if name == "python":
+                        action_taken_id = self._handle_python_call(
+                            tc, response, messages, grid_b64
+                        )
+
+                        # Budget guard: stop the turn before calling the LLM again.
+                        # Committed batches complete; this fires after run_code() returns.
+                        if self.action_counter >= self.MAX_ACTIONS:
+                            logger.info(
+                                f"simulatorfirst: frame={self.action_counter - 1} guardrail: "
+                                f"budget exhausted mid-turn ({self.action_counter}/{self.MAX_ACTIONS})"
+                                " — ending turn"
+                            )
+                            if self._transition_ended_turn:
+                                # Original break reached the transition check and
+                                # fell back to the outer loop, which processes the
+                                # transition (history save is skipped by the
+                                # not-_transition_ended_turn guard).
+                                return messages, False
+                            # Original break fell through to the next for-step
+                            # iteration, whose end-condition check returned from
+                            # run() without a history save.
+                            return messages, True
+
+                        # Nudge: remind LLM to record notes if it discovered something new
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "If you discovered something new about the game "
+                                    "(mechanics, targets, object properties), call "
+                                    "update_notes to record it before continuing."
+                                ),
+                            }
+                        )
+
+                        # If sandbox errored, continue loop (tool result
+                        # already appended)
+                        continue
+            else:
+                # No tool call — append assistant text, nudge
+                assistant_text = response.content or ""
+                if assistant_text:
+                    messages.append({"role": "assistant", "content": assistant_text})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": "Please use the python tool to inspect state and call action().",
+                    }
+                )
+                continue
+
+            # Level transition: exit the tool loop immediately so the
+            # outer game loop handles the reset.
+            if self._transition_ended_turn:
+                return messages, False
+        return messages, False
+
+    def _handle_set_phase(
+        self,
+        tc: dict[str, Any],
+        response: Any,
+        messages: list[dict[str, Any]],
+    ) -> None:
+        try:
+            args = json.loads(tc["function"]["arguments"])
+        except Exception:
+            args = {}
+        phase_str = args.get("phase", "")
+        reason = args.get("reason", "")
+        success, msg = self._workflow.set_phase(phase_str, reason)
+        messages.append(
+            {
+                "role": "assistant",
+                "content": response.content or None,
+                "tool_calls": [tc],
+            }
+        )
+        messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": tc["id"],
+                "content": msg,
+            }
+        )
+
+    def _handle_update_notes(
+        self,
+        tc: dict[str, Any],
+        response: Any,
+        messages: list[dict[str, Any]],
+    ) -> None:
+        try:
+            args = json.loads(tc["function"]["arguments"])
+        except Exception:
+            args = {}
+        notes = args.get("notes", "")
+        plan = args.get("plan", "")
+        if notes:
+            self._world_model["notes"] = notes
+        if plan:
+            self._world_model["plan"] = plan
+        self._update_notes_message(messages, self._world_model)
+        messages.append(
+            {
+                "role": "assistant",
+                "content": response.content or None,
+                "tool_calls": [tc],
+            }
+        )
+        messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": tc["id"],
+                "content": f"Notes updated: notes={len(notes)} chars, plan={len(plan)} chars",
+            }
+        )
+
+    def _handle_python_call(
+        self,
+        tc: dict[str, Any],
+        response: Any,
+        messages: list[dict[str, Any]],
+        grid_b64: str,
+    ) -> int | None:
+        """Execute one ``python`` tool call in the sandbox.
+
+        Returns the action_taken_id from ``run_code`` (None when the code
+        took no action). Mid-turn budget termination is decided by the
+        caller after this returns.
+        """
+        try:
+            args = json.loads(tc["function"]["arguments"])
+        except Exception:
+            args = {}
+        code = args.get("code", "")
+
+        # Add assistant message with tool call
+        messages.append(
+            {
+                "role": "assistant",
+                "content": response.content or None,
+                "tool_calls": [tc],
+            }
+        )
+
+        # Run code in sandbox (in-process)
+        had_simulate = self._sandbox._simulate is not None
+        check_before = self._sandbox._last_check_result
+        bfs_before = self._sandbox._last_bfs_result
+        output, error, action_taken_id = self._sandbox.run_code(code)
+        if output and "LEVEL COMPLETED" in output:
+            self._transition_ended_turn = True
+        if not had_simulate and self._sandbox._simulate is not None:
+            logger.info(
+                f"simulatorfirst: simulate function registered at frame {self.action_counter - 1}"
+            )
+        if self._sandbox._last_check_result is not check_before:
+            self._workflow.on_check_result(self._sandbox._last_check_result)
+        if self._sandbox._last_bfs_result is not bfs_before:
+            self._workflow.on_bfs_result(self._sandbox._last_bfs_result)
+
+        # Build tool result
+        tool_result_parts: list[str] = []
+        if output:
+            tool_result_parts.append(output)
+        if error:
+            logger.warning(f"simulatorfirst: sandbox error: {error}")
+            tool_result_parts.append(f"Error: {error}")
+
+        tool_result_text = (
+            "\n".join(tool_result_parts)
+            if tool_result_parts
+            else "(no output)"
+        )
+
+        # Append pending images from sandbox (show_frame, show_grid)
+        content_parts: list[dict[str, Any]] = [
+            {"type": "text", "text": tool_result_text},
+        ]
+        for img in self._sandbox.pending_images:
+            content_parts.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{img['b64']}"
+                    },
+                }
+            )
+            content_parts.append(
+                {
+                    "type": "text",
+                    "text": img.get("caption", ""),
+                }
+            )
+        self._sandbox.pending_images.clear()
+
+        messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": tc["id"],
+                "content": content_parts
+                if len(content_parts) > 1
+                else tool_result_text,
+            }
+        )
+
+        # ── Mid-turn prompt refresh (T2) ────────────────────
+        if action_taken_id is not None:
+            self._refresh_frame_prompt(messages, grid_b64)
+
+        # ── Exception flow injection ────────────────────────
+        pending = getattr(self._sandbox, "_pending_exception_flow", None)
+        if pending and self._exception_flow_can_fire(
+            pending["action_id"]
+        ):
+            messages.append(
+                {
+                    "role": "user",
+                    "content": build_exception_flow_message(pending),
+                }
+            )
+            self._exception_flow_mark_fired(pending["action_id"])
+            self._workflow.on_exception_flow()
+        self._sandbox._pending_exception_flow = None
+
+        return action_taken_id
+
+    def _refresh_frame_prompt(
+        self, messages: list[dict[str, Any]], grid_b64: str
+    ) -> None:
+        """Mid-turn prompt refresh (T2): rebuild the frame user prompt in
+        place after an action so the next LLM call sees the post-action grid."""
+        new_grid_b64 = image_to_base64(
+            grid_to_image(self._current_grid, scale=8)
+        ) if self._current_grid else grid_b64
+        new_user_content = build_agent_user_prompt(
+            grid_image_b64=new_grid_b64,
+            world_model_text="",
+            available_actions=self._valid_actions,
+            frame_index=self.action_counter - 1,
+            history_summary=self._build_history_summary(),
+            simulate_status=self._build_simulate_status(),
+            phase_directive=self._workflow.directive(),
+        )
+        # Replace the last frame-bearing user message in-place
+        # rather than appending a duplicate.
+        replaced = False
+        for msg in reversed(messages):
+            if msg.get("role") != "user":
+                continue
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if (
+                    isinstance(block, dict)
+                    and block.get("type") == "text"
+                    and isinstance(block.get("text", ""), str)
+                    and block["text"].startswith("Frame ")
+                ):
+                    msg["content"] = new_user_content[0]["content"]
+                    replaced = True
+                    break
+            if replaced:
+                break
+        if not replaced:
+            messages.append(new_user_content[0])
+        self._update_notes_message(messages, self._world_model)
+        self._sync_pending_notes()
 
     def _append_notes_message(
         self, messages: list[dict[str, Any]], world_model: dict[str, str]
@@ -768,77 +793,15 @@ class SimulatorFirstAgent(LoopAgent):
 
     # ── Context trimming ──────────────────────────────────────────────────
 
-    _IMAGE_TOKEN_COST = 1024
+    _IMAGE_TOKEN_COST = IMAGE_TOKEN_COST
 
-    @staticmethod
-    def _estimate_tokens(messages: list[dict[str, Any]]) -> int:
-        """Estimate token count — text via char heuristic, images via fixed cost."""
-        total = 0
-        for msg in messages:
-            content = msg.get("content", "")
-            if isinstance(content, list):
-                for part in content:
-                    if isinstance(part, dict):
-                        if part.get("type") == "image_url":
-                            total += SimulatorFirstAgent._IMAGE_TOKEN_COST
-                        elif part.get("type") == "text":
-                            total += len(part.get("text", "")) // 3
-            elif isinstance(content, str):
-                total += len(content) // 3
-            tool_calls = msg.get("tool_calls")
-            if tool_calls:
-                total += len(json.dumps(tool_calls, default=str)) // 3
-        return max(1, total)
+    _estimate_tokens = staticmethod(estimate_tokens)
 
-    @staticmethod
-    def _drop_oldest_history_block(
-        history: list[dict[str, Any]], *, preserve_recent: int
-    ) -> bool:
-        removable = len(history) - preserve_recent
-        if removable <= 0:
-            return False
-        history.pop(0)
-        while (
-            history
-            and history[0].get("role") == "tool"
-            and len(history) > preserve_recent
-        ):
-            history.pop(0)
-        while (
-            history
-            and history[0].get("role") != "user"
-            and len(history) > preserve_recent
-        ):
-            history.pop(0)
-        return True
+    _drop_oldest_history_block = staticmethod(drop_oldest_history_block)
 
-    @staticmethod
-    def _keep_recent_assistant_turns(
-        messages: list[dict[str, Any]], *, max_turns: int
-    ) -> list[dict[str, Any]]:
-        if max_turns <= 0 or not messages:
-            return []
-        kept_reversed: list[dict[str, Any]] = []
-        assistant_turns = 0
-        for message in reversed(messages):
-            kept_reversed.append(message)
-            if message.get("role") == "assistant":
-                assistant_turns += 1
-                if assistant_turns >= max_turns:
-                    break
-        kept = list(reversed(kept_reversed))
-        while kept and kept[0].get("role") == "tool":
-            kept.pop(0)
-        return kept
+    _keep_recent_assistant_turns = staticmethod(keep_recent_assistant_turns)
 
-    @staticmethod
-    def _drop_until_first_user_message(
-        history: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        trimmed = list(history)
-        while trimmed and trimmed[0].get("role") != "user":
-            trimmed.pop(0)
-        return trimmed
+    _drop_until_first_user_message = staticmethod(drop_until_first_user_message)
 
     def _trim_messages_for_context(
         self,
@@ -847,179 +810,29 @@ class SimulatorFirstAgent(LoopAgent):
         preserve_recent: int = 1,
         extra_safety_tokens: int = 0,
     ) -> list[dict[str, Any]]:
-        if not messages:
-            return []
-        system_message = messages[0]
-        history = list(messages[1:])
-        budget = max(1, self._context_budget_tokens - extra_safety_tokens)
-        while history and self._estimate_tokens([system_message, *history]) > budget:
-            if not self._drop_oldest_history_block(
-                history, preserve_recent=preserve_recent
-            ):
-                break
-        history = self._drop_until_first_user_message(history)
-        return [system_message, *history]
+        # Instance method on purpose: budget regression tests override this
+        # on __new__-built instances, and run() must call it via self.
+        return trim_messages_for_context(
+            messages,
+            budget_tokens=self._context_budget_tokens,
+            preserve_recent=preserve_recent,
+            extra_safety_tokens=extra_safety_tokens,
+        )
 
     def _persistent_history_messages(
         self, messages: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        stripped = self._strip_notes_messages(messages)
-        trimmed = self._trim_messages_for_context(stripped)
-        if not trimmed:
-            return []
-        trimmed_history = trimmed[1:]
-        history = self._keep_recent_assistant_turns(
-            trimmed_history,
-            max_turns=30,
+        return persistent_history_messages(
+            messages, budget_tokens=self._context_budget_tokens
         )
-        if (
-            history
-            and history[0].get("role") != "user"
-            and len(trimmed_history) > len(history)
-        ):
-            prev_idx = len(trimmed_history) - len(history) - 1
-            if prev_idx >= 0 and trimmed_history[prev_idx].get("role") == "user":
-                history = [trimmed_history[prev_idx], *history]
-        history = self._drop_until_first_user_message(history)
-        self._strip_old_images(history, keep_last_n_user=2)
-        return history
 
-    @staticmethod
-    def _strip_notes_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Return a new list with all [Current notes] user messages removed.
+    _strip_notes_messages = staticmethod(strip_notes_messages)
 
-        Notes messages are injected fresh each frame from self._world_model.
-        Carrying stale notes messages in persistent history causes duplicates
-        and bloat. Strip them before the trim pipeline so history never keeps
-        old notes.
-        """
-        return [
-            msg
-            for msg in messages
-            if not (
-                msg.get("role") == "user"
-                and isinstance(msg.get("content"), str)
-                and msg["content"].startswith("[Current notes]")
-            )
-        ]
+    _strip_old_images = staticmethod(strip_old_images)
 
-    @staticmethod
-    def _strip_old_images(
-        history: list[dict[str, Any]], *, keep_last_n_user: int
-    ) -> None:
-        """Remove image_url blocks from all but the last N user messages.
+    _trim_old_tool_results = staticmethod(trim_old_tool_results)
 
-        Vision models tokenize images as hundreds/thousands of tokens
-        regardless of file size. Carrying old frame images in persistent
-        history quickly exhausts the context window. Only the most recent
-        frames need images — older ones are text-only.
-        """
-        user_indices = [i for i, m in enumerate(history) if m.get("role") == "user"]
-        cutoff_indices = (
-            set(user_indices[-keep_last_n_user:]) if keep_last_n_user > 0 else set()
-        )
-        for i in user_indices:
-            if i in cutoff_indices:
-                continue
-            content = history[i].get("content")
-            if not isinstance(content, list):
-                continue
-            history[i]["content"] = [
-                p
-                for p in content
-                if not (isinstance(p, dict) and p.get("type") == "image_url")
-            ]
-
-    @staticmethod
-    def _trim_old_tool_results(
-        messages: list[dict[str, Any]], keep_last_n: int = 3
-    ) -> None:
-        """Replace old tool result content with placeholders, keeping only last N.
-
-        Mutates messages in-place. Never deletes messages (API pairing requirement).
-
-        Exemptions:
-        - update_notes results: always kept (tiny, ~50 chars)
-        - action() result: the last tool result that triggered an action is pinned
-        """
-        tool_indices = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
-        if len(tool_indices) <= keep_last_n:
-            return
-
-        exempt_ids: set[str] = set()
-        for msg in messages:
-            if msg.get("role") == "assistant" and msg.get("tool_calls"):
-                for tc in msg["tool_calls"]:
-                    if tc.get("function", {}).get("name") == "update_notes":
-                        exempt_ids.add(tc["id"])
-
-        if tool_indices:
-            last_tool_id = messages[tool_indices[-1]].get("tool_call_id")
-            if last_tool_id:
-                exempt_ids.add(last_tool_id)
-
-        trimmable = [
-            i for i in tool_indices if messages[i].get("tool_call_id") not in exempt_ids
-        ]
-        to_trim = trimmable[:-keep_last_n] if len(trimmable) > keep_last_n else []
-
-        for i in to_trim:
-            msg = messages[i]
-            content = msg.get("content", "")
-            if isinstance(content, str):
-                original_chars = len(content)
-            elif isinstance(content, list):
-                original_chars = sum(
-                    len(b.get("text", ""))
-                    for b in content
-                    if isinstance(b, dict) and b.get("type") == "text"
-                )
-            else:
-                original_chars = len(str(content))
-            msg["content"] = f"[Old output ({original_chars} chars, trimmed)]"
-
-    @staticmethod
-    def _trim_old_non_tool_messages(messages: list[dict[str, Any]]) -> None:
-        """Trim old user prompts, nudge messages, and assistant code.
-
-        Idempotent — safe to run on already-trimmed messages.
-        Mutates in-place. Never deletes messages (API pairing requirement).
-        """
-        nudge_indices = [
-            i
-            for i, m in enumerate(messages)
-            if m.get("role") == "user"
-            and isinstance(m.get("content"), str)
-            and (
-                "discovered something new" in m.get("content", "")
-                or "Please use the python tool" in m.get("content", "")
-            )
-        ]
-        for i in nudge_indices[:-1]:
-            messages[i]["content"] = "[nudge]"
-
-        frame_indices = [
-            i
-            for i, m in enumerate(messages)
-            if m.get("role") == "user" and isinstance(m.get("content"), list)
-        ]
-        for i in frame_indices[:-1]:
-            messages[i] = {**messages[i], "content": "[frame]"}
-
-        assistant_tc_indices = [
-            i
-            for i, m in enumerate(messages)
-            if m.get("role") == "assistant" and m.get("tool_calls")
-        ]
-        for i in assistant_tc_indices[:-4]:
-            for tc in messages[i]["tool_calls"]:
-                name = tc["function"]["name"]
-                if name == "python":
-                    tc["function"]["arguments"] = '{"code": "# previous code omitted"}'
-                elif name == "update_notes":
-                    tc["function"]["arguments"] = (
-                        '{"notes": "[trimmed]", "plan": "[trimmed]"}'
-                    )
+    _trim_old_non_tool_messages = staticmethod(trim_old_non_tool_messages)
 
     # ── Helpers ────────────────────────────────────────────────────────────
 

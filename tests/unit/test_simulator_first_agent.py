@@ -16,6 +16,7 @@ from agents.loop_agent import LoopAgent
 from agents.simulator_agent.agent import SimulatorFirstAgent
 from agents.simulator_agent.check import cluster_cells, diagnose, run_check
 from agents.simulator_agent.sandbox import SimulatorSandbox
+from agents.simulator_agent.workflow import SpiralGuard
 from agents.simulator_agent.world_model import extract_notes, format_notes
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -962,13 +963,18 @@ class TestActionBudget:
     def test_tool_loop_budget_guard(self):
         import inspect
 
-        source = inspect.getsource(SimulatorFirstAgent.run)
+        source = "\n".join(
+            [
+                inspect.getsource(SimulatorFirstAgent.run),
+                inspect.getsource(SimulatorFirstAgent._run_tool_loop),
+            ]
+        )
         assert "action_counter >= self.MAX_ACTIONS" in source, \
-            "run() must check action_counter vs MAX_ACTIONS"
+            "run()/_run_tool_loop must check action_counter vs MAX_ACTIONS"
         assert "budget exhausted mid-turn" in source, \
-            "run() must log budget exhausted mid-turn"
+            "tool loop must log budget exhausted mid-turn"
         assert "guardrail:" in source and "budget exhausted" in source, \
-            "run() must use the guardrail log format"
+            "tool loop must use the guardrail log format"
 
     @pytest.mark.unit
     def test_no_fallback_returns_reset_on_exhaustion(self):
@@ -976,9 +982,14 @@ class TestActionBudget:
         The anti-spiral cap at >=36 returns directly (no random action)."""
         import inspect
 
-        source = inspect.getsource(SimulatorFirstAgent.run)
+        source = "\n".join(
+            [
+                inspect.getsource(SimulatorFirstAgent.run),
+                inspect.getsource(SimulatorFirstAgent._run_tool_loop),
+            ]
+        )
 
-        # P2-T3: no random action injection anywhere in run()
+        # P2-T3: no random action injection anywhere in run()/_run_tool_loop
         assert "random" not in source or "No random fallback" in source, \
             "run() must not inject random actions"
 
@@ -2914,3 +2925,55 @@ class TestAntiSpiralGuard:
             f"_non_action_calls should be >=36 (accumulated after action reset), "
             f"got {agent._non_action_calls}"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 10. SpiralGuard — pure anti-spiral policy (workflow.py)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestSpiralGuard:
+    """Unit tests for the SpiralGuard policy class (thresholds 12/24/36)."""
+
+    def test_reset_on_action(self):
+        verdict = SpiralGuard.record(20, took_action=True)
+        assert verdict.count == 0
+        assert not verdict.nudge
+        assert not verdict.phase_model
+        assert not verdict.terminate
+
+    def test_below_nudge_threshold(self):
+        verdict = SpiralGuard.record(0, took_action=False)
+        assert verdict.count == 1
+        assert not verdict.nudge
+        assert not verdict.phase_model
+        assert not verdict.terminate
+
+    def test_nudge_at_12(self):
+        verdict = SpiralGuard.record(11, took_action=False)
+        assert verdict.count == 12
+        assert verdict.nudge
+        assert not verdict.phase_model
+        assert not verdict.terminate
+
+    def test_phase_model_at_24_counter_continues(self):
+        verdict = SpiralGuard.record(23, took_action=False)
+        assert verdict.count == 24
+        assert verdict.nudge
+        assert verdict.phase_model
+        assert verdict.count == 24, "counter must NOT reset at 24"
+        assert not verdict.terminate
+
+    def test_terminate_at_36(self):
+        verdict = SpiralGuard.record(35, took_action=False)
+        assert verdict.count == 36
+        assert verdict.nudge
+        assert verdict.phase_model
+        assert verdict.terminate
+
+    def test_flags_carry_at_high_counts(self):
+        verdict = SpiralGuard.record(50, took_action=False)
+        assert verdict.count == 51
+        assert verdict.nudge
+        assert verdict.phase_model
+        assert verdict.terminate
