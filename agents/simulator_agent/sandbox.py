@@ -21,7 +21,6 @@ import contextlib
 import io
 import logging
 import re
-import signal
 import sys
 import threading
 import traceback
@@ -93,6 +92,33 @@ _DUNDER_PATTERN = re.compile(r"__\w+__")
 
 _MAX_OUTPUT_CHARS = 4096
 
+# Line events per second of ``timeout`` for sandbox-tagged code (see
+# _DEFAULT_EXEC_BUDGET note above SandboxBudgetExceeded). Sized for honest
+# heavy turns: full-board simulate loops and bfs() over ~50k nodes burn
+# ~1e6-1e7 line events; a pure-Python busy loop burns ~1e6/second, so the
+# budget fires in roughly the same wall-clock as ``timeout``. The tracer
+# raise is a fast path, not the last line of defense — see
+# ``run_code()`` for the wall-clock containment layer.
+_DEFAULT_EXEC_BUDGET_PER_SECOND = 1_000_000
+
+
+def _make_quarantine_raiser(name: str) -> Callable[..., Any]:
+    """Build a neutered tool for an orphaned (zombie-occupied) namespace."""
+
+    def _quarantined(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError(
+            f"[quarantined] '{name}' is unavailable: a previous execution "
+            f"timed out and its sandbox was reset. Start fresh."
+        )
+
+    return _quarantined
+
+
+# Builtins for a quarantined namespace: empty on purpose — any builtin use
+# in the zombie raises (contained), and unbound memory growth via print is
+# impossible because quarantine also neuters the orphan's "print" entry.
+_QUARANTINE_SAFE_BUILTINS_SNAPSHOT: dict[str, Any] = {}
+
 
 class LevelTransition(Exception):
     """Raised inside ``action()`` when ``last_action_result.level_completed`` is True.
@@ -102,6 +128,20 @@ class LevelTransition(Exception):
     explicitly in ``run_code()`` BEFORE the broad ``except Exception`` and
     converted to the marker output ``"[LEVEL COMPLETED — board transitioning; stop]"``
     with the winning action id preserved in ``self._action_taken``.
+    """
+
+
+class SandboxBudgetExceeded(BaseException):
+    """Trace-hook budget interrupt for runaway sandbox code.
+
+    Derives from ``BaseException`` (not ``Exception``) so sandboxed code
+    cannot swallow it with ``except Exception`` — same reasoning as
+    ``KeyboardInterrupt``. Raised from the line tracer when a code object
+    tagged ``<sandbox>`` (the exec'd snippet or any function it registered)
+    exceeds the per-``run_code()`` line-event budget.
+
+    ``run_code()`` converts it to an error string before it can reach any
+    other handler, so the BaseException never escapes the sandbox boundary.
     """
 
 
@@ -139,6 +179,7 @@ class SimulatorSandbox:
 
         self.harness = harness
         self.timeout = timeout
+        self._exec_budget = int(float(timeout) * _DEFAULT_EXEC_BUDGET_PER_SECOND)
         self._step_env_callback: (
             Callable[[int, dict[str, Any] | None], dict[str, Any]] | None
         ) = step_env_callback
@@ -190,6 +231,11 @@ class SimulatorSandbox:
         # Level-transition hard-abort flag (set when a winning action is
         # detected inside action(); consumed by run_code's except chain).
         self._transition_pending: bool = False
+
+        # Worker-scoped stdout capture (run_code): the buffer installed as
+        # sys.stdout for the exec worker, and the stream it replaced.
+        self._worker_stdout: StringIO | None = None
+        self._stdout_before_worker: Any = None
 
         # Build persistent namespace
         self.namespace: dict[str, Any] = self._build_namespace()
@@ -835,6 +881,23 @@ class SimulatorSandbox:
         ``action_taken`` is the last action ID taken during this code
         execution, or ``None`` if no action was called.  It is reset
         to ``None`` at the start of each ``run_code()`` call.
+
+        Two-layer runaway protection (replaces the SIGALRM timeout, which
+        was structurally dead: agents run in daemon threads and CPython
+        delivers signals only in the main thread's bytecode loop):
+
+        1. **Tracer budget** (fast path): a per-thread line tracer meters
+           ``<sandbox>``-tagged code and raises ``SandboxBudgetExceeded``
+           when the budget (``timeout`` × 1e6 line events) is exhausted.
+           Covers plain loops and ``except Exception`` swallows.
+        2. **Wall-clock containment** (last resort): the exec runs in a
+           worker thread and the caller joins with ``timeout``. If the
+           worker is still alive (bare ``except:`` can swallow the tracer
+           raise — CPython 3.12 pathology at high event counts), the
+           orphaned namespace is quarantined (tools neutered, fresh
+           namespace swapped in) and ``run_code`` returns a timeout error.
+           The zombie keeps spinning but can no longer reach the
+           environment or the live namespace; the agent loop resumes.
         """
         # Reset action tracker for this execution
         self._action_taken = None
@@ -876,44 +939,96 @@ class SimulatorSandbox:
 
         safe_builtins["__import__"] = safe_import
 
-        old_builtins = self.namespace.get("__builtins__")
-        self.namespace["__builtins__"] = safe_builtins
-
         buf = StringIO()
-        old_stdout = sys.stdout
-        sys.stdout = buf
-        error: str | None = None
+        result: dict[str, Any] = {"output": "", "error": None, "action": None}
+        old_builtins = self.namespace.get("__builtins__")
 
-        in_main_thread = threading.current_thread() is threading.main_thread()
+        # Tool closures (check/bfs/show_frame/set_simulate/...) print via the
+        # module-level print, so capture needs the process stdout swap (the
+        # pre-composite mechanism) — a namespace-scoped shadow print cannot
+        # reach them. The steal bug from the SIGALRM era stays fixed: the
+        # worker restores stdout in its finally, and _quarantine_zombie
+        # restores it when the worker never gets there.
+        self._worker_stdout = buf
+        self._stdout_before_worker = sys.stdout
 
-        old_handler: Any = None
-        if in_main_thread:
+        def _worker() -> None:
+            """Exec the code on this worker thread; never raises.
 
-            def _timeout_handler(signum: int, frame: Any) -> None:  # noqa: ARG001
-                raise TimeoutError(f"Sandbox timed out after {self.timeout}s")
+            The tracer is installed per-thread from inside, so arming it
+            here targets exactly the sandbox execution — no main-thread
+            requirement, no effect on the caller's trace state (e.g.
+            pytest/coverage on the agent thread). The namespace dict is
+            captured once: after a quarantine swap the zombie's finally
+            block would otherwise mutate the fresh namespace.
+            """
+            ns = self.namespace
+            worker_trace = sys.gettrace()
+            sys.settrace(self._make_budget_tracer())
+            ns["__builtins__"] = safe_builtins
+            sys.stdout = buf
+            try:
+                exec(compile(code, "<sandbox>", "exec"), ns)
+            except SandboxBudgetExceeded as exc:
+                result["error"] = (
+                    f"{type(exc).__name__}: your code exceeded the execution "
+                    f"budget ({self._exec_budget} line events for sandbox "
+                    f"code). Bound your loops (e.g. `for _ in range(200)`); "
+                    f"never loop on simulate() output without a step cap."
+                )
+                logger.warning(f"simulatorfirst: sandbox budget exceeded: {exc}")
+            except LevelTransition:
+                result["error"] = None
+            except BaseException as exc:  # noqa: BLE001 — sandbox boundary
+                result["error"] = f"{type(exc).__name__}: {exc}"
+            finally:
+                sys.settrace(worker_trace)
+                if sys.stdout is buf:
+                    sys.stdout = self._stdout_before_worker
+                if old_builtins is not None:
+                    ns["__builtins__"] = old_builtins
+                else:
+                    ns.pop("__builtins__", None)
+                result["output"] = buf.getvalue()
 
-            old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
-            signal.alarm(max(int(self.timeout), 1))
+        worker = threading.Thread(
+            target=_worker, name="sandbox-exec", daemon=True
+        )
+        worker.start()
+        # Containment bound: 4x timeout gives honest slow turns (BFS with
+        # real engine calls burn wall-clock but few line events) room to
+        # finish after the tracer fast-path would have fired on a pure spin.
+        containment_timeout = max(4.0 * self.timeout, 2.0)
+        worker.join(timeout=containment_timeout)
 
-        try:
-            exec(compile(code, "<sandbox>", "exec"), self.namespace)  # noqa: S102
-        except TimeoutError as exc:
-            error = str(exc)
-        except LevelTransition:
-            error = None
-        except Exception as exc:
-            error = f"{type(exc).__name__}: {exc}"
-        finally:
-            if in_main_thread:
-                signal.alarm(0)
-                signal.signal(signal.SIGALRM, old_handler)
-            sys.stdout = old_stdout
-            if old_builtins is not None:
-                self.namespace["__builtins__"] = old_builtins
-            else:
-                self.namespace.pop("__builtins__", None)
+        timed_out = worker.is_alive()
+        if timed_out:
+            self._quarantine_zombie()
+            error = (
+                f"SandboxTimeout: your code did not finish within "
+                f"{containment_timeout:g}s (it also survived the line-event "
+                f"budget, likely via a bare `except:`). The sandbox state "
+                f"was reset; bound your loops (e.g. `for _ in range(200)`) "
+                f"and re-run."
+            )
+            output = "(no output — sandbox timed out and was reset)"
+            logger.critical(
+                "simulatorfirst: sandbox exec exceeded %gs and survived the "
+                "tracer budget — zombie worker quarantined, namespace reset",
+                containment_timeout,
+            )
+        else:
+            error = result["error"]
+            output = self._protect_tool_names(result["output"])
+            if len(output) > _MAX_OUTPUT_CHARS:
+                output = (
+                    output[:_MAX_OUTPUT_CHARS]
+                    + f"\n... (output capped at {_MAX_OUTPUT_CHARS} chars — you printed too much. "
+                    "Use smaller queries: atoms() for overview, find_color() for specific colors, "
+                    "print_region with max 20×20 areas.)"
+                )
 
-        if self._transition_pending:
+        if self._transition_pending and not timed_out:
             self.reset_for_level_transition()
             return (
                 "[LEVEL COMPLETED — board transitioning; stop]",
@@ -921,17 +1036,70 @@ class SimulatorSandbox:
                 self._action_taken,
             )
 
-        output = buf.getvalue()
-        output = self._protect_tool_names(output)
-        if len(output) > _MAX_OUTPUT_CHARS:
-            output = (
-                output[:_MAX_OUTPUT_CHARS]
-                + f"\n... (output capped at {_MAX_OUTPUT_CHARS} chars — you printed too much. "
-                "Use smaller queries: atoms() for overview, find_color() for specific colors, "
-                "print_region with max 20×20 areas.)"
-            )
-
         return (output, error, self._action_taken)
+
+    def _quarantine_zombie(self) -> None:
+        """Contain a runaway exec worker that survived the tracer budget.
+
+        The abandoned worker thread keeps a reference to the *old* namespace
+        dict as its exec globals, so mutation of that dict is harmless — but
+        its tool entries still close over ``self`` and could step the real
+        environment. Replace every protected tool in the orphaned namespace
+        with a raiser, then swap ``self.namespace`` for a fresh build so the
+        next ``run_code()``/``update_state()`` sees pristine bindings.
+        """
+        orphan = self.namespace
+        orphan["action"] = _make_quarantine_raiser("action")
+        for name in self._protected_tools:
+            orphan[name] = _make_quarantine_raiser(name)
+        orphan["print"] = _make_quarantine_raiser("print")
+        orphan["__builtins__"] = _QUARANTINE_SAFE_BUILTINS_SNAPSHOT
+        worker_buf = getattr(self, "_worker_stdout", None)
+        before = getattr(self, "_stdout_before_worker", None)
+        if worker_buf is not None and before is not None and sys.stdout is worker_buf:
+            sys.stdout = before
+        self.namespace = self._build_namespace()
+        self._protected_tools = {
+            k: self.namespace[k]
+            for k in self._protected_tools
+            if k in self.namespace
+        }
+
+    def _make_budget_tracer(self) -> Callable[[Any, str, Any], Any]:
+        """Build a line tracer metering only ``<sandbox>``-tagged code objects.
+
+        On budget exhaustion the tracer disarms itself globally
+        (``sys.settrace(None)``) and goes silent before raising: line events
+        keep firing while the exception unwinds through user ``except:``
+        handlers, and re-raising from those events traps the interpreter in
+        an unwinding loop that never terminates (reproduced on 3.12.3 with
+        budgets >=~50k line events + a bare-except loop). Going silent
+        guarantees unwind-to-``run_code``'s except chain in one pass.
+
+        Returns ``None`` for non-sandbox frames, which disables tracing for
+        that whole call subtree — engine calls and HTTP work inside
+        ``action()`` consume zero budget and add zero tracer overhead there.
+        """
+        budget_remaining = self._exec_budget
+        fired = False
+
+        def tracer(frame: Any, event: str, arg: Any) -> Any:
+            nonlocal fired
+            if frame.f_code.co_filename != "<sandbox>":
+                return None
+            if fired:
+                return None
+            nonlocal budget_remaining
+            budget_remaining -= 1
+            if budget_remaining <= 0:
+                fired = True
+                sys.settrace(None)
+                raise SandboxBudgetExceeded(
+                    f"line-event budget of {self._exec_budget} exceeded"
+                )
+            return tracer
+
+        return tracer
 
     # ── Measurement (called by the harness after each turn) ────────────
 

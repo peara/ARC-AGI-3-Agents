@@ -41,6 +41,7 @@ def make_live_sandbox(
     s = SimulatorSandbox.__new__(SimulatorSandbox)
     s.harness = None
     s.timeout = 30.0
+    s._exec_budget = int(s.timeout * 1_000_000)
     s._step_env_callback = callback
     s.actions_this_turn = 0
     s._action_taken = None
