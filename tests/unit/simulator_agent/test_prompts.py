@@ -1,50 +1,73 @@
-"""Content assertions for simulator agent prompt edits.
+"""Content assertions for simulator agent prompt strings.
 
-These tests verify the Task 1 edits to agents/simulator_agent/prompts.py
-without importing schemas or other constants, and without modifying prompts.py.
+These tests verify documented properties of agents/simulator_agent/prompts.py
+without modifying prompts.py.
 """
 
 from __future__ import annotations
 
-import re
+import pytest
 
 from agents.simulator_agent.prompts import (
     AGENT_GAME_OVERVIEW_ADDENDUM,
+    AGENT_PHASES_OVERVIEW,
+    AGENT_PYTHON_TOOL_ADDENDUM,
     AGENT_SIMULATOR_TOOLS_ADDENDUM,
     AGENT_SYSTEM_PROMPT,
-    AGENT_WORKFLOW_ADDENDUM,
+    AGENT_WORLD_MODEL_ADDENDUM,
 )
 
 
+@pytest.mark.unit
 def test_find_objects_documented():
     assert "find_objects" in AGENT_SIMULATOR_TOOLS_ADDENDUM
 
 
+@pytest.mark.unit
 def test_atoms_ordering_documented():
     text = AGENT_SIMULATOR_TOOLS_ADDENDUM
     assert ("scan order" in text) or ("row-major" in text)
 
 
+@pytest.mark.unit
 def test_background_heuristic_removed():
     assert "most common color" not in AGENT_GAME_OVERVIEW_ADDENDUM.lower()
 
 
-def test_bfs_uses_is_not_none():
-    assert "if path is not None" in AGENT_WORKFLOW_ADDENDUM
+@pytest.mark.unit
+def test_phases_overview_documents_workflow():
+    text = AGENT_PHASES_OVERVIEW
+    assert "EXPLORE → MODEL → PLAN → EXECUTE" in text
+    assert "set_phase" in text
 
 
-def test_bfs_goal_reached_handled():
-    assert "Goal already reached" in AGENT_WORKFLOW_ADDENDUM
+@pytest.mark.unit
+def test_world_model_addendum_documents_update_notes_and_done():
+    text = AGENT_WORLD_MODEL_ADDENDUM
+    assert "update_notes" in text
+    assert "DONE" in text
 
 
-def test_bfs_if_path_colon_absent():
-    assert re.search(r"if path:\s", AGENT_WORKFLOW_ADDENDUM) is None
+@pytest.mark.unit
+def test_python_tool_addendum_documents_limits():
+    text = AGENT_PYTHON_TOOL_ADDENDUM
+    assert "4096 characters" in text
+    assert "30 seconds" in text
 
 
-def test_system_prompt_assembles():
-    assert len(AGENT_SYSTEM_PROMPT) > 1000
+@pytest.mark.unit
+def test_system_prompt_assembles_all_addenda():
+    prompt = AGENT_SYSTEM_PROMPT
+    assert len(prompt) > 1000
+    assert "Runtime state" in prompt
+    assert "Visual game" in prompt
+    assert "Python tool" in prompt
+    assert "Sandbox tools" in prompt
+    assert "How to work" in prompt
+    assert "Notes and Plan" in prompt
 
 
+@pytest.mark.unit
 def test_find_objects_description_accurate():
     text = AGENT_SIMULATOR_TOOLS_ADDENDUM
     start = text.find("find_objects(grid")
