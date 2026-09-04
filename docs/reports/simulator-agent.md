@@ -1,7 +1,7 @@
 # Simulator-First Agent — Design Document
 
 > Architecture and data flow for the SimulatorFirstAgent (simulatorfirst) and the SimulatorSandbox.
-> Last updated: 2026-09-02
+> Last updated: 2026-09-04
 
 ---
 
@@ -119,7 +119,7 @@ flowchart TD
         A1["_non_action_calls++ per non-action tool call"]
         A2["action taken → reset to 0"]
         A3["≥12: append nudge message"]
-        A4["≥24: set_phase MODEL + reset counter"]
+        A4["≥24: set_phase MODEL (counter continues)"]
         A5["≥36: terminate loop"]
         A1 --> A2
         A2 --> A3
@@ -130,20 +130,22 @@ flowchart TD
 
 ### Anti-spiral guard
 
-`run()` tracks `_non_action_calls` to prevent infinite tool-call spirals when
-the LLM keeps thinking but never acts:
+`_run_tool_loop` tracks `_non_action_calls` (threshold policy in `SpiralGuard`,
+`workflow.py`) to prevent infinite tool-call spirals when the LLM keeps
+thinking but never acts:
 
 - **Counter semantics.** The counter increments by 1 for every non-action tool
   call (`python`, `update_notes`, etc.) that does **not** result in an
   environment action. It resets to 0 whenever an action is executed.
 - **Nudge at ≥12.** A user nudge message is appended: "You have not taken an
   action in the last 12 tool calls...". This reminds the LLM to act.
-- **Phase reset at ≥24.** `set_phase("MODEL", reason="consecutive-tool-call-cap")`
-  is called and the counter resets to 0. This forces the agent back into
-  model-building mode without ending the game.
-- **Hard cap at ≥36.** The inner tool loop breaks, the outer game loop ends,
-  and the agent returns. The game terminates because the LLM exceeded the
-  non-action budget.
+- **Phase force at ≥24.** `set_phase("MODEL", reason="consecutive-tool-call-cap")`
+  is called. The counter continues (no reset — only an executed action resets
+  it). This forces the agent back into model-building mode without ending
+  the game.
+- **Hard cap at ≥36.** The inner tool loop returns a terminate flag, `run()`
+  returns immediately (persistent-history save skipped), and the game ends.
+  The game terminates because the LLM exceeded the non-action budget.
 
 ### Vestigial base-class stubs
 
@@ -219,7 +221,7 @@ The `SimulatorSandbox` namespace persists across LLM turns. `set_simulate(func)`
 
 ## 5. Context Trimming
 
-Local LLMs (gemma-4-31b via LM Studio) have a 32k token context window. The agent uses a 3-layer trimming pipeline before each LLM call:
+Local LLMs (gemma-4-31b via LM Studio) have a 32k token context window. The agent uses a 3-layer trimming pipeline before each LLM call. The pipeline lives in `conversation.py` as pure module-level functions; the agent class keeps thin delegating wrappers (`SimulatorFirstAgent._trim_*`) because tests pin those names and a budget regression test monkeypatches `_trim_messages_for_context` on an instance:
 
 1. **`_trim_old_tool_results(keep_last_n=3)`** — replaces old tool result content with `[Old output (N chars, trimmed)]`. Keeps the last 3 tool results intact. Exempts `update_notes` results (tiny, ~50 chars) and the last tool result (may contain action trigger). Mutates in-place, never deletes messages (API pairing requirement).
 
@@ -383,8 +385,11 @@ agents/
 ├── loop_agent.py        — LoopAgent base class: final traced main(), abstract run(), vestigial stubs
 └── simulator_agent/
     ├── __init__.py          — exports SimulatorFirstAgent, SimulatorSandbox, run_experiment, prompts
-    ├── agent.py             — SimulatorFirstAgent(LoopAgent): run(), step_env, context trimming
+    ├── agent.py             — SimulatorFirstAgent(LoopAgent): run() orchestration, tool loop + dispatch, step_env
+    ├── conversation.py      — pure message-list trimming pipeline (estimate_tokens, trim_*, strip_*)
+    ├── exception_flow.py    — build_exception_flow_message (simulate-crash / region-diff diagnosis text)
     ├── sandbox.py           — SimulatorSandbox: in-process exec, action(), bfs(), check(), diagnose(), two modes
+    ├── workflow.py          — WorkflowController (EXPLORE→MODEL→PLAN→EXECUTE) + SpiralGuard (12/24/36 thresholds)
     ├── prompts.py           — AGENT_SYSTEM_PROMPT (7 addendums), build_agent_user_prompt, tool schemas
     ├── tools.py             — 11 pure grid functions (segment_atoms, find_color, compute_delta, etc.)
     ├── check.py             — run_check, diagnose, cluster_cells (grid-based simulate)
