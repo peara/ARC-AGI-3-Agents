@@ -506,8 +506,11 @@ class SimulatorSandbox:
             if fn is None:
                 print("No simulate function set. Call set_simulate(func) first.")
                 return {"error": "no simulate function"}
-            if not self._grids:
-                print("No simulate frames recorded.")
+            if len(self._grids) < 2:
+                print(
+                    "No transitions recorded yet — take an action first "
+                    "(check() needs a before/after grid pair)."
+                )
                 return {"error": "no frames recorded"}
             result = run_check(
                 fn,
@@ -538,8 +541,11 @@ class SimulatorSandbox:
             if fn is None:
                 print("No simulate function set. Call set_simulate(func) first.")
                 return {"error": "no simulate function"}
-            if not self._grids:
-                print("No simulate frames recorded.")
+            if len(self._grids) < 2:
+                print(
+                    "No transitions recorded yet — take an action first "
+                    "(diagnose() needs a before/after grid pair)."
+                )
                 return {"error": "no frames recorded"}
             return diagnose_fn(
                 fn, self._grids, self._actions, ignore_mask=self._ignore_mask
@@ -835,6 +841,13 @@ class SimulatorSandbox:
         self._previous_grid = previous_frame
         self._valid_actions = valid_actions
         self._last_action_result = last_action_result
+
+        # Seed frame 0 so check()/diagnose() have data before any action();
+        # action()'s first-append branch only fires when _grids is empty,
+        # so seeding here keeps grids[i]+actions[i]->grids[i+1] consistent.
+        if not self._grids and current_frame is not None:
+            self._grids.append([row[:] for row in current_frame])
+            self.namespace["n_frames"] = len(self._grids)
 
     def reset_turn_counter(self) -> None:
         """Reset the per-turn action counter and action_taken tracker.

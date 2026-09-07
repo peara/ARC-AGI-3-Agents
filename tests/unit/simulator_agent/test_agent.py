@@ -1810,16 +1810,148 @@ class TestLevelTransition:
         assert sandbox._simulate is not None, (
             "simulate must be preserved across level transition"
         )
-        assert sandbox._grids == [], (
-            f"sandbox._grids must be empty after transition (got {len(sandbox._grids)})"
+        assert len(sandbox._grids) == 1, (
+            "after transition + reseed, _grids must hold exactly the new "
+            f"level's frame 0 (got {len(sandbox._grids)} grids)"
         )
 
         output, error, _ = sandbox.run_code("check()")
         assert error is None, f"check() must not raise (got error: {error})"
         combined = output or ""
-        assert "No simulate frames recorded" in combined, (
-            f"check() output must report no frames (got: {combined[:120]!r})"
+        assert "No transitions recorded yet" in combined, (
+            f"check() output must report no transitions (got: {combined[:120]!r})"
         )
+        assert sandbox._grids == [sandbox._current_frame], (
+            "after transition + reseed, _grids must hold exactly the new "
+            f"level's frame 0 (got {len(sandbox._grids)} grids)"
+        )
+
+
+class TestFrameZeroSeed:
+    """Seed of grids[0] in live mode (ls20-simulate-spiral brainstorm).
+
+    update_state() appends the current frame when _grids is empty so
+    check()/diagnose() can see frame 0 before any action(); with fewer than
+    2 grids they report an honest 'no transitions' message instead of a
+    misleading 0-frame accuracy.
+    """
+
+    def _make_seeded(self, live_sandbox):
+        sandbox = live_sandbox()
+        grid = [[3] * 4 for _ in range(4)]
+        sandbox.update_state(
+            objects=(),
+            adjacency=frozenset(),
+            current_frame=grid,
+            previous_frame=None,
+            valid_actions=[1, 2],
+            last_action_result={},
+            history=[],
+        )
+        return sandbox
+
+    @pytest.mark.unit
+    def test_update_state_seeds_frame_zero(self, live_sandbox):
+        sandbox = self._make_seeded(live_sandbox)
+        assert sandbox._grids == [[[3] * 4 for _ in range(4)]]
+        assert sandbox.namespace["n_frames"] == 1
+
+    @pytest.mark.unit
+    def test_seed_is_deep_copy(self, live_sandbox):
+        grid = [[3] * 4 for _ in range(4)]
+        sandbox = live_sandbox()
+        sandbox.update_state(
+            objects=(),
+            adjacency=frozenset(),
+            current_frame=grid,
+            previous_frame=None,
+            valid_actions=[1, 2],
+            last_action_result={},
+            history=[],
+        )
+        sandbox._current_frame[0][0] = 99
+        assert sandbox._grids[0][0][0] == 3, (
+            "seeded grid must be a copy — mutating current_frame must not "
+            "alter the recorded frame 0"
+        )
+
+    @pytest.mark.unit
+    def test_seed_not_duplicated_on_second_update_state(self, live_sandbox):
+        sandbox = self._make_seeded(live_sandbox)
+        sandbox.update_state(
+            objects=(),
+            adjacency=frozenset(),
+            current_frame=[[5] * 4 for _ in range(4)],
+            previous_frame=None,
+            valid_actions=[1, 2],
+            last_action_result={},
+            history=[],
+        )
+        assert len(sandbox._grids) == 1, (
+            "seeding must only fire when _grids is empty"
+        )
+
+    @pytest.mark.unit
+    def test_action_after_seed_keeps_pairing_consistent(self, live_sandbox):
+        """action() skips its first-append branch when _grids is non-empty —
+        the seeded grid IS the pre-action grid, so grids[i]+actions[i]->
+        grids[i+1] pairing survives."""
+        sandbox = self._make_seeded(live_sandbox)
+        sandbox._current_frame = [[0] * 8 for _ in range(8)]
+        sandbox.namespace["current_frame"] = sandbox._current_frame
+        output, error, taken = sandbox.run_code("action(1)")
+        assert error is None
+        assert taken == 1
+        assert len(sandbox._grids) == 2, (
+            f"seed + 1 action = 2 grids (got {len(sandbox._grids)})"
+        )
+        assert len(sandbox._actions) == 1
+
+    @pytest.mark.unit
+    def test_check_with_single_seeded_grid_reports_no_transitions(
+        self, live_sandbox
+    ):
+        sandbox = self._make_seeded(live_sandbox)
+        sandbox.run_code("def my_sim(g, a):\n    return g\nset_simulate(my_sim)\n")
+        output, error, _ = sandbox.run_code("check()")
+        assert error is None
+        assert "No transitions recorded yet" in output
+        # Guard returns before run_check: the check-failure counter must not
+        # see a fake failure for a state with nothing to test.
+        assert sandbox._last_check_result is None
+
+    @pytest.mark.unit
+    def test_check_works_after_seed_plus_action(self, live_sandbox):
+        def small_step(action_id: int, action_data: object) -> dict[str, object]:
+            return {
+                "objects": (),
+                "adjacency": frozenset(),
+                "history": [],
+                "grid": [[0] * 4 for _ in range(4)],
+                "valid_actions": [1, 2],
+                "last_action_result": {},
+            }
+
+        sandbox = SimulatorSandbox(step_env_callback=small_step, timeout=5.0)
+        sandbox._current_frame = [[3] * 4 for _ in range(4)]
+        sandbox.update_state(
+            objects=(),
+            adjacency=frozenset(),
+            current_frame=sandbox._current_frame,
+            previous_frame=None,
+            valid_actions=[1, 2],
+            last_action_result={},
+            history=[],
+        )
+        sandbox.run_code("action(1)")
+        sandbox.run_code("def my_sim(g, a):\n    return g\nset_simulate(my_sim)\n")
+        output, error, _ = sandbox.run_code("check()")
+        assert error is None
+        assert "No transitions" not in output, (
+            "with a seed + 1 action there is 1 transition — check() must run"
+        )
+
+
 # 8. Event-driven state refactor (T1–T3: per-action history, prompt refresh,
 #    workflow guardrails mid-batch)
 # ═══════════════════════════════════════════════════════════════════════════════

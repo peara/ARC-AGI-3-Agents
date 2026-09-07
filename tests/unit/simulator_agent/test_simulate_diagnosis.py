@@ -271,7 +271,7 @@ def test_transition_clears_grids_and_check_state(seeded_live_sandbox, win_callba
 
     output, error, _ = s.run_code("check()")
     assert error is None
-    assert "No simulate frames recorded" in output
+    assert "No transitions recorded yet" in output
 
 
 @pytest.mark.unit
@@ -300,4 +300,4 @@ def test_check_with_empty_history_after_clear(seeded_live_sandbox, win_callback)
 
     output, error, _ = s.run_code("check()")
     assert error is None
-    assert "No simulate frames recorded" in output
+    assert "No transitions recorded yet" in output
