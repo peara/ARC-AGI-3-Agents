@@ -18,6 +18,7 @@ in live mode the callback is called directly in-process).
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import io
 import logging
 import re
@@ -991,8 +992,15 @@ class SimulatorSandbox:
                     ns.pop("__builtins__", None)
                 result["output"] = buf.getvalue()
 
+        # Incident a21a2571 (after 24e7dce): _active_log_path is a ContextVar
+        # (agents/agent.py) — thread-local, so this worker got a FRESH context
+        # and every log line emitted from sandbox code (ACTION counts, phase=,
+        # check results) was silently dropped by the recording filter.
+        worker_ctx = contextvars.copy_context()
         worker = threading.Thread(
-            target=_worker, name="sandbox-exec", daemon=True
+            target=lambda: worker_ctx.run(_worker),
+            name="sandbox-exec",
+            daemon=True,
         )
         worker.start()
         # Containment bound: 4x timeout gives honest slow turns (BFS with
