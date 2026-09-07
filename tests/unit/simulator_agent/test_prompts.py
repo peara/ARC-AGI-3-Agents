@@ -12,6 +12,7 @@ from agents.simulator_agent.prompts import (
     AGENT_GAME_OVERVIEW_ADDENDUM,
     AGENT_PHASES_OVERVIEW,
     AGENT_PYTHON_TOOL_ADDENDUM,
+    AGENT_RUNTIME_STATE_ADDENDUM,
     AGENT_SIMULATOR_TOOLS_ADDENDUM,
     AGENT_SYSTEM_PROMPT,
     AGENT_WORLD_MODEL_ADDENDUM,
@@ -78,3 +79,38 @@ def test_find_objects_description_accurate():
     description = text[start:end]
     assert ("sorted by size" in description) or ("size descending" in description)
     assert ("proximity" in description) or ("within 2 cells" in description)
+
+
+@pytest.mark.unit
+def test_simulate_redefinition_guidance_present():
+    """a21a2571: the model defined `def simulate(...)` 6 times, silently
+    discarded each time. The prompt must explain the protected name and
+    show the register-an-alias pattern."""
+    text = AGENT_SIMULATOR_TOOLS_ADDENDUM
+    assert "NEVER define a function named `simulate`" in text
+    assert "set_simulate(" in text
+    assert "any name except 'simulate'" in text
+
+
+@pytest.mark.unit
+def test_history_transition_pairing_documented():
+    """a21a2571: the model paired history[i]["action"] with the transition
+    TO history[i+1]["frame"], corrupting the action->direction mapping.
+    The runtime-state addendum must state the pairing formula."""
+    text = AGENT_RUNTIME_STATE_ADDENDUM
+    assert 'before = history[i-1]["frame"]' in text
+    assert 'after  = history[i]["frame"]' in text
+    assert "sim(before, a_i) must equal after" in text
+    assert "off-by-one" in text
+
+
+@pytest.mark.unit
+def test_diagnose_usage_example_documented():
+    """a21a2571: diagnose() was never called (0 of 72 LLM calls). The
+    VALIDATION section must explain MISSED/SPURIOUS/WRONG_VALUE and when
+    to run it."""
+    text = AGENT_SIMULATOR_TOOLS_ADDENDUM
+    assert "MISSED" in text
+    assert "SPURIOUS" in text
+    assert "WRONG_VALUE" in text
+    assert "call diagnose() BEFORE rewriting" in text

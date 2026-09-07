@@ -82,10 +82,17 @@ The following variables are preloaded in the Python sandbox each turn:
 - `current_frame`: The current 64×64 grid as a list of lists of integers (0–15).
 - `previous_frame`: The previous frame's grid in the same format, or None on \
 the first frame.
-- `history`: A list of past frames and actions. Each entry is a dict with:
-  - `action`: int — the action ID that was taken.
-  - `frame`: list[list[int]] — the 64×64 grid after that action.
-  Use `history[-1]` for the most recent past frame.
+- `history`: executed actions and their resulting grids. Entry i is
+  {"action": a_i, "frame": F_i} where F_i is the grid AFTER a_i fired.
+  The action in entry i was taken FROM the grid in entry i-1:
+      before = history[i-1]["frame"]   # state before a_i
+      after  = history[i]["frame"]     # state after a_i
+      sim(before, a_i) must equal after
+  Example: history = [{"action": 1, "frame": G1}, {"action": 3, "frame": G2}]
+  means action 1 produced G1, then action 3 was applied to G1 producing G2.
+  To learn what action 3 does: diff(history[0]["frame"], history[1]["frame"]).
+  Pairing history[i]["action"] with the transition TO history[i+1]["frame"]
+  instead is an off-by-one that silently corrupts the action→direction mapping.
 - `valid_actions`: A list of action IDs available this turn (e.g. [0, 1, 2, 3]).
 - `last_action_result`: A dict with fields: `board_changed` (bool), `done` (bool), \
 `level_completed` (bool), `game_over` (bool), `run_complete` (bool), `reward` (int), \
@@ -160,9 +167,28 @@ SIMULATOR:
   simulate(grid, action) -> run the registered simulator
   set_ignore(cells, colors) -> skip these in check()/diagnose()
 
+NEVER define a function named `simulate` in your code — that name is a
+protected builtin tool. Your definition is silently discarded and triggers
+a sandbox warning. Name your candidate anything else and register it:
+
+    def my_sim(grid, action):   # any name except 'simulate'
+        ...
+    set_simulate(my_sim)        # registers my_sim as the simulator
+
+After registration, the builtin `simulate(grid, action)` runs my_sim for
+self-testing, and check()/diagnose() with no argument test my_sim.
+
 VALIDATION:
-  check(simulate_fn)    -> accuracy on recorded frames
-  diagnose(simulate_fn) -> semantic error analysis
+  check(simulate_fn)    -> per-frame accuracy: wrong/changed/spurious counts
+  diagnose(simulate_fn) -> WHERE and WHY check() is wrong, grouped by region:
+        MISSED      = reality changed, your simulate didn't
+        SPURIOUS    = your simulate changed cells reality didn't
+        WRONG_VALUE = changed to the wrong color
+  Workflow: when check() shows wrong cells and you can't see the cause,
+  call diagnose() BEFORE rewriting — the failing region identifies which
+  rule is wrong. Example output:
+    "Frame 9 Action 1: 12 errors / MISSED(10): rows 15-19 cols 34-38"
+    -> your simulate missed the sprite landing there: movement/collision bug.
 
 PLANNING:
   bfs(start_grid, goal_fn) -> search for a path (max depth 20, requires simulate)
