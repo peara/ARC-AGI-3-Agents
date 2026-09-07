@@ -75,7 +75,7 @@ SimulatorFirstAgent.run():
   refresh (T2) replaces the last frame-bearing user message in-place after
   each action, preventing image bloat.
 
-**In-process sandbox:** Unlike the duck harness (which uses `multiprocessing.Pipe` for IPC), SimulatorSandbox runs in the same process. `action()` calls `step_env_callback` directly. This is simpler and faster; isolation is two-layer instead of a process boundary: (1) a per-thread line tracer budgets sandbox-tagged code (`timeout` × 1e6 line events) and raises an uncatchable `SandboxBudgetExceeded` — the fast path for plain loops and `except Exception` swallows; (2) wall-clock containment — the exec runs in a worker thread the caller joins with 4× `timeout`; a worker that survives the budget (bare `except:` can swallow the tracer raise on CPython 3.12) gets its namespace quarantined (tools neutered, fresh namespace swapped in) and `run_code()` returns a `SandboxTimeout` error, so the tool loop always resumes. The pre-composite SIGALRM timeout was removed: it was structurally dead in production — agents run in daemon threads (`swarm.py:94`) and CPython delivers signals only in the main thread's bytecode loop.
+**In-process sandbox:** Unlike the duck harness (which uses `multiprocessing.Pipe` for IPC), SimulatorSandbox runs in the same process. `action()` calls `step_env_callback` directly. This is simpler and faster; isolation is two-layer instead of a process boundary: (1) a per-thread line tracer budgets sandbox-tagged code (`timeout` × 1e6 line events) and raises an uncatchable `SandboxBudgetExceeded` — the fast path for plain loops and `except Exception` swallows; (2) wall-clock containment — the exec runs in a worker thread the caller joins with 4× `timeout`; a worker that survives the budget (bare `except:` can swallow the tracer raise on CPython 3.12) gets its namespace quarantined (tools neutered, fresh namespace swapped in) and `run_code()` returns a `SandboxTimeout` error, so the tool loop always resumes. The pre-composite SIGALRM timeout was removed: it was structurally dead in production — agents run in daemon threads (`swarm.py:94`) and CPython delivers signals only in the main thread's bytecode loop. The worker runs inside a copy of the caller's `contextvars` context: per-recording log routing keys off the `_active_log_path` ContextVar (thread-local), so without propagation every log line emitted from sandbox code (`ACTION1: count N`, workflow `phase=` lines, check results) was silently dropped by the recording filter (incident `a21a2571`, after `24e7dce`).
 
 **Two construction modes:**
 
@@ -106,7 +106,7 @@ flowchart TD
     TOOL -->|python| SANDBOX[run_code in sandbox]
     SANDBOX --> ACT_CHECK{action() called?}
     ACT_CHECK -->|Yes| HOOK[_on_action_executed<br/>append history + guardrails]
-    ACT_CHECK -->|No| NUDGE[nudge message]
+    ACT_CHECK -->|No| NUDGE[nudge + mid-turn<br/>escape guardrails]
     HOOK --> REFRESH[prompt refresh in-place]
     REFRESH --> BREAK_INNER[break inner loop<br/>continue outer loop]
     NUDGE --> LOOP_ITER[continue inner loop]
@@ -119,7 +119,7 @@ flowchart TD
         A1["_non_action_calls++ per non-action tool call"]
         A2["action taken → reset to 0"]
         A3["≥12: append nudge message"]
-        A4["≥24: set_phase MODEL (counter continues)"]
+        A4["≥24: set_phase MODEL (suppressed if escape fired)"]
         A5["≥36: terminate loop"]
         A1 --> A2
         A2 --> A3
@@ -142,10 +142,27 @@ thinking but never acts:
 - **Phase force at ≥24.** `set_phase("MODEL", reason="consecutive-tool-call-cap")`
   is called. The counter continues (no reset — only an executed action resets
   it). This forces the agent back into model-building mode without ending
-  the game.
+  the game. Suppressed while `WorkflowController.escape_fired` is set: once an
+  escape guardrail has rescued the phase to EXPLORE during the current spiral,
+  the forced MODEL would just undo it (incident `a21a2571` — rescue fired at
+  ~24, forced MODEL dragged it straight back, spiral ran to the cap). The flag
+  clears in `update()` (turn boundary / after each action), i.e. on every
+  spiral reset.
 - **Hard cap at ≥36.** The inner tool loop returns a terminate flag, `run()`
   returns immediately (persistent-history save skipped), and the game ends.
   The game terminates because the LLM exceeded the non-action budget.
+
+### Mid-turn escape guardrails
+
+The workflow's escape guardrails (MODEL→EXPLORE after 5 consecutive check
+failures, any→EXPLORE after 3 exception flows) live in
+`WorkflowController.apply_escape_guardrails()`, split out of `update()`
+(turn-start only) so the tool loop can evaluate them **after every non-action
+python call**. Before the split, a no-action spiral made the rescue
+structurally unreachable: `_check_failures` climbed past 5 while nothing read
+it (incident `a21a2571` — 37 tool calls, all check failures, game terminated
+in MODEL). When a guardrail fires mid-turn, the new phase directive is
+injected into the conversation so the LLM actually sees the rescue.
 
 ### Vestigial base-class stubs
 
