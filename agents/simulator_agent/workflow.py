@@ -69,10 +69,24 @@ class WorkflowController:
         self._exception_flow_count: int = 0
         self._last_path: list[int] | None = None
         self._action_counter: int = 0
+        self._escape_fired: bool = False
 
     @property
     def phase(self) -> Phase:
         return self._phase
+
+    @property
+    def escape_fired(self) -> bool:
+        """True while an escape guardrail has fired in the current spiral.
+
+        The tool loop uses this to suppress the forced set_phase('MODEL') —
+        otherwise it re-fires every iteration at >=24 non-action calls and
+        undoes the MODEL→EXPLORE rescue (incident a21a2571: rescue fired,
+        forced MODEL pulled the phase back, spiral continued to the cap).
+        Cleared by update() (turn boundary / after each action) — i.e. on
+        every spiral reset.
+        """
+        return self._escape_fired
 
     def update(self, action_counter: int) -> Phase:
         """Apply guardrails. Called once per turn BEFORE the LLM call."""
@@ -80,16 +94,35 @@ class WorkflowController:
         frame = action_counter - 1
         logger.info("frame=%d phase=%s actions=%d", frame, self._phase.value, action_counter)
 
+        self._escape_fired = False
+
         # Guardrail: auto-advance from EXPLORE after 10 actions
         if self._phase == Phase.EXPLORE and action_counter >= 10:
             self._phase = Phase.MODEL
             logger.info("frame=%d guardrail: EXPLORE→MODEL (action_counter=%d)", frame, action_counter)
 
+        self.apply_escape_guardrails()
+        return self._phase
+
+    def apply_escape_guardrails(self) -> bool:
+        """Evaluate the escape guardrails (check-failure, exception-flow).
+
+        Returns True when the phase changed. Split from ``update()`` so the
+        tool loop can evaluate them mid-turn: during a no-action tool spiral,
+        ``update()`` only ran at turn boundaries and after actions, so the
+        MODEL→EXPLORE rescue after 5 check failures was structurally
+        unreachable (incident a21a2571 — 37 tool calls, failures climbed past
+        5, nothing read them).
+        """
+        frame = self._action_counter - 1
+
         # Guardrail: after 5 check failures in MODEL, back to EXPLORE
         if self._phase == Phase.MODEL and self._check_failures >= 5:
             self._phase = Phase.EXPLORE
             self._check_failures = 0
+            self._escape_fired = True
             logger.warning("frame=%d guardrail: MODEL→EXPLORE (5 consecutive check failures)", frame)
+            return True
 
         # Guardrail: after 3 exception flows, back to EXPLORE
         if self._exception_flow_count >= 3:
@@ -97,9 +130,11 @@ class WorkflowController:
             self._phase = Phase.EXPLORE
             self._exception_flow_count = 0
             self._last_path = None
+            self._escape_fired = True
             logger.warning("frame=%d guardrail: %s→EXPLORE (3 exception flows)", frame, old_phase)
+            return True
 
-        return self._phase
+        return False
 
     def set_phase(self, phase_str: str, reason: str) -> tuple[bool, str]:
         """LLM requests phase change. Validate and apply.
@@ -199,6 +234,7 @@ class WorkflowController:
         self._check_failures = 0
         self._exception_flow_count = 0
         self._last_path = None
+        self._escape_fired = False
 
     @property
     def path(self) -> list[int] | None:

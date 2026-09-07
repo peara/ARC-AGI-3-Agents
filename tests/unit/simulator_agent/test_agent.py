@@ -2904,6 +2904,129 @@ class TestAntiSpiralGuard:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+class TestMidTurnEscapeGuardrail:
+    """a21a2571 regression: the MODEL→EXPLORE rescue after 5 check failures
+    must fire DURING a no-action tool spiral.
+
+    The run spent 37 consecutive python calls at frame 19 with check()
+    accuracy stuck at 1.4% — _check_failures climbed past 5, but update()
+    only ran at turn boundaries, so the rescue never fired and the game was
+    terminated by the 36-call cap with the agent still in MODEL.
+    """
+
+    def _make_check_spiral_agent(self):
+        import numpy as np
+        from arcengine import FrameData, GameState
+
+        from agents.simulator_agent.sandbox import SimulatorSandbox
+        from agents.simulator_agent.workflow import WorkflowController
+
+        agent = SimulatorFirstAgent.__new__(SimulatorFirstAgent)
+        agent.MAX_ACTIONS = 100
+        agent.action_counter = 0
+        agent.game_id = "test-midturn-escape"
+        agent.frames = [
+            FrameData(
+                game_id="test-midturn-escape",
+                frame=np.zeros((1, 64, 64), dtype=int),
+                state=GameState.NOT_FINISHED,
+                levels_completed=0,
+                win_levels=7,
+                available_actions=[1, 2, 3, 4],
+            )
+        ]
+        agent._world_model = {"notes": "", "plan": ""}
+        agent._history_messages = []
+        agent._history_turns = []
+        agent._valid_actions = [1, 2, 3, 4]
+        agent._last_action_result = {}
+        agent._current_grid = [[0] * 64 for _ in range(64)]
+        agent._previous_grid = None
+        agent._context_budget_tokens = 100000
+        agent._exception_flow_fired_for = None
+        agent._non_action_calls = 0
+        agent._objects = ()
+        agent._adjacency = frozenset()
+        agent._current_grid_levels_completed = 0
+        agent._transition_ended_turn = False
+
+        def adapter(action_id: int, action_data):
+            return {
+                "objects": (),
+                "adjacency": frozenset(),
+                "history": [],
+                "grid": agent._current_grid,
+                "valid_actions": [1, 2, 3, 4],
+                "last_action_result": {},
+            }
+
+        sandbox = SimulatorSandbox(step_env_callback=adapter, timeout=30.0)
+        sandbox._current_frame = agent._current_grid
+        sandbox.namespace["current_frame"] = sandbox._current_frame
+        sandbox.namespace["previous_frame"] = None
+        agent._sandbox = sandbox
+        agent._workflow = WorkflowController(sandbox)
+        # Seed the spiral state: turn-start directive is MODEL, so a
+        # "PHASE: EXPLORE" string can only appear via the mid-turn guardrail.
+        agent._workflow.set_phase("MODEL", "ready to model")
+
+        # Every python call runs check() and fails (new result dict each
+        # call — _handle_python_call detects a fresh check by identity).
+        def fake_run_code(code):
+            sandbox._last_check_result = {
+                "wrong_cells": 500,
+                "overall_accuracy": 1.4,
+            }
+            return ("Overall: 500 wrong, 0 correct (1.4%)", None, None)
+
+        sandbox.run_code = fake_run_code  # type: ignore[method-assign]
+
+        saw_explore_directive = [False]
+
+        def fake_llm_chat(**kwargs):
+            for m in kwargs.get("messages", []):
+                content = m.get("content")
+                texts = content if isinstance(content, list) else [content]
+                for t in texts:
+                    if isinstance(t, str) and "PHASE: EXPLORE" in t:
+                        saw_explore_directive[0] = True
+            return type(
+                "R",
+                (),
+                {
+                    "tool_calls": [{
+                        "id": "tc-x",
+                        "type": "function",
+                        "function": {
+                            "name": "python",
+                            "arguments": '{"code": "check()"}',
+                        },
+                    }],
+                    "content": None,
+                },
+            )()
+
+        agent._llm_chat = fake_llm_chat
+        return agent, saw_explore_directive
+
+    @pytest.mark.unit
+    def test_model_to_explore_fires_mid_spiral_after_5_check_failures(self):
+        agent, saw_explore_directive = self._make_check_spiral_agent()
+        agent.run()
+        assert agent._workflow.phase.value == "EXPLORE", (
+            "escape guardrail must rescue the agent out of MODEL mid-turn "
+            f"(got {agent._workflow.phase.value})"
+        )
+        assert saw_explore_directive[0], (
+            "the EXPLORE directive must be injected into the conversation "
+            "when the mid-turn guardrail fires"
+        )
+        assert agent._non_action_calls >= 36, (
+            "spiral still terminates via the 36-call cap — the fix changes "
+            "the phase mid-spiral, it does not remove the cap"
+        )
+
+
 class TestSpiralGuard:
     """Unit tests for the SpiralGuard policy class (thresholds 12/24/36)."""
 

@@ -309,12 +309,20 @@ class SimulatorFirstAgent(LoopAgent):
                     }
                 )
             if verdict.phase_model:
-                logger.warning(
-                    f"simulatorfirst: frame={self.action_counter - 1} guardrail: "
-                    f"{self._non_action_calls} consecutive non-action calls — "
-                    f"set_phase('MODEL')"
-                )
-                self._workflow.set_phase("MODEL", reason="consecutive-tool-call-cap")
+                if self._workflow.escape_fired:
+                    # a21a2571: forced MODEL would undo the mid-spiral escape rescue
+                    logger.info(
+                        f"simulatorfirst: frame={self.action_counter - 1} guardrail: "
+                        f"{self._non_action_calls} consecutive non-action calls — "
+                        f"set_phase('MODEL') suppressed (escape fired this spiral)"
+                    )
+                else:
+                    logger.warning(
+                        f"simulatorfirst: frame={self.action_counter - 1} guardrail: "
+                        f"{self._non_action_calls} consecutive non-action calls — "
+                        f"set_phase('MODEL')"
+                    )
+                    self._workflow.set_phase("MODEL", reason="consecutive-tool-call-cap")
 
             # ── End condition check (per iteration) ────────────────
             latest_frame = self.frames[-1]
@@ -402,6 +410,16 @@ class SimulatorFirstAgent(LoopAgent):
                             # iteration, whose end-condition check returned from
                             # run() without a history save.
                             return messages, True
+
+                        # a21a2571: escape guardrails must fire mid-spiral, not just at turn boundaries
+                        if action_taken_id is None:
+                            if self._workflow.apply_escape_guardrails():
+                                messages.append(
+                                    {
+                                        "role": "user",
+                                        "content": self._workflow.directive(),
+                                    }
+                                )
 
                         # Nudge: remind LLM to record notes if it discovered something new
                         messages.append(

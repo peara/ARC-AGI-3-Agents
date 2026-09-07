@@ -281,3 +281,83 @@ def test_reset_to_explore_default_reason_truncates_long_reason(
         + "'" in r.message
         for r in caplog.records
     )
+
+
+class TestApplyEscapeGuardrails:
+    """Standalone escape-guardrail evaluation (incident a21a2571).
+
+    The tool loop calls apply_escape_guardrails() after every non-action
+    python call; update() delegates to the same method at turn boundaries.
+    """
+
+    @pytest.mark.unit
+    def test_fires_model_to_explore_after_5_check_failures(self, plain_sandbox) -> None:
+        sandbox = plain_sandbox()
+        controller = WorkflowController(sandbox)
+        controller.set_phase("MODEL", "ready to model")
+        for _ in range(5):
+            controller.on_check_result({"wrong_cells": 5})
+        changed = controller.apply_escape_guardrails()
+        assert changed is True
+        assert controller.phase == Phase.EXPLORE
+        assert controller._check_failures == 0
+
+    @pytest.mark.unit
+    def test_no_change_below_threshold(self, plain_sandbox) -> None:
+        sandbox = plain_sandbox()
+        controller = WorkflowController(sandbox)
+        controller.set_phase("MODEL", "ready to model")
+        for _ in range(4):
+            controller.on_check_result({"wrong_cells": 5})
+        assert controller.apply_escape_guardrails() is False
+        assert controller.phase == Phase.MODEL
+        assert controller._check_failures == 4
+
+    @pytest.mark.unit
+    def test_fires_explore_to_explore_after_3_exception_flows(self, plain_sandbox) -> None:
+        sandbox = plain_sandbox()
+        controller = WorkflowController(sandbox)
+        controller.on_bfs_result([0, 1, 2])
+        for _ in range(3):
+            controller.on_exception_flow()
+        changed = controller.apply_escape_guardrails()
+        assert changed is True
+        assert controller.phase == Phase.EXPLORE
+        assert controller._exception_flow_count == 0
+        assert controller.path is None
+
+    @pytest.mark.unit
+    def test_no_change_with_zero_counters(self, plain_sandbox) -> None:
+        sandbox = plain_sandbox()
+        controller = WorkflowController(sandbox)
+        controller.set_phase("MODEL", "ready")
+        assert controller.apply_escape_guardrails() is False
+        assert controller.phase == Phase.MODEL
+
+    @pytest.mark.unit
+    def test_update_still_applies_escape_guardrails(self, plain_sandbox) -> None:
+        """update() delegates to the same guardrails — turn-boundary behavior
+        is unchanged from the pre-split contract."""
+        sandbox = plain_sandbox()
+        controller = WorkflowController(sandbox)
+        controller.set_phase("MODEL", "ready to model")
+        for _ in range(5):
+            controller.on_check_result({"wrong_cells": 5})
+        controller.update(action_counter=0)
+        assert controller.phase == Phase.EXPLORE
+
+    @pytest.mark.unit
+    def test_midturn_escape_log(self, plain_sandbox, caplog: pytest.LogCaptureFixture) -> None:
+        sandbox = plain_sandbox()
+        controller = WorkflowController(sandbox)
+        controller.set_phase("MODEL", "ready to model")
+        with caplog.at_level(logging.WARNING, logger="agents.simulator_agent.workflow"):
+            for _ in range(5):
+                controller.on_check_result({"wrong_cells": 5})
+            controller.apply_escape_guardrails()
+        assert any(
+            r.name == "agents.simulator_agent.workflow"
+            and r.levelname == "WARNING"
+            and "guardrail: MODEL→EXPLORE (5 consecutive check failures)" in r.message
+            for r in caplog.records
+        )
