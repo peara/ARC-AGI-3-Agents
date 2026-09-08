@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from agents.simulator_agent.reset_policy import check_includes_reset, is_reset
 from agents.simulator_agent.tools import grid_diff
 
 
@@ -40,6 +41,8 @@ def run_check(
     total_spurious = 0
     frames_correct = 0
     frames_total = max(len(grids) - 1, 0)
+    degenerate_reset_frames = 0
+    score_reset = check_includes_reset()
 
     for i in range(frames_total):
         grid_before = grids[i]
@@ -95,6 +98,12 @@ def run_check(
         if n_wrong == 0:
             frames_correct += 1
 
+        is_degenerate_reset = (
+            score_reset and is_reset(action) and n_changed == 0
+        )
+        if is_degenerate_reset:
+            degenerate_reset_frames += 1
+
         if verbose:
             print(
                 f"Frame {i}: {n_wrong} wrong, {n_changed} changed, "
@@ -111,6 +120,7 @@ def run_check(
             "correct": correct,
             "spurious": n_spurious,
             "accuracy": round(accuracy, 1),
+            "degenerate_reset": is_degenerate_reset,
         })
 
     overall_acc = total_correct / max(total_changed, 1) * 100
@@ -122,7 +132,10 @@ def run_check(
             f"{total_correct} correct ({overall_acc:.1f}%), "
             f"{total_spurious} spurious"
         )
-        print(f"Frames correct: {frames_correct}/{frames_total}")
+        summary = f"Frames correct: {frames_correct}/{frames_total}"
+        if degenerate_reset_frames:
+            summary += f" ({degenerate_reset_frames} degenerate RESET)"
+        print(summary)
 
     return {
         "total_wrong": total_wrong,
@@ -132,6 +145,7 @@ def run_check(
         "overall_accuracy": round(overall_acc, 1),
         "frames_correct": frames_correct,
         "frames_total": frames_total,
+        "degenerate_reset_frames": degenerate_reset_frames,
         "per_frame": results,
     }
 

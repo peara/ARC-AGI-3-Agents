@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 
+from agents.simulator_agent.check import run_check
 from agents.simulator_agent.prompts import EXCEPTION_FLOW_TEXT
 
 
@@ -301,3 +302,87 @@ def test_check_with_empty_history_after_clear(seeded_live_sandbox, win_callback)
     output, error, _ = s.run_code("check()")
     assert error is None
     assert "No transitions recorded yet" in output
+
+
+# ── Degenerate RESET surfacing in run_check (task 8) ───────────────────────
+
+
+def _identity_simulate(grid: list[list[int]], action: int) -> list[list[int]]:
+    """Trivial simulate: returns the input grid unchanged."""
+    return [row[:] for row in grid]
+
+
+def _reset_first_corpus() -> tuple[
+    list[list[list[int]]],
+    list[int],
+]:
+    """Corpus mirroring the live RESET-seeded shape: (B0,0)→B0 then (B0,1)→B1.
+
+    Transition 0 is the virtual RESET pair: identical boards, action 0 —
+    trivially correct under any simulate, hence the frames_correct inflation
+    this task surfaces.
+    """
+    base = [[0] * 4 for _ in range(4)]
+    b0 = [row[:] for row in base]
+    b1 = [row[:] for row in base]
+    b1[0][0] = 3
+    return [b0, b0, b1], [0, 1]
+
+
+@pytest.mark.unit
+def test_check_surfaces_degenerate_reset_count_and_key() -> None:
+    """Identity simulate on a RESET-first corpus: degenerate RESET surfaced.
+
+    The (B0,0)→B0 identity transition is counted as a correct frame (metric
+    UNCHANGED) but must be tagged per-frame, counted in the summary line, and
+    returned as ``degenerate_reset_frames``.
+    """
+    grids, actions = _reset_first_corpus()
+
+    result = run_check(_identity_simulate, grids, actions, verbose=True)
+
+    # Metrics untouched: transition 0 trivially correct, transition 1 wrong.
+    assert result["frames_total"] == 2
+    assert result["frames_correct"] == 1
+    assert result["total_wrong"] == 1
+    assert result["per_frame"][0]["wrong"] == 0
+    assert result["per_frame"][0]["changed"] == 0
+    assert result["per_frame"][1]["wrong"] == 1
+    assert result["per_frame"][1]["changed"] == 1
+
+    # New surfacing: per-frame tag + aggregate key.
+    assert result["per_frame"][0]["degenerate_reset"] is True
+    assert result["per_frame"][1].get("degenerate_reset", False) is False
+    assert result["degenerate_reset_frames"] == 1
+
+
+@pytest.mark.unit
+def test_check_summary_line_contains_degenerate_reset_count(capsys) -> None:
+    """Verbose summary line carries the degenerate RESET count."""
+    grids, actions = _reset_first_corpus()
+
+    run_check(_identity_simulate, grids, actions, verbose=True)
+    out = capsys.readouterr().out
+
+    assert "Frames correct: 1/2 (1 degenerate RESET)" in out
+
+
+@pytest.mark.unit
+def test_check_no_reset_transitions_no_degenerate_surfacing(capsys) -> None:
+    """Corpus without action-0 transitions: no tag, no count, no suffix."""
+    base = [[0] * 4 for _ in range(4)]
+    g0 = [row[:] for row in base]
+    g1 = [row[:] for row in base]
+    g1[0][0] = 3
+    g2 = [row[:] for row in g1]
+    g2[1][1] = 5
+    grids = [g0, g1, g2]
+    actions = [1, 2]
+
+    result = run_check(_identity_simulate, grids, actions, verbose=True)
+    out = capsys.readouterr().out
+
+    assert "degenerate" not in out
+    assert result["degenerate_reset_frames"] == 0
+    for frame_result in result["per_frame"]:
+        assert frame_result.get("degenerate_reset", False) is False
