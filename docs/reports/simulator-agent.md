@@ -449,6 +449,19 @@ Variant machinery: `--variant {base,A,B,B2}` patches
 `tests/unit/simulator_agent/test_reconstruction.py` (9 incident-anchored
 fidelity tests).
 
+A B3 arm (B2 + "immediately implement → set_simulate → check" directive)
+mapped the vertical corridor via 6 action batches / 9 env steps but still
+did not re-register simulate — the registration gap held at 0/6 runs,
+hardening the structural conclusion.
+
+**Shipped to production** (9822205): `EXCEPTION_FLOW_TEXT` Step 1 now
+declares the 2D-grid domain, asks for mechanics enumeration ranked against
+evidence, and names the blocked-move signature (diff over the object's own
+drawn/cleared footprint → return the grid unchanged); Step 3 adds the
+blocked mechanic as a remedy. No batch references — `predict_and_compare`
+fires per action and the per-move diffs are already visible inline in the
+untrimmed batch tool result.
+
 ---
 
 ## 10. Module Layout
