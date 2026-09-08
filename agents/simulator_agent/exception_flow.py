@@ -67,7 +67,9 @@ def build_exception_flow_message(pending: dict[str, Any]) -> str:
             "Diffs far from the moved object = unmodeled board "
             "animation (timer, event flash), not a movement error. "
             "Model the trigger in simulate() or exclude those fixed "
-            "regions with set_ignore(cells=[...])."
+            "regions with set_ignore(cells=[...]). If the diff covers "
+            "where your simulate() drew or cleared the object, see "
+            "Step 1: the move was likely BLOCKED."
         )
     else:
         n_diff = pending.get("n_diff", 0)

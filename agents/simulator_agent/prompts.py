@@ -412,13 +412,20 @@ You attempted action {action_id} ({action_name}). {diagnosis}
 {diagnosis_hint}
 
 Step 1: INVESTIGATE — Inspect the diff image (red boxes = where reality \
-differed from your prediction). Use compute-delta reasoning: transitions \
-like 0->5 (white overlay vanishing) far from your move = board animation, \
-not a movement error.
+differed from your prediction). This is a 2D grid game: the diff may \
+reflect a game mechanic your simulate() does not model, not a wrong \
+object model. If the diff covers where your simulate() DREW or CLEARED \
+the object, the move was likely BLOCKED — the destination is occupied \
+by a static object (e.g. the goal) and simulate() should return the \
+grid unchanged. Compare per-move results visible in your recent tool \
+outputs. Enumerate candidate mechanics, rank them by fit to the \
+evidence, and confirm the leading candidate with one python probe \
+before editing simulate().
 
 Step 2: HYPOTHESIZE — Call update_notes with your new understanding.
 
-Step 3: FIX — Either model the animation in simulate() (e.g. event-driven \
+Step 3: FIX — Either add the confirmed mechanic to simulate() (e.g. \
+return the grid unchanged when the move is blocked; model event-driven \
 flashes), or exclude fixed regions with set_ignore(cells=[...]). \
 Call check() to verify.
 
