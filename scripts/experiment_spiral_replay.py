@@ -407,6 +407,64 @@ def _extract_tool_text(content: Any) -> str:
 
 FAKE_LLM_MODE: list[bool] = [False]
 LLM_CAP: list[int] = [DEFAULT_LLM_CAP]
+VARIANT: list[str] = ["base"]
+
+DIAGNOSIS_APPENDIX = {
+    "A": (
+        "\n\nBefore revising your object model, check which case fits "
+        "the evidence:\n"
+        "- Earlier moves in this batch showed ~0 diff -> your object "
+        "model is likely CORRECT. The failing move was probably BLOCKED "
+        "(destination occupied by a static object, e.g. the goal). "
+        "Fix: simulate returns the grid unchanged when the destination "
+        "is blocked. Do NOT re-identify the object.\n"
+        "- Diffs confined to fixed HUD/animation regions -> set_ignore "
+        "those cells.\n"
+        "- Diffs that follow the object across many frames -> only then "
+        "revise the object model."
+    ),
+    "B": (
+        "\n\nBefore revising your object model or notes, diagnose "
+        "differentially: compare per-move diffs within this batch "
+        "(which moves matched reality, which did not), state the single "
+        "simplest game mechanic that explains that exact pattern, and "
+        "test it with one python probe before editing simulate(). "
+        "Prefer the simpler explanation over re-identifying objects."
+    ),
+    "B2": (
+        "\n\nThis is a 2D grid game. A diff like this can arise from "
+        "many 2D game mechanics, not only the one your simulate() "
+        "models. Before revising your object model, enumerate "
+        "candidate mechanics that could produce this exact diff "
+        "pattern, rank them by fit to the evidence (per-move diffs "
+        "within this batch: which moves matched reality, which did "
+        "not), and test the leading candidate with one python probe "
+        "before editing simulate()."
+    ),
+}
+
+
+def _apply_variant() -> None:
+    """Append the variant diagnosis process to the exception-flow hint at
+    runtime (experiment-only; production prompts untouched)."""
+    from agents.simulator_agent import exception_flow as ef
+
+    variant = VARIANT[0]
+    if variant == "base":
+        return
+    appendix = DIAGNOSIS_APPENDIX[variant]
+    original = ef.build_exception_flow_message
+
+    def patched(pending: dict[str, Any]) -> str:
+        msg = original(pending)
+        if "diagnosis_hint" in msg or "red-boxed image" in msg:
+            return msg + appendix
+        return msg
+
+    setattr(ef, "build_exception_flow_message", patched)
+    import agents.simulator_agent.agent as agent_mod
+
+    setattr(agent_mod, "build_exception_flow_message", patched)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────
@@ -459,13 +517,17 @@ def run_experiment(
     fake_llm: bool,
     out: Path | None,
     log_path: Path | None,
+    variant: str = "base",
 ) -> dict[str, Any]:
     FAKE_LLM_MODE[0] = fake_llm
     LLM_CAP[0] = llm_cap
+    VARIANT[0] = variant
+    _apply_variant()
 
     print("=== Spiral replay experiment ===")
     print(f"Recording: {recording}")
     print(f"LLM cap: {llm_cap} calls (hard stop), fake-llm={fake_llm}")
+    print(f"Variant: {VARIANT[0]}")
     print()
 
     state = reconstruct(recording, marker=MARKER)
@@ -506,6 +568,7 @@ def run_experiment(
         "recording": str(recording),
         "llm_cap": llm_cap,
         "fake_llm": fake_llm,
+        "variant": VARIANT[0],
         "terminated": terminated,
         "summary": summary,
         "calls": trace.calls,
@@ -606,6 +669,14 @@ def main() -> None:
         help="Recording .recording.jsonl (default: incident recording)",
     )
     parser.add_argument("--llm-cap", type=int, default=DEFAULT_LLM_CAP)
+    parser.add_argument(
+        "--variant",
+        choices=["base", "A", "B", "B2"],
+        default="base",
+        help="Exception-flow diagnosis appendix: base=production, "
+        "A=named cases (blocked/HUD/object), B=generic differential, "
+        "B2=2D-game mechanics enumeration",
+    )
     parser.add_argument("--fake-llm", action="store_true")
     parser.add_argument("--out", type=Path, default=None)
     parser.add_argument(
@@ -626,6 +697,7 @@ def main() -> None:
         fake_llm=args.fake_llm,
         out=args.out,
         log_path=args.log,
+        variant=args.variant,
     )
 
 
