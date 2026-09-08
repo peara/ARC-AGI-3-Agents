@@ -45,17 +45,24 @@ def state():
 
 class TestReconstruction:
     def test_sandbox_transitions_match_recording(self, state):
+        # Unified reset convention (reset_policy): the corpus IS the full
+        # harness frames — the virtual RESET pair ([B0, B0], [0]) occupies
+        # slots 0/1, so both counts shift +1 vs the pre-rework corpus
+        # (12 grids / 11 actions). Same transitions, +1 corpus offset.
         sandbox = state.sandbox
-        assert len(sandbox._grids) == 12
-        assert len(sandbox._actions) == 11
-        assert sandbox._actions == [1, 2, 3, 4, 1, 1, 1, 1, 1, 1, 1]
-        assert sandbox.namespace["n_frames"] == 12
+        assert len(sandbox._grids) == 13
+        assert len(sandbox._actions) == 12
+        assert sandbox._actions == [0, 1, 2, 3, 4, 1, 1, 1, 1, 1, 1, 1]
+        assert sandbox.namespace["n_frames"] == 13
 
     def test_stale_check_is_the_frame7_cached_result(self, state):
         cached = state.sandbox._last_check_result
         assert cached is not None
         assert cached["overall_accuracy"] == 100.0
-        assert (cached["frames_correct"], cached["frames_total"]) == (7, 7)
+        # +1 corpus offset: the degenerate RESET transition joins the scored
+        # frames (it crashes this simulate — KeyError on action 0 — but
+        # contributes 0 changed cells, so accuracy stays 100.0).
+        assert (cached["frames_correct"], cached["frames_total"]) == (7, 8)
 
     def test_simulate_registered_from_seq29_source(self, state):
         assert state.sandbox._simulate is not None

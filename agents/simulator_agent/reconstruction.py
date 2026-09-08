@@ -12,6 +12,25 @@ against recorded state**. Where the recording stores state verbatim
 namespace, ignore mask), we replay the exact ``python()`` calls from the
 LLM log and let the sandbox machinery produce the state itself.
 
+Index convention (single owner: ``agents/simulator_agent/reset_policy.py``
+— cite it, do not restate the mapping):
+
+- The corpus IS the full harness frames, including the synthetic
+  ``env.reset()`` frame at index 0: ``sandbox grid j == harness.frames[j]``
+  element-wise, and ``actions == [int(ai["id"]) for ai in
+  harness.action_inputs]`` (``"RESET"`` normalized to 0 via
+  ``reset_policy.is_reset``). This is byte-for-byte the offline loading
+  path (``sandbox.py`` offline branch) and the NEW live shape (the virtual
+  RESET pair ``([B0, B0], [0])`` emerges naturally: ``frames[0] ==
+  frames[1]`` board-wise and ``actions[0] == 0`` for RESET-first
+  recordings).
+- ``history[i] ↔ transition i ↔ actions[i]``: transition i maps
+  ``grids[i] --actions[i]--> grids[i+1]``; the action that PRODUCED frame
+  ``i`` is ``actions[i-1]`` (frame 0 is produced by RESET itself).
+- History entries follow the task-6 live format: entry 0 is the env RESET
+  (action 0, ``provenance`` marker, env-initiated framing); entry ``i``
+  is ``{"action": actions[i], "frame_index": i, "frame": grids[i+1]}``.
+
 Incident anchors (recording 1786060d-b75e-48f7-b0fb-ac224be8c18a):
   - seq 29 (frame 7): ``my_sim`` written and registered via set_simulate()
   - seq 30 (frame 7): ``set_ignore`` for yellow HUD cells (rows 61-62)
@@ -34,6 +53,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from agents.simulator_agent.agent import ITER0_RESET_PROVENANCE
+from agents.simulator_agent.reset_policy import RESET_ACTION, is_reset
 from agents.simulator_agent.sandbox import SimulatorSandbox
 from agents.simulator_agent.workflow import Phase, WorkflowController
 from replay.harness import ReplayHarness
@@ -176,20 +197,33 @@ def _seed_sandbox(
     sandbox: SimulatorSandbox,
     grids: list[list[list[int]]],
     actions: list[int],
+    history_turns: list[dict[str, Any]],
 ) -> None:
-    """Seed the sandbox with replayed frames so check()/predict work.
+    """Seed the sandbox with the replayed corpus so check()/predict work.
+
+    Unified convention (single owner ``reset_policy``): the corpus IS the
+    full harness frames — ``grids[j] == harness.frames[j]`` element-wise,
+    ``actions == [int(ai["id"]) for ai in harness.action_inputs]``. For
+    RESET-first recordings the pair shape emerges naturally:
+    ``grids[0] == grids[1]`` and ``actions[0] == 0`` — the [0]/[1] board
+    duplicate IS the RESET transition ``(B0, RESET) -> B0``. This is the
+    same shape the NEW live agent produces via
+    ``update_state(reset_seeded=True)`` (task 5's ``virtual_reset_pair``)
+    plus its ``action()`` appends, and byte-for-byte what the offline
+    loading path (``sandbox.py`` offline branch) builds.
 
     Sandbox semantics: ``_grids[i]`` is the grid before ``_actions[i]``;
-    ``check()`` pairs grids[i]/actions[i] with grids[i+1]. At spiral start
-    the full history is present (12 grids, 11 transitions) — the batch
-    already appended everything. Live-mode ``action()`` appends the next
-    transition as usual because ``_grids`` is non-empty.
+    ``check()`` pairs grids[i]/actions[i] with grids[i+1]. Live-mode
+    ``action()`` appends the next transition as usual because ``_grids``
+    is non-empty. ``namespace["history"]`` is pushed here the same way the
+    live agent's ``update_state`` push does every turn.
     """
     sandbox._grids = [  # noqa: SLF001
         [[cell for cell in row] for row in g] for g in grids
     ]
     sandbox._actions = list(actions)  # noqa: SLF001
     sandbox.namespace["n_frames"] = len(sandbox._grids)  # noqa: SLF001
+    sandbox.namespace["history"] = history_turns  # noqa: SLF001
     sandbox._current_frame = [[cell for cell in row] for row in grids[-1]] if grids else None  # noqa: SLF001
     sandbox.namespace["current_frame"] = sandbox._current_frame  # noqa: SLF001
     sandbox.namespace["previous_frame"] = (  # noqa: SLF001
@@ -246,23 +280,36 @@ def reconstruct(
             f"replay produced {len(harness.frames)} frames, need {grid_index + 1}"
         )
 
+    # Unified convention (single owner reset_policy — see module docstring):
+    # the corpus IS the full harness frames, synthetic reset at [0] included.
+    # sandbox grid j == harness.frames[j] element-wise; actions carry every
+    # recorded action with "RESET" normalized to 0 (is_reset), so the
+    # virtual RESET pair ([B0, B0], [0]) occupies slots 0/1 for RESET-first
+    # recordings — the same shape the NEW live agent's pair-seeded corpus
+    # has, and byte-for-byte the offline loading path's output.
     grids = [
         [[cell for cell in row] for row in fd.frame[0]] for fd in harness.frames
     ]
-    # Sandbox grid j == recording line j == harness.frames[j + 1]
-    # (frames[0] is the pre-recording reset observation, not a sandbox grid).
-    sandbox_grids = grids[1 : grid_index + 1]
-    # Sandbox actions: recording line j+1's id drives grids[j] -> grids[j+1].
-    # Line 0's RESET (id 0) never passed through action().
-    sandbox_actions = [int(ai["id"]) for ai in harness.action_inputs[1:grid_index]]
+    sandbox_actions = [
+        RESET_ACTION if is_reset(ai["id"]) else int(ai["id"])
+        for ai in harness.action_inputs[:grid_index]
+    ]
 
     # Agent-owned history entries, in the order the live agent built them
-    # (entry j: the action taken at line j+1 and the grid it produced).
+    # (task-6 format): entry 0 is the env RESET (provenance marker, frame 0
+    # produced by RESET itself); entry j is the action that produced frame j
+    # (actions[j]) with the grid it produced (grids[j+1] == frames[j+1] ==
+    # recording line j's frame).
     history_turns: list[dict[str, Any]] = [
         {
             "action": sandbox_actions[j],
             "frame_index": j,
-            "frame": [[cell for cell in row] for row in sandbox_grids[j + 1]],
+            "frame": [[cell for cell in row] for row in grids[j + 1]],
+            **(
+                {"provenance": ITER0_RESET_PROVENANCE}
+                if j == 0
+                else {}
+            ),
         }
         for j in range(len(sandbox_actions))
     ]
@@ -274,20 +321,22 @@ def reconstruct(
         step_env_callback=lambda a, d: holder["step"](a, d),
     )
     holder["step"] = _make_step_env_callback(
-        harness, sandbox, history_turns, prev_grid=sandbox_grids[-1]
+        harness, sandbox, history_turns, prev_grid=grids[-1]
     )
 
     # Rebuild turn history in the order the live agent experienced it:
-    # (a) seed sandbox grids/actions through the frame-7 observation (7 transitions),
-    # (b) run the set_simulate python call → cached check() = 100% over 7 transitions,
+    # (a) seed the sandbox corpus through the frame-7 observation — the
+    #     pair-seeded shape the NEW live agent had at that point,
+    # (b) run the set_simulate python call → cached check() = 100% (the
+    #     degenerate RESET transition adds one scored frame),
     # (c) run the set_ignore python call,
     # (d) append the batch transitions (the up-moves after line FRAME7_LINE) —
     #     predict_and_compare fires per transition; the LAST one leaves the
     #     pending 123-cell exception flow the spiral turn opened with.
     FRAME7_LINE = 7  # recording line of the frame-7 observation grid
-    seed_grids = sandbox_grids[: FRAME7_LINE + 1]
-    seed_actions = sandbox_actions[:FRAME7_LINE]
-    _seed_sandbox(sandbox, seed_grids, seed_actions)
+    seed_grids = grids[: FRAME7_LINE + 2]
+    seed_actions = sandbox_actions[: FRAME7_LINE + 1]
+    _seed_sandbox(sandbox, seed_grids, seed_actions, history_turns)
     by_seq = {r["seq"]: r for r in rows}
 
     simulate_code = _tool_code(by_seq[m.simulate_seq], "python")
@@ -307,8 +356,8 @@ def reconstruct(
     # (d) Append the batch transitions (recording lines FRAME7_LINE+1..spiral)
     # the same way the live agent's action() would have; collect the
     # predict-and-compare diff images the loop would attach to tool results.
-    batch_grids = sandbox_grids[FRAME7_LINE + 1 :]
-    prev_grid = sandbox_grids[FRAME7_LINE]
+    batch_grids = grids[FRAME7_LINE + 2 :]
+    prev_grid = grids[FRAME7_LINE + 1]
     sandbox._pending_exception_flow = None  # noqa: SLF001
     for i, g_next in enumerate(batch_grids):
         sandbox._grids.append([[cell for cell in row] for row in g_next])  # noqa: SLF001
@@ -324,14 +373,6 @@ def reconstruct(
         sandbox.predict_and_compare(prev_grid, g_next, 1)
         prev_grid = g_next
     sandbox.namespace["n_frames"] = len(sandbox._grids)  # noqa: SLF001
-    history_turns.extend(
-        {
-            "action": 1,
-            "frame_index": FRAME7_LINE + i,
-            "frame": [[cell for cell in row] for row in g],
-        }
-        for i, g in enumerate(batch_grids)
-    )
     diff_images = list(sandbox.pending_images)
     sandbox.pending_images = []
 
@@ -344,9 +385,11 @@ def reconstruct(
     # the logger as '[image omitted]' — re-rendering is out of scope here).
     messages: list[dict[str, Any]] = by_seq[m.spiral_seq]["messages"]
 
-    # Workflow state: MODEL phase, no prior exception flows.
+    # Workflow state: MODEL phase, no prior exception flows. The counter
+    # mirrors the live agent's action_counter at the spiral turn: one
+    # executed action per corpus action (RESET included — step_env counts it).
     workflow = WorkflowController(sandbox)
-    workflow._action_counter = grid_index + 1  # noqa: SLF001
+    workflow._action_counter = len(sandbox_actions)  # noqa: SLF001
     workflow._phase = Phase.MODEL  # noqa: SLF001
 
     return ReconstructedState(
@@ -370,8 +413,11 @@ def verify_reconstruction(state: ReconstructedState) -> dict[str, Any]:
     """Run all fidelity checks against recorded ground truth.
 
     Checks (incident ground truth in parentheses):
-      1. check() accuracy == 100.0 over the 7 pre-divergence transitions
-         (recorded: 100.0%, 0 wrong, 7/7 frames).
+      1. check() accuracy == 100.0 over the pre-divergence transitions
+         (recorded: 100.0%, 0 wrong, 7/7 frames; under the unified
+         convention the corpus carries the degenerate RESET transition in
+         addition, so the recomputed cache reports 8/8 — same accuracy,
+         +1 corpus offset from the virtual RESET pair).
       2. predict_and_compare on action 1 from frame 11 reproduces the
          123-cell / 2-region exception flow (rows 53-62 cols 1-10: 76 cells
          5->0; rows 10-19 cols 34-38: 47 cells 3->9, 9->5).
