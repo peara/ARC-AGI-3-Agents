@@ -81,7 +81,8 @@ The following variables are preloaded in the Python sandbox each turn:
 
 - `current_frame`: The current 64×64 grid as a list of lists of integers (0–15).
 - `previous_frame`: The previous frame's grid in the same format, or None on \
-the first frame.
+the first frame. On the first turn it equals `current_frame` (iteration 0 \
+was an env RESET from the initial board to itself — the virtual RESET pair).
 - `history`: executed actions and their resulting grids. Entry 0 is the
   env RESET (env-initiated framing — NOT a proposeable agent action; the
   environment produced it, you cannot call it). Entry i is
@@ -521,7 +522,9 @@ same next state.
 
 DATA ACCESS:
   get_frame(i)          -> 64x64 grid (list of lists of ints) at frame i
-  get_action(i)         -> action ID taken at frame i
+  get_action(i)         -> action ID of the transition ENTERING frame i \
+(the action that PRODUCED frame i is actions[i-1]; frame 0 is produced \
+by RESET)
   n_frames              -> total number of frames
 
 VISUAL INSPECTION:

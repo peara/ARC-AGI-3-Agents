@@ -16,6 +16,7 @@ from agents.simulator_agent.prompts import (
     AGENT_SIMULATOR_TOOLS_ADDENDUM,
     AGENT_SYSTEM_PROMPT,
     AGENT_WORLD_MODEL_ADDENDUM,
+    SYSTEM_PROMPT,
 )
 
 
@@ -114,3 +115,27 @@ def test_diagnose_usage_example_documented():
     assert "SPURIOUS" in text
     assert "WRONG_VALUE" in text
     assert "call diagnose() BEFORE rewriting" in text
+
+
+@pytest.mark.unit
+def test_get_action_docstring_state_keyed():
+    """get_action(i) must be documented state-keyed: the action that
+    PRODUCED frame i is actions[i-1]; frame 0 is produced by RESET.
+    The old wording ("action ID taken at frame i") invited the
+    off-by-one pairing trap."""
+    text = AGENT_SIMULATOR_TOOLS_ADDENDUM + SYSTEM_PROMPT
+    assert "action ID of the transition ENTERING frame i" in text
+    assert "the action that PRODUCED frame i is actions[i-1]" in text
+    assert "frame 0 is produced" in text
+    assert "action ID taken at frame i" not in text
+
+
+@pytest.mark.unit
+def test_previous_frame_virtual_reset_pair_documented():
+    """previous_frame on the first turn equals current_frame (iteration 0
+    was an env RESET from the initial board to itself — the virtual RESET
+    pair). The prompt must state this so the LLM doesn't treat it as None
+    or as a stale frame."""
+    text = AGENT_RUNTIME_STATE_ADDENDUM
+    assert "On the first turn it equals `current_frame`" in text
+    assert "virtual RESET pair" in text

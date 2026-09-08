@@ -37,6 +37,7 @@ from agents.simulator_agent.reset_policy import (
     RESET_ACTION,
     bfs_includes_reset,
     is_reset,
+    producing_action_caption,
     virtual_reset_pair,
 )
 from agents.simulator_agent.tools import (
@@ -461,12 +462,10 @@ class SimulatorSandbox:
                 grid = self._grids[frame_index]
                 img = grid_to_image(grid, scale=8)
                 b64 = image_to_base64(img)
-                action = (
-                    self._actions[frame_index]
-                    if frame_index < len(self._actions)
-                    else "?"
+                caption = (
+                    f"Frame {frame_index} "
+                    f"({producing_action_caption(frame_index, self._actions)})"
                 )
-                caption = f"Frame {frame_index} (action={action})"
                 if label:
                     caption += f" — {label}"
                 self.pending_images.append(

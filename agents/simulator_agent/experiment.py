@@ -12,16 +12,31 @@ import argparse
 import json
 import sys
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from agents.llm_client import LLMClient
 from agents.simulator_agent.prompts import PYTHON_TOOL_SCHEMA, SYSTEM_PROMPT
+from agents.simulator_agent.reset_policy import producing_action_caption
 from agents.simulator_agent.sandbox import SimulatorSandbox
 from agents.simulator_agent.world_model import extract_notes, format_notes
 from replay.harness import ReplayHarness
 from vision.render import grid_to_image, image_to_base64
+
+# ── Frame captions ────────────────────────────────────────────────────────
+
+
+def frame_caption(frame_index: int, actions: Sequence[int]) -> str:
+    """State-keyed caption for frame *frame_index*.
+
+    The action that PRODUCED frame i is actions[i-1]; frame 0 is produced
+    by RESET. Delegates to :func:`producing_action_caption` so the LLM-facing
+    wording matches the sandbox show_frame captions exactly.
+    """
+    return producing_action_caption(frame_index, actions)
+
 
 # ── Image stripping ────────────────────────────────────────────────────────
 
@@ -152,14 +167,13 @@ def run_experiment(
     for i in range(min(3, len(sandbox._grids))):  # noqa: SLF001
         img = grid_to_image(sandbox._grids[i], scale=8)  # noqa: SLF001
         b64 = image_to_base64(img)
-        action = sandbox._actions[i] if i < len(sandbox._actions) else "?"  # noqa: SLF001
         initial_content.append({
             "type": "image_url",
             "image_url": {"url": f"data:image/png;base64,{b64}"},
         })
         initial_content.append({
             "type": "text",
-            "text": f"Frame {i} (action taken: {action})",
+            "text": f"Frame {i} ({frame_caption(i, sandbox._actions)})",  # noqa: SLF001
         })
 
     messages: list[dict[str, Any]] = [
