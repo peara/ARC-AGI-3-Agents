@@ -393,6 +393,62 @@ Result vs the same transition in production (which consumed 23 LLM calls /
     transition call captures strictly more transferable knowledge; the
     "do not take any actions" line is load-bearing.
 
+### Exception-flow prompt-variant experiment (`scripts/experiment_spiral_replay.py`)
+
+Investigated the ls20 simulate-spiral incident (`1786060d`, 21 LLM calls with
+zero actions): a 4×`action(1)` batch where moves 1-3 matched reality to within
+2 timer cells but move 4 failed (player already parked against the goal box,
+no blocked-move transition in simulate). The exception-flow message framed the
+resulting 47-cell diff as a prediction error over rows 10-19 — which includes
+the static F glyph inside the goal box — and both the incident AND the control
+replay inverted the player identity from the correct 5×5 orange/blue assembly
+to the static F glyph. Root cause: the message's remedy menu
+(*model the animation* / *set_ignore*) omits the actual mechanism
+(*the move was blocked*), funneling the model into re-identifying the object.
+
+Replay methodology: `reconstruction.py` rebuilds the exact spiral-turn state
+from the recording + LLM log (replayed harness frames, live-mode sandbox with
+`set_simulate`/`set_ignore` re-executed, pending exception flow, verbatim
+conversation prefix) and `experiment_spiral_replay.py` drives the unmodified
+production `_run_tool_loop` from it with the LLM seam capped (`--llm-cap`)
+via a counting wrapper raising a BaseException past budget. Trace records
+full assistant text, complete tool-call args, pre-trim tool results, and
+injected messages.
+
+Four arms (10-15 calls each, qwen3.8-27b, one at a time):
+
+| | CONTROL | A: named cases | B: generic differential | B2: 2D mechanics enumeration |
+|---|---|---|---|---|
+| Action batches | 1 | 0 | 0 | 2 / 1 (cap 15) |
+| Player identity correct | ❌ (F-flip) | ✅ | ~ (never commits) | ✅ 2/2 |
+| Blocked-move recognized | — (wrong path) | ✅ | ✅ | ✅ |
+| set_simulate registered | 0 | 0 | 0 | 0 |
+
+Findings:
+
+1. **Missing hypothesis in the remedy menu is the identity-flip trigger.**
+   Both the incident and control took the same exit: "my prediction was wrong
+   where I drew the object → my object model is wrong". Naming the cases (A)
+   or declaring the 2D domain without naming mechanisms (B2) both prevent the
+   flip. B2 is preferred: it is game-agnostic, avoided satisficing (no list to
+   pick from), and stayed action-capable (2/1 batches vs 0).
+2. **Diagnosis prompts redirect reasoning but not execution.** No run in any
+   arm registered the fix its own notes had converged on (`set_simulate` = 0
+   across 4 runs, including arm A where the appendix spelled out the
+   blocked-transition fix verbatim). The registration gap looks structural —
+   candidate fixes are a phase-level re-registration nudge or a cheaper
+   registration path.
+3. **Model is capable of the correct inference from domain framing alone:**
+   B2 generated "blocked by the wall of 4 blocks" and "box region is obstacle"
+   from its own prior with zero mechanics named, then probed walls-vs-floor by
+   moving in each direction.
+
+Variant machinery: `--variant {base,A,B,B2}` patches
+`build_exception_flow_message` at runtime (experiment-only; production
+`EXCEPTION_FLOW_TEXT` untouched). Reconstruction: `reconstruction.py` with
+`tests/unit/simulator_agent/test_reconstruction.py` (9 incident-anchored
+fidelity tests).
+
 ---
 
 ## 10. Module Layout
@@ -514,7 +570,7 @@ The key insight is that ARC-AGI-3 games are deterministic grid transitions. Once
 
 ### What it still cannot do
 
-- **Automatic simulator revision**: The agent does not automatically re-run `check()` after each action and patch simulate. The LLM must choose to do so.
+- **Automatic simulator revision**: The agent does not automatically re-run `check()` after each action and patch simulate. The LLM must choose to do so. The exception-flow variant experiment (§9) sharpened this: even when the diagnosis is fully converged (correct world model in notes, named fix), the agent still deferred `set_simulate` registration in 4/4 replayed runs — diagnosis prompts redirect reasoning but not execution.
 - **Stochastic games**: `simulate()` assumes deterministic transitions. Games with randomness cannot be captured this way.
 - **Complex ACTION6**: The sandbox supports complex actions, but the LLM rarely uses them effectively in the simulator.
 - **Long-horizon planning**: BFS depth 20 and 50,000 nodes is sufficient for simple games but may fail for multi-step puzzles.
