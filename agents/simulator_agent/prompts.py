@@ -82,15 +82,19 @@ The following variables are preloaded in the Python sandbox each turn:
 - `current_frame`: The current 64×64 grid as a list of lists of integers (0–15).
 - `previous_frame`: The previous frame's grid in the same format, or None on \
 the first frame.
-- `history`: executed actions and their resulting grids. Entry i is
+- `history`: executed actions and their resulting grids. Entry 0 is the
+  env RESET (env-initiated framing — NOT a proposeable agent action; the
+  environment produced it, you cannot call it). Entry i is
   {"action": a_i, "frame": F_i} where F_i is the grid AFTER a_i fired.
   The action in entry i was taken FROM the grid in entry i-1:
       before = history[i-1]["frame"]   # state before a_i
       after  = history[i]["frame"]     # state after a_i
       sim(before, a_i) must equal after
-  Example: history = [{"action": 1, "frame": G1}, {"action": 3, "frame": G2}]
-  means action 1 produced G1, then action 3 was applied to G1 producing G2.
-  To learn what action 3 does: diff(history[0]["frame"], history[1]["frame"]).
+  Example: history = [{"action": 0, "frame": G0}, {"action": 1, "frame": G1},
+  {"action": 3, "frame": G2}] means the env RESET produced G0, then action 1
+  was applied to G0 producing G1, then action 3 was applied to G1 producing
+  G2. To learn what action 3 does: diff(history[1]["frame"],
+  history[2]["frame"]).
   Pairing history[i]["action"] with the transition TO history[i+1]["frame"]
   instead is an off-by-one that silently corrupts the action→direction mapping.
 - `valid_actions`: A list of action IDs available this turn (e.g. [0, 1, 2, 3]).

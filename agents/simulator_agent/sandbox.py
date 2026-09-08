@@ -33,6 +33,12 @@ from typing import Any
 
 from agents.simulator_agent.check import diagnose as diagnose_fn
 from agents.simulator_agent.check import run_check
+from agents.simulator_agent.reset_policy import (
+    RESET_ACTION,
+    bfs_includes_reset,
+    is_reset,
+    virtual_reset_pair,
+)
 from agents.simulator_agent.tools import (
     compute_delta_tool,
     count_color,
@@ -54,6 +60,9 @@ from vision.render import (
 )
 
 logger = logging.getLogger(__name__)
+
+# single RESET-decision log channel — see reset_policy.py
+RESET_POLICY_LOGGER = logging.getLogger("simulator.reset_policy")
 
 # ── Sandbox security ──────────────────────────────────────────────────────
 
@@ -198,8 +207,9 @@ class SimulatorSandbox:
                 self._grids.append(grid_2d.tolist())
             for ai in harness.action_inputs:
                 action_id = ai["id"]
-                if isinstance(action_id, str) and action_id == "RESET":
-                    action_id = 0
+                if is_reset(action_id):
+                    # RESET semantics owned by reset_policy — do not re-inline.
+                    action_id = RESET_ACTION
                 self._actions.append(int(action_id))
 
             if max_frames is not None and max_frames < len(self._grids):
@@ -580,6 +590,19 @@ class SimulatorSandbox:
                 print("No valid actions available.")
                 return None
 
+            if not bfs_includes_reset():
+                # Policy (reset_policy): RESET edges cycle back to the
+                # level-start board BFS already visited — pure waste.
+                reset_branches = [a for a in valid_acts if is_reset(a)]
+                if reset_branches:
+                    valid_acts = [a for a in valid_acts if not is_reset(a)]
+                    RESET_POLICY_LOGGER.debug(
+                        "bfs: excluded RESET branch(es) %s per reset_policy "
+                        "(bfs_includes_reset=False); branching on %s",
+                        reset_branches,
+                        valid_acts,
+                    )
+
             def grid_hash(g: list[list[int]]) -> tuple[tuple[int, ...], ...]:
                 return tuple(tuple(row) for row in g)
 
@@ -678,12 +701,18 @@ class SimulatorSandbox:
 
         On match: clears self._pending_exception_flow (no exception flow).
 
-        Skipped silently when simulate isn't registered, action is RESET, or
-        game is over.
+        Skipped when simulate isn't registered, the action is RESET (policy
+        owned by ``agents/simulator_agent/reset_policy.py`` — ``is_reset``),
+        or game is over. The RESET skip is logged (never silent).
         """
+        if is_reset(action_id):
+            RESET_POLICY_LOGGER.debug(
+                "predict_and_compare: skipping RESET action %d per reset_policy",
+                action_id,
+            )
+            return
         if (
             self._simulate is None
-            or action_id == 0
             or prev_grid is None
             or new_grid is None
             or self._last_action_result.get("run_complete")
@@ -821,12 +850,23 @@ class SimulatorSandbox:
         valid_actions: list[int],
         last_action_result: dict[str, Any],
         history: list[Any],
+        reset_seeded: bool = False,
     ) -> None:
         """Set namespace variables from the agent before each ``run_code()`` call.
 
         Called by the live agent to push fresh environment state into the
         sandbox namespace so LLM code can access ``objects``, ``adjacency``,
         ``current_frame``, etc.
+
+        ``reset_seeded`` (agent-side decision, see
+        ``reset_policy.ResetSeedTracker``): when True and the corpus is
+        empty, seed the virtual RESET pair ``([B0, B0], [0])`` via
+        ``reset_policy.virtual_reset_pair`` — level 1 starts from a RESET,
+        so transition 0 must be ``(B0, RESET) -> B0`` (the duplicate board
+        IS the RESET transition; naive ``grids=[B0]``/``actions=[0]``
+        seeding would corrupt it into ``(B0, RESET) -> B1``). When False
+        (default), seed grids-only — the levels-2+ path, which start via
+        level-completion with no RESET.
         """
         self.namespace["objects"] = objects
         self.namespace["adjacency"] = adjacency
@@ -845,8 +885,25 @@ class SimulatorSandbox:
         # Seed frame 0 so check()/diagnose() have data before any action();
         # action()'s first-append branch only fires when _grids is empty,
         # so seeding here keeps grids[i]+actions[i]->grids[i+1] consistent.
+        #
+        # Pair semantics (reset_seeded=True): the seed is the virtual RESET
+        # pair ([B0, B0], [0]) — transition 0 is (B0, RESET) -> B0. The
+        # first real action then appends (B1, a1) as transition 1, giving
+        # _grids == [B0, B0, B1] / _actions == [0, a1]. The pair shape is
+        # what kills the corruption trap (B0, RESET) -> B1.
         if not self._grids and current_frame is not None:
-            self._grids.append([row[:] for row in current_frame])
+            if reset_seeded:
+                pair_grids, pair_actions = virtual_reset_pair(current_frame)
+                self._grids.extend(pair_grids)
+                self._actions.extend(pair_actions)
+                logger.info(
+                    "simulatorfirst: seeded virtual RESET pair into sandbox "
+                    "corpus (grids=%d, actions=%d)",
+                    len(self._grids),
+                    len(self._actions),
+                )
+            else:
+                self._grids.append([row[:] for row in current_frame])
             self.namespace["n_frames"] = len(self._grids)
 
     def reset_turn_counter(self) -> None:
@@ -868,6 +925,11 @@ class SimulatorSandbox:
         recorded on the transition turn survive the clear). The
         ``_transition_pending`` flag is intentionally NOT cleared here — it
         is a cross-turn signal consumed by the agent on the next turn.
+
+        Reseed on levels 2+ is grids-only (``update_state`` with
+        ``reset_seeded=False``): levels 2+ start via level-completion with
+        no RESET, so no virtual RESET pair is fabricated for them (see
+        ``reset_policy.ResetSeedTracker.should_seed``).
         """
         self._grids = []
         self._actions = []

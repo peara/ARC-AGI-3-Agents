@@ -2236,8 +2236,9 @@ class TestEventDrivenStateRefactor:
 
     @pytest.mark.unit
     def test_reset_no_history_entry(self):
-        """action_id=0 (RESET) must NOT produce a history entry. Directly
-        tests the hook's skip-RESET policy."""
+        """REWRITTEN (task 6, RESET-handler alignment): RESET (action 0) now
+        appends a history entry with a provenance marker — env-initiated
+        framing, not a world transition. The old skip policy is gone."""
         import numpy as np
         from arcengine import FrameData, GameState
 
@@ -2254,9 +2255,180 @@ class TestEventDrivenStateRefactor:
         )
 
         agent._on_action_executed(0, frame)
-        assert agent._history_turns == [], (
-            f"RESET (action_id=0) must not create a history entry, "
+        assert len(agent._history_turns) == 1, (
+            f"RESET (action_id=0) must create a history entry, "
             f"got {len(agent._history_turns)} entries"
+        )
+        entry = agent._history_turns[0]
+        assert entry["action"] == 0
+        assert "provenance" in entry, (
+            f"RESET entry must carry a provenance marker, got keys {sorted(entry)}"
+        )
+
+    # ── task 6: RESET history entries (iter-0 + mid-game) ─────────────────
+
+    @pytest.mark.unit
+    def test_iter0_reset_history_entry(self):
+        """task 6 (a): the iter-0 RESET produces history[0] with action==0,
+        frame_index==0, and frame == the post-RESET board (B0)."""
+        import numpy as np
+        from arcengine import FrameData, GameState
+
+        agent, _ = self._make_event_agent()
+        agent._history_turns = []
+        agent.action_counter = 1  # step_env already incremented past the RESET
+
+        post_reset_grid = np.zeros((1, 64, 64), dtype=int)
+        post_reset_grid[0, 0, 0] = 10  # RESET marker (cell[action_id][0] = id+10)
+        frame = FrameData(
+            game_id="test-event",
+            frame=post_reset_grid,
+            state=GameState.NOT_FINISHED,
+            levels_completed=0,
+            win_levels=7,
+            available_actions=[1, 2, 3, 4],
+        )
+
+        agent._on_action_executed(0, frame)
+
+        assert len(agent._history_turns) == 1
+        entry = agent._history_turns[0]
+        assert entry["action"] == 0
+        assert entry["frame_index"] == 0
+        assert entry["frame"][0][0] == 10, (
+            f"history[0].frame must be the post-RESET board (marker 10 at "
+            f"[0][0]), got {entry['frame'][0][0]}"
+        )
+
+    @pytest.mark.unit
+    def test_iter0_reset_history_provenance_marker(self):
+        """task 6 (c): the iter-0 entry carries the env-RESET provenance
+        marker; a mid-game RESET entry carries the mid-game marker."""
+        import numpy as np
+        from arcengine import FrameData, GameState
+
+        from agents.simulator_agent.agent import (
+            ITER0_RESET_PROVENANCE,
+            MIDGAME_RESET_PROVENANCE,
+        )
+
+        agent, _ = self._make_event_agent()
+        agent._history_turns = []
+        agent.action_counter = 1
+
+        frame = FrameData(
+            game_id="test-event",
+            frame=np.zeros((1, 64, 64), dtype=int),
+            state=GameState.NOT_FINISHED,
+            levels_completed=0,
+            win_levels=7,
+            available_actions=[1, 2, 3, 4],
+        )
+
+        agent._on_action_executed(0, frame)
+        assert agent._history_turns[0]["provenance"] == ITER0_RESET_PROVENANCE
+
+        # Mid-game RESET: history non-empty → different marker.
+        agent.action_counter = 2
+        agent._on_action_executed(0, frame)
+        assert agent._history_turns[1]["provenance"] == MIDGAME_RESET_PROVENANCE
+
+    @pytest.mark.unit
+    def test_iter0_reset_history_helper_idempotent(self):
+        """task 6: _record_iter0_reset_history is idempotent — the guard-site
+        call no-ops when the hook already appended the iter-0 entry."""
+        import numpy as np
+        from arcengine import FrameData, GameState
+
+        agent, _ = self._make_event_agent()
+        agent._history_turns = []
+        agent.action_counter = 1
+
+        frame = FrameData(
+            game_id="test-event",
+            frame=np.zeros((1, 64, 64), dtype=int),
+            state=GameState.NOT_FINISHED,
+            levels_completed=0,
+            win_levels=7,
+            available_actions=[1, 2, 3, 4],
+        )
+
+        agent._on_action_executed(0, frame)
+        agent._record_iter0_reset_history(frame)  # guard-site seam: no-op
+        assert len(agent._history_turns) == 1, (
+            f"guard-site call must not duplicate the iter-0 entry, "
+            f"got {len(agent._history_turns)}"
+        )
+
+    @pytest.mark.unit
+    def test_midgame_reset_appends_history_entry(self):
+        """task 6 (b): a mid-game RESET via sandbox action(0) appends a
+        history entry (previously skipped). Full run() path: LLM batch
+        action(1); action(0) → 2 entries, entry 1 is the RESET with
+        provenance."""
+        agent, frames = self._make_event_agent()
+
+        def llm_call1(**kwargs):
+            return self._python_tool_call("for a in [1, 0]:\n    action(a)\n")
+
+        def llm_call2(**kwargs):
+            raise RuntimeError("done")
+
+        call_index = [0]
+
+        def fake_llm(**kwargs):
+            agent._llm_calls += 1
+            idx = call_index[0]
+            call_index[0] += 1
+            stubs = [llm_call1, llm_call2]
+            if idx < len(stubs):
+                return stubs[idx](**kwargs)
+            raise RuntimeError("done")
+
+        agent._llm_chat = fake_llm
+        agent._sandbox._current_frame = [list(row) for row in frames[0].frame[0]]
+
+        agent.run()
+
+        assert len(agent._history_turns) == 2, (
+            f"expected 2 history entries (action 1 + mid-game RESET), "
+            f"got {len(agent._history_turns)}"
+        )
+        assert agent._history_turns[0]["action"] == 1
+        reset_entry = agent._history_turns[1]
+        assert reset_entry["action"] == 0
+        assert "provenance" in reset_entry, (
+            f"mid-game RESET entry must carry a provenance marker, "
+            f"got keys {sorted(reset_entry)}"
+        )
+        # The RESET entry's frame is the post-RESET board: marker 10 at [0][0].
+        assert reset_entry["frame"][0][0] == 10
+
+    @pytest.mark.unit
+    def test_workflow_update_stays_action_gated_on_reset(self):
+        """task 6: the workflow counter update stays action-gated — a RESET
+        hook call must not advance the workflow's action_counter view past
+        the agent's real counter (documented gate in _on_action_executed)."""
+        import numpy as np
+        from arcengine import FrameData, GameState
+
+        agent, _ = self._make_event_agent()
+        agent._history_turns = []
+        agent.action_counter = 1
+
+        frame = FrameData(
+            game_id="test-event",
+            frame=np.zeros((1, 64, 64), dtype=int),
+            state=GameState.NOT_FINISHED,
+            levels_completed=0,
+            win_levels=7,
+            available_actions=[1, 2, 3, 4],
+        )
+
+        agent._on_action_executed(0, frame)
+        assert agent._workflow._action_counter == 1, (
+            f"workflow.update must still fire on RESET with the real counter "
+            f"(1), got {agent._workflow._action_counter}"
         )
 
     # ── T4.d: test_fallback_action_gets_history_entry ─────────────────────

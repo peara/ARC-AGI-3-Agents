@@ -3,7 +3,12 @@
 Ties together the base LoopAgent, in-process SimulatorSandbox, prompts,
 world model, and segmentation into a persistent-conversation run() loop:
 
-1.  Handle iteration-0 (empty placeholder → RESET).
+1.  Handle iteration-0 (empty placeholder → RESET): guard calls
+    ``step_env(GameAction.RESET)`` (appends F0 via LoopAgent), then fills
+    the placeholder slot in place with a copy of the post-RESET board —
+    ``frames == [F0copy, F0]`` (the virtual RESET pair, per
+    ``reset_policy``). On RESET failure (``None``) the placeholder is
+    left untouched and the guard re-fires next loop iteration.
 2.  Render grid, segment objects, build prompts.
 3.  Call LLM with ``python`` tool, execute code in ``SimulatorSandbox``.
 4.  When sandbox calls ``action()``, break — the action has already been
@@ -47,6 +52,7 @@ from agents.simulator_agent.prompts import (
     UPDATE_NOTES_TOOL_SCHEMA,
     build_agent_user_prompt,
 )
+from agents.simulator_agent.reset_policy import ResetSeedTracker, is_reset
 from agents.simulator_agent.sandbox import SimulatorSandbox
 from agents.simulator_agent.workflow import (
     SET_PHASE_TOOL_SCHEMA,
@@ -59,6 +65,14 @@ from optitrack.atoms import extract_atoms
 from vision.render import grid_to_image, image_to_base64
 
 logger = logging.getLogger(__name__)
+
+# Provenance markers for RESET (action 0) history entries. RESET is
+# env-initiated framing — a re-observe, never a proposeable agent action
+# (single owner of RESET semantics: ``reset_policy``).
+ITER0_RESET_PROVENANCE = "iteration 0: env RESET — initial observation"
+MIDGAME_RESET_PROVENANCE = (
+    "mid-game RESET (action 0): env re-observe — not a world transition"
+)
 
 
 class SimulatorFirstAgent(LoopAgent):
@@ -84,6 +98,12 @@ class SimulatorFirstAgent(LoopAgent):
         self._current_grid_levels_completed: int = 0
         self._transition_ended_turn: bool = False
         self._non_action_calls: int = 0
+
+        # Agent-side one-time RESET-seed flag per level (reset_policy.py).
+        # Lives on the agent, never in sandbox worker state: the sandbox
+        # namespace is rebuilt on zombie quarantine, which would wipe a
+        # sandbox-side flag and re-seed a duplicate RESET pair.
+        self._reset_seed_tracker = ResetSeedTracker()
 
         # Context budget (same formula as duck harness)
         self._context_budget_tokens = max(1024, 32768 - 4096 - 512)
@@ -147,7 +167,28 @@ class SimulatorFirstAgent(LoopAgent):
 
         # ── 1. Iteration-0 guard: empty placeholder → RESET ────────────
         if not getattr(self.frames[-1], "frame", None):
-            self.step_env(GameAction.RESET)
+            frame = self.step_env(GameAction.RESET)
+            if frame is not None:
+                # Virtual RESET pair (reset_policy): slot-0 fill in place —
+                # frames == [F0copy, F0]; no recorder write (format frozen).
+                self.frames[0] = frame.model_copy(deep=True)
+                logger.info(
+                    "simulatorfirst: iter-0 fill: frames[0] placeholder "
+                    "replaced with post-RESET board copy (action=%s, "
+                    "frames=%d)",
+                    GameAction.RESET.value,
+                    len(self.frames),
+                )
+                # task-6: iter-0 RESET history entry. The hook's first-RESET
+                # detection already appended it (step_env →
+                # _on_action_executed); this call is the idempotent seam for
+                # the guard rewrite — it no-ops when the entry exists.
+                self._record_iter0_reset_history(frame)
+            # None → placeholder survives. The guard sits BEFORE the outer
+            # loop: a failed RESET falls through to the outer loop, which
+            # crashes on the empty placeholder (pre-existing behavior,
+            # identical before this change) — the guard re-fires on the next
+            # run() invocation.
 
         # ── Outer game loop (handles level transitions) ────────────────
         while True:
@@ -250,6 +291,14 @@ class SimulatorFirstAgent(LoopAgent):
             self._append_notes_message(messages, self._world_model)
 
             # ── 7-8. Update sandbox state ─────────────────────────────
+            # reset_seeded: one-time virtual RESET pair per level (level 0
+            # only — levels 2+ start via level-completion, no RESET).
+            # getattr fallback: __new__-built test agents without __init__
+            # keep the legacy grids-only seeding path.
+            tracker = getattr(self, "_reset_seed_tracker", None)
+            reset_seeded = tracker is not None and tracker.should_seed(
+                self._current_grid_levels_completed
+            )
             self._sandbox.update_state(
                 objects=self._objects,
                 adjacency=self._adjacency,
@@ -258,7 +307,10 @@ class SimulatorFirstAgent(LoopAgent):
                 valid_actions=self._valid_actions,
                 last_action_result=self._last_action_result,
                 history=self._history_turns,
+                reset_seeded=reset_seeded,
             )
+            if tracker is not None and reset_seeded:
+                tracker.mark_seeded(self._current_grid_levels_completed)
             self._sandbox.reset_turn_counter()
             self._sandbox._pending_notes = {}
 
@@ -698,33 +750,68 @@ class SimulatorFirstAgent(LoopAgent):
             self._on_action_executed(action.value, frame)
         return frame
 
-    def _append_history(self, action_id: int, frame: FrameData) -> None:
+    def _append_history(
+        self, action_id: int, frame: FrameData, provenance: str | None = None
+    ) -> None:
         """Append one history entry for an executed action. Entries follow the
         system prompt's semantics: ``{action, frame: grid AFTER that action}``.
+        ``provenance`` is set only on RESET entries (env-initiated framing).
         Trims to max_hist=30 to bound growth.
         """
         max_hist = 30
-        self._history_turns.append({
+        entry: dict[str, Any] = {
             "action": action_id,
             "frame_index": self.action_counter - 1,
             "frame": [list(row) for row in frame.frame[0]],
-        })
+        }
+        if provenance is not None:
+            entry["provenance"] = provenance
+        self._history_turns.append(entry)
         if len(self._history_turns) > max_hist:
             self._history_turns = self._history_turns[-max_hist:]
+
+    def _record_iter0_reset_history(self, frame: FrameData) -> None:
+        """Append the iteration-0 RESET history entry (env-initiated framing).
+
+        Idempotent: a no-op when the iter-0 entry already exists. This is the
+        coordination seam for the iter-0 guard rewrite (task 4): the guard may
+        call this after the ``frames[0]`` fill, but the hook's first-RESET
+        detection already covers the live path, so the guard does not need to.
+        """
+        if self._history_turns and self._history_turns[0].get("provenance") == (
+            ITER0_RESET_PROVENANCE
+        ):
+            return
+        self._append_history(0, frame, provenance=ITER0_RESET_PROVENANCE)
 
     def _on_action_executed(self, action_id: int, frame: FrameData) -> None:
         """Single hook fired by ``step_env`` after every executed action. Owns
         ALL conversation-layer state that must mirror every executed action.
 
-        Skips RESET (action 0): a re-observe, not a world transition. Preserves
-        I3 (history 1:1 with ``check()``'s ``_actions``, which never sees the
-        iter-0 RESET) and keeps the derivation chain
-        ``sim(hist[i].frame, hist[i+1].action) == hist[i+1].frame`` intact.
-        Precedent: ``predict_and_compare`` skips RESET at sandbox.py:633.
+        I3 (unified convention, single owner ``reset_policy``):
+        ``history[i] ↔ transition i ↔ actions[i]`` — transition i maps
+        ``grids[i] --actions[i]--> grids[i+1]``; the action that PRODUCED
+        frame i is ``actions[i-1]`` (frame 0 is produced by RESET itself).
+        ``frames[k] ↔ grids[k]`` board-wise. RESET (action 0) is env-initiated
+        framing — it appends a history entry like any action (with a
+        provenance marker), but is NOT a proposeable agent action.
+
+        The ``_workflow.update`` call stays action-gated: the workflow
+        controller's guardrails (EXPLORE→MODEL at 10 actions, escape
+        guardrails) are defined over agent actions only — counting the
+        iter-0 RESET would shift every threshold by one frame.
         """
-        if action_id == 0:
-            return
-        self._append_history(action_id, frame)
+        if is_reset(action_id):
+            if not getattr(self.frames[-1], "frame", None):
+                return
+            if self.action_counter == 1 and not self._history_turns:
+                self._record_iter0_reset_history(frame)
+            else:
+                self._append_history(
+                    0, frame, provenance=MIDGAME_RESET_PROVENANCE
+                )
+        else:
+            self._append_history(action_id, frame)
         self._workflow.update(self.action_counter)
 
     def _sync_pending_notes(self) -> None:
