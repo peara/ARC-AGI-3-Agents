@@ -108,8 +108,8 @@ loops. Each call refreshes `current_frame`, `previous_frame`, `history`, \
 `valid_actions`, and `last_action_result` before execution continues. If \
 `last_action_result` reports `game_over` or `run_complete`, stop acting \
 immediately and re-ground on the next turn. You have a limited action budget \
-per game (80 actions). Use it wisely — explore briefly, then build simulate \
-so you can plan without spending actions.
+per game (guardrail messages will tell you when you near it). Use it wisely — \
+explore briefly, then build simulate so you can plan without spending actions.
 
 Do NOT attempt to modify these variables. They are read-only.
 """
@@ -147,6 +147,14 @@ Python tool
 - Execution timeout: 30 seconds per call.
 - Max 100 python() calls per turn.
 - Allowed imports: math, re, collections, itertools, functools, json, string, random.
+- All sandbox tools (check, diagnose, atoms, find_color, bfs, action, show_frame, ...)
+  and state variables (current_frame, history, ...) are ALREADY defined as globals.
+  NEVER import them: `import check` / `import atoms` raises ImportError and wastes
+  a whole turn. Just call them directly.
+- Dunder names (`__anything__`) are blocked and abort your entire snippet — never
+  reference them.
+- On any error, the tool result already contains the message. Never import
+  traceback/inspect to debug — just read the error and fix the code.
 - Never print full 64×64 grids — output compact summaries only (object lists, diffs, coordinates, counts).
 - Print compact summaries only. Use atoms() for grid overview, find_color() for specific colors, print_region with sub-regions (max 20×20). Never print full 64×64 grids — they exceed the output cap.
 """

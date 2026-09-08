@@ -58,6 +58,30 @@ def test_python_tool_addendum_documents_limits():
 
 
 @pytest.mark.unit
+def test_python_tool_addendum_documents_preloaded_globals():
+    """d91cdde0: the model wrote `import check` / `import atoms` /
+    `import traceback` (5 ImportErrors) and referenced dunder names
+    (2 snippet aborts), each wasting a 60-80s LLM round trip. The
+    python-tool addendum must state that tools are preloaded globals,
+    that imports of them fail, and that dunders are blocked."""
+    text = AGENT_PYTHON_TOOL_ADDENDUM
+    assert "ALREADY defined as globals" in text
+    assert "NEVER import them" in text
+    assert "Dunder names" in text
+    assert "Never import" in text and "traceback/inspect" in text
+
+
+@pytest.mark.unit
+def test_runtime_state_addendum_does_not_hardcode_action_budget():
+    """d91cdde0: the prompt hardcoded "(80 actions)" while the run used
+    MAX_ACTIONS=100 — a stale constant. The budget must be described
+    without a hardcoded number (guardrails announce it)."""
+    text = AGENT_RUNTIME_STATE_ADDENDUM
+    assert "80 actions" not in text
+    assert "limited action budget" in text
+
+
+@pytest.mark.unit
 def test_system_prompt_assembles_all_addenda():
     prompt = AGENT_SYSTEM_PROMPT
     assert len(prompt) > 1000
