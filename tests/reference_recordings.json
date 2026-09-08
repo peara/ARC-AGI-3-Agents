@@ -58,6 +58,16 @@
         "expect_terminal_rule": true,
         "expect_counter_rule": true
       }
+    },
+    {
+      "name": "ls20-simulatorfirst-b3a8ef1f",
+      "path": "recordings/ls20-9607627b.simulatorfirstagent.simulatorfirst.b3a8ef1f-cdab-47c6-9be5-67d0375e7d23.recording.jsonl",
+      "plan_cases": []
+    },
+    {
+      "name": "ls20-simulatorfirst-11fe642e",
+      "path": "recordings/ls20-9607627b.simulatorfirstagent.simulatorfirst.11fe642e-0edb-4b97-85b4-eefdf35a498f.recording.jsonl",
+      "plan_cases": []
     }
   ]
 }
