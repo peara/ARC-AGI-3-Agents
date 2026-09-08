@@ -1,7 +1,7 @@
 # Simulator-First Agent — Design Document
 
 > Architecture and data flow for the SimulatorFirstAgent (simulatorfirst) and the SimulatorSandbox.
-> Last updated: 2026-09-04
+> Last updated: 2026-09-08
 
 ---
 
@@ -172,6 +172,117 @@ execution path never calls them: `LoopAgent.main()` invokes `run()` directly.
 
 ---
 
+## 3. RESET Handler & Index Alignment
+
+All RESET (action 0) semantics live in one module,
+`agents/simulator_agent/reset_policy.py`. It is the ONLY simulator_agent
+module allowed to import `RESET_ACTION` from `perception.session` (an import
+pinning test enforces this; no 4th constant copy). Consumers call its APIs
+instead of re-deriving RESET logic inline. The canonical mapping table lives
+in the module docstring and is mirrored in `AGENTS.md`.
+
+### Canonical mapping table
+
+| Mapping | Meaning |
+|---|---|
+| `frames[k] ↔ grids[k]` | board-wise, within a level window: `t_level = 0` for level 1 under the frames[0] fill; `t_level` = frames-index of the level start for levels 2+ (which begin via level-completion, no RESET) |
+| `history[i] ↔ transition i ↔ actions[i]` | transition i maps `grids[i] --actions[i]--> grids[i+1]` |
+| action that PRODUCED frame i | `actions[i-1]` (state-keyed pairing; frame 0 is produced by RESET itself) |
+
+### Handler APIs
+
+- `is_reset(action_id)` — True for int `0` or the exact string `"RESET"`
+  (case-sensitive). Mirrors the offline normalization in `sandbox.py`.
+- `virtual_reset_pair(b0)` — returns `([B0copy, B0copy], [0])`, row-wise deep
+  copies immune to caller mutation and to each other. Shape invariant:
+  `len(actions) == len(grids) - 1`.
+- `ResetSeedTracker` — agent-side one-time seed flag per game level.
+  `should_seed(lvl)` is False for levels 2+ ALWAYS (they start via
+  level-completion, no RESET); `mark_seeded` is idempotent. Lives on the
+  agent, not the sandbox, so worker quarantine cannot lose it.
+- `producing_action_caption(i, actions)` — frame 0 →
+  `"action that produced frame 0: RESET (id 0)"`; frame i>0 → `actions[i-1]`;
+  out-of-range → `"unknown"`, never raises.
+- Policy constants: `check_includes_reset()=True`,
+  `diagnose_includes_reset()=True`, `bfs_includes_reset()=False`.
+
+### Policy split
+
+- **check / diagnose INCLUDE RESET transitions.** The RESET transition is
+  trained data like any other: the corpus legitimately contains it and
+  scoring over it is meaningful.
+- **BFS EXCLUDES RESET edges.** A RESET edge cycles back to the level-start
+  board BFS has already visited; expanding it is pure waste. Excluded
+  branches are logged at DEBUG on `simulator.reset_policy`.
+- **`predict_and_compare` skips RESET** (unchanged behavior, now routed
+  through `is_reset` and logged — never silent).
+
+### Live-vs-offline parity
+
+Offline corpus content is UNCHANGED. Offline loading replays all harness
+frames including the synthetic env.reset() frame at index 0, so both pinned
+recordings already show `grids[0] == grids[1]` and `actions[0] == 0` — the
+pair shape. Snapshot-pinning tests
+(`tests/unit/simulator_agent/test_corpus_pinning.py`, hashes in
+`tests/unit/simulator_agent/data/corpus_snapshots.json`) prove corpus content
+identical pre/post rework. Live corpora now match that shape via
+`update_state(reset_seeded=True)`: one-time per level 1, seeded as
+`grids=[B0, B0]`, `actions=[0]`; the first real action appends `(B1, a1)` as
+transition 1. Naive `grids=[B0]`/`actions=[0]` seeding is the corruption trap
+(transition 0 would become `(B0, RESET) → B1`, attributing a1's result to
+RESET); the duplicate board kills it. Levels 2+ reseed grids-only, no
+fabricated RESET.
+
+### Degenerate-RESET surfacing in check()
+
+The virtual pair adds a trivially-correct frame: `(B0, RESET) → B0` has
+`changed == 0`, so it counts toward `frames_correct` under any simulate.
+`run_check` tags such frames (`degenerate_reset: True` per-frame, plus a
+`degenerate_reset_frames` aggregate key) and appends a count to the summary
+line. The metric computation itself is untouched (historical comparability —
+the baseline is pinned by `test_corpus_pinning.py`).
+
+### Caption convention
+
+Frame captions use state-keyed wording: "action that produced frame i" is
+`actions[i-1]`, via `producing_action_caption`. Applied at `show_frame`
+(sandbox), the experiment's initial-prompt captions, and the
+`get_action(i)` / `previous_frame` docstrings in prompts.py. Frame 0 is
+produced by RESET itself, not by any corpus action.
+
+### Iter-0 fill mechanics
+
+`run()`'s iter-0 guard sits BEFORE the outer loop: on an empty placeholder it
+calls `step_env(RESET)`, then overwrites slot 0 in place with a copy of the
+post-RESET board — `frames == [F0copy, F0, ...]`, list identity and length
+preserved (no insert). The fill bypasses the recorder entirely (recording
+format frozen — see below). A failed RESET (`step_env` returns None) falls
+through to the outer loop, which crashes on the empty placeholder. That is
+pre-existing crash behavior, identical before this change; the guard re-fires
+on the next `run()` invocation, not the next loop iteration.
+
+### smolagents note
+
+`agents/templates/smolagents.py` computes `action_count=len(self.frames)`;
+the fill shifts that counter +1. Display-only (template agent, not on the
+eval path) — left as is, documented here.
+
+### Recording format frozen
+
+The frames[0] fill is never recorded: no new lines, no serialization changes,
+the recorder stays blind to the fill. Offline corpora already carry the pair
+shape, so recordings and corpora stay comparable without format changes.
+
+### Out of scope / future work
+
+- **duck_harness_agent same-pattern cleanup** — the same frames/grids offset
+  exists there; untouched by this wave.
+- **Repo-wide RESET-constant consolidation** — `perception/_roles_helpers.py`
+  and `scripts/` copies of `RESET_ACTION = 0` remain; only simulator_agent
+  was consolidated to import from `perception.session`.
+
+---
+
 ## 4. Sandbox Tools
 
 The `SimulatorSandbox` namespace persists across LLM turns. `set_simulate(func)` registers a function that stays available for `simulate()`, `check()`, and `bfs()` in subsequent turns.
@@ -218,21 +329,21 @@ The `SimulatorSandbox` namespace persists across LLM turns. `set_simulate(func)`
 
 | Tool | Purpose |
 |---|---|
-| `show_frame(i)` | render frame i as an image (appended to next tool result) |
+| `show_frame(i)` | render frame i as an image (appended to next tool result). Caption names the action that PRODUCED frame i (`actions[i-1]`; RESET at i==0) |
 | `show_grid(grid, label)` | render an arbitrary grid as an image |
 
 ### Validation
 
 | Tool | Purpose |
 |---|---|
-| `check(simulate_fn)` | test simulate on all recorded frames. Returns accuracy, wrong_cells, frames_correct. |
+| `check(simulate_fn)` | test simulate on all recorded frames. Returns accuracy, wrong_cells, frames_correct. RESET transitions are scored as trained data; degenerate RESET frames (identity transitions) are surfaced in the summary, not excluded. |
 | `diagnose(simulate_fn)` | semantic error analysis: MISSED, SPURIOUS, WRONG_VALUE, grouped by spatial cluster |
 
 ### Planning
 
 | Tool | Purpose |
 |---|---|
-| `bfs(start_grid, goal_fn, max_depth=20)` | BFS using registered `simulate()`. Returns a list of action IDs, or None. `goal_fn` output at the goal state is captured and printed. Max 50,000 nodes. |
+| `bfs(start_grid, goal_fn, max_depth=20)` | BFS using registered `simulate()`. Returns a list of action IDs, or None. `goal_fn` output at the goal state is captured and printed. Max 50,000 nodes. RESET edges are excluded per `reset_policy` (wasteful cycle-back to the visited level-start board). |
 
 ---
 
@@ -279,6 +390,10 @@ Plan: <content>
 ---
 
 ## 7. Key Design Decisions
+
+## 7. Key Design Decisions
+
+- **RESET handler consolidation** (`reset_policy.py`): all RESET (action 0) semantics — predicate, corpus seeding, policy split, captions — live in one module, the only simulator_agent module importing `RESET_ACTION`. Live corpora are seeded with the virtual RESET pair so `frames[k] ↔ grids[k]` element-wise per level window. See §3.
 
 - **Grid-based simulate** (`simulate(grid, action) -> next_grid`): The simulate function takes a grid, not a frame index. This allows BFS to call simulate on hypothetical states without accessing frame history. The original experiment used `simulate(frame_index, action)` — this was reversed to support BFS.
 
@@ -474,6 +589,7 @@ agents/
     ├── agent.py             — SimulatorFirstAgent(LoopAgent): run() orchestration, tool loop + dispatch, step_env
     ├── conversation.py      — pure message-list trimming pipeline (estimate_tokens, trim_*, strip_*)
     ├── exception_flow.py    — build_exception_flow_message (simulate-crash / region-diff diagnosis text)
+    ├── reset_policy.py      — single owner of RESET semantics: is_reset, virtual_reset_pair, ResetSeedTracker, policy constants, captions (canonical mapping table in docstring)
     ├── sandbox.py           — SimulatorSandbox: in-process exec, action(), bfs(), check(), diagnose(), two modes
     ├── workflow.py          — WorkflowController (EXPLORE→MODEL→PLAN→EXECUTE) + SpiralGuard (12/24/36 thresholds)
     ├── prompts.py           — AGENT_SYSTEM_PROMPT (7 addendums), build_agent_user_prompt, tool schemas

@@ -21,6 +21,15 @@ models are under consideration for Kaggle).
   - `langgraph_vision_agent/` — vision-first multimodal LLM agent (`langgraphvision` / `llmcuriosityv2`); 4-node LangGraph workflow (observe → reflect → plan → experiment). See `docs/reports/langgraph-vision-agent.md`.
   - `langgraph_unified_agent/` — tool-calling LLM agent (`langgraphunified`) merging reflect + plan into a single `unified` node; 2-node workflow (observe → unified) with `inspect`/`reflect`/`decide` tools. V2 (2-tool, nested `world_model`) and V3 (`use_routing`, 3-tool routing dispatch) modes. See `docs/reports/langgraph-unified-agent.md`.
   - `simulator_agent/` — simulator-first LLM agent (`simulatorfirst`); writes `simulate(grid, action)` to learn game transitions, validates with `check()`, plans with `bfs()`. Also houses the offline experiment infrastructure (`run_experiment`, `SimulatorSandbox`). See `docs/reports/simulator-agent.md`.
+    - **RESET & index alignment** — all RESET (action 0) semantics live in `agents/simulator_agent/reset_policy.py`, the ONLY simulator_agent module importing `RESET_ACTION` from `perception.session`. Canonical mapping table (cite it, don't restate it):
+
+      | Mapping | Meaning |
+      |---|---|
+      | `frames[k] ↔ grids[k]` | board-wise, within a level window: `t_level = 0` for level 1 under the frames[0] fill; `t_level` = frames-index of the level start for levels 2+ (which begin via level-completion, no RESET) |
+      | `history[i] ↔ transition i ↔ actions[i]` | transition i maps `grids[i] --actions[i]--> grids[i+1]` |
+      | action that PRODUCED frame i | `actions[i-1]` (state-keyed pairing; frame 0 is produced by RESET itself) |
+
+      The virtual RESET pair: `frames == [F0copy, F0, ...]` — the `[0]/[1]` board duplicate IS the RESET transition (`(B0, RESET) → B0`). Live corpora are pair-seeded via `update_state(reset_seeded=True)` (one-time per level 1, tracked agent-side by `ResetSeedTracker`); levels 2+ reseed grids-only, no fabricated RESET. Offline corpora already carry the pair shape (the synthetic env.reset() frame duplicates the recorded RESET result).
 - `vision/` — grid rendering for multimodal LLM input (palette + PIL-based image generation)
   - `palette.py` — `ARCADE_PALETTE`: canonical 16-color RGBA tuples for ARC-AGI-3 grid indices
   - `render.py` — `grid_to_image` (64×64 → 256×256 PNG), `image_to_base64`, `make_image_block`, `make_multimodal_user_message`
@@ -154,6 +163,7 @@ Note: mid-turn `frame=N` in workflow logs refers to the frame observed at the st
 | `planning.llm_rule_proposer` | Per-proposal validation | `validate_proposal: accept`, `validate_proposal: reject <reason>` (DEBUG) |
 | `effects.engine_log` | Rule context diff per engine step | `+ proposed:`, `↑ bucket→bucket`, `- pruned` |
 | `agents.simulator_agent.workflow` | Workflow phase lifecycle | `frame=N phase=EXPLORE actions=N`, `frame=N set_phase EXPLORE→MODEL reason='...'`, `frame=N set_phase→PLAN REJECTED: ...`, `frame=N guardrail: MODEL→EXPLORE (5 consecutive check failures)` (WARNING), `frame=N exception_flow #N {old}→MODEL` |
+| `simulator.reset_policy` | RESET decisions: seeding, bfs exclusion, predict skip | `reset seed marked for game_level=N`, `bfs: excluded RESET branch(es) ... per reset_policy` (DEBUG), `predict_and_compare: skipping RESET action 0 per reset_policy` (DEBUG) |
 
 ### Quick diagnostics
 
@@ -178,6 +188,9 @@ grep "engine_log" <recording>.logs.log
 
 # What phase was the agent in, and when did it transition?
 grep "workflow" <recording>.logs.log
+
+# What did the RESET policy decide (seeding, bfs exclusion, predict skip)?
+grep "reset_policy" <recording>.logs.log
 ```
 
 The LLM `.llm.jsonl` sidecar (see "Debugging with LLM logs" above) records
