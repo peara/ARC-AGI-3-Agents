@@ -441,6 +441,19 @@ DIAGNOSIS_APPENDIX = {
         "not), and test the leading candidate with one python probe "
         "before editing simulate()."
     ),
+    "B3": (
+        "\n\nThis is a 2D grid game. A diff like this can arise from "
+        "many 2D game mechanics, not only the one your simulate() "
+        "models. Before revising your object model, enumerate "
+        "candidate mechanics that could produce this exact diff "
+        "pattern, rank them by fit to the evidence (per-move diffs "
+        "within this batch: which moves matched reality, which did "
+        "not), and test the leading candidate with one python probe "
+        "before editing simulate(). "
+        "Once your leading hypothesis is confirmed by a probe, "
+        "immediately implement it in simulate(), call set_simulate(), "
+        "and run check() before any further exploration."
+    ),
 }
 
 
@@ -671,11 +684,12 @@ def main() -> None:
     parser.add_argument("--llm-cap", type=int, default=DEFAULT_LLM_CAP)
     parser.add_argument(
         "--variant",
-        choices=["base", "A", "B", "B2"],
+        choices=["base", "A", "B", "B2", "B3"],
         default="base",
         help="Exception-flow diagnosis appendix: base=production, "
         "A=named cases (blocked/HUD/object), B=generic differential, "
-        "B2=2D-game mechanics enumeration",
+        "B2=2D-game mechanics enumeration, B3=B2+registration "
+        "follow-through",
     )
     parser.add_argument("--fake-llm", action="store_true")
     parser.add_argument("--out", type=Path, default=None)
