@@ -45,6 +45,7 @@ from agents.simulator_agent.conversation import (
     trim_old_tool_results,
 )
 from agents.simulator_agent.exception_flow import build_exception_flow_message
+from agents.simulator_agent.frame_layers import settled_board
 from agents.simulator_agent.prompts import (
     AGENT_PYTHON_TOOL_SCHEMA,
     AGENT_SYSTEM_PROMPT,
@@ -205,14 +206,14 @@ class SimulatorFirstAgent(LoopAgent):
             if latest_frame.levels_completed is not None:
                 self._current_grid_levels_completed = latest_frame.levels_completed
 
-            # Get current grid
-            grid = latest_frame.frame[0]  # first grid layer
+            # Get current grid — settled board (see frame_layers.settled_board)
+            grid = settled_board(latest_frame.frame)
             self._current_grid = [list(row) for row in grid]
 
             # Previous grid (for diff / sandbox)
             if len(self.frames) >= 2 and getattr(self.frames[-2], "frame", None):
                 prev_raw = self.frames[-2].frame
-                self._previous_grid = [list(row) for row in prev_raw[0]]
+                self._previous_grid = [list(row) for row in settled_board(prev_raw)]
             else:
                 self._previous_grid = None
 
@@ -762,7 +763,7 @@ class SimulatorFirstAgent(LoopAgent):
         entry: dict[str, Any] = {
             "action": action_id,
             "frame_index": self.action_counter - 1,
-            "frame": [list(row) for row in frame.frame[0]],
+            "frame": [list(row) for row in settled_board(frame.frame)],
         }
         if provenance is not None:
             entry["provenance"] = provenance
@@ -860,8 +861,8 @@ class SimulatorFirstAgent(LoopAgent):
             curr_levels = (
                 curr.levels_completed if hasattr(curr, "levels_completed") else 0
             )
-            prev_grid = prev.frame[0] if prev.frame else None
-            curr_grid = curr.frame[0] if curr.frame else None
+            prev_grid = settled_board(prev.frame) if prev.frame else None
+            curr_grid = settled_board(curr.frame) if curr.frame else None
             self._last_action_result = {
                 "board_changed": prev_grid != curr_grid,
                 "done": curr.state is GameState.GAME_OVER
@@ -891,6 +892,13 @@ class SimulatorFirstAgent(LoopAgent):
         }
         if self._current_grid is not None:
             state_response["grid"] = self._current_grid
+        if frame is not None and frame.frame:
+            # Detection seam (task 6 input): the RAW layer stack rides
+            # through step_env's FrameData into the sandbox response;
+            # segmentation stays settled-board-only.
+            state_response["frame_layers"] = [
+                [list(row) for row in layer] for layer in frame.frame
+            ]
         state_response["valid_actions"] = self._valid_actions
         state_response["last_action_result"] = self._last_action_result
 
@@ -945,7 +953,7 @@ class SimulatorFirstAgent(LoopAgent):
         """Re-segment the grid from the given frame and cache results."""
         if not frame.frame:
             return
-        grid = frame.frame[0]
+        grid = settled_board(frame.frame)
         self._current_grid = [list(row) for row in grid]
         grid_np = np.array(grid, dtype=int)
         atoms = extract_atoms(grid_np)
