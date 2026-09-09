@@ -307,3 +307,58 @@ class TestIncidentSettledIdentity:
 
     def test_frame0_byte_equality(self, frames):
         assert settled_board(frames[0]) == frames[0][0]
+
+
+class TestD91cdde0SweepPin:
+    """Pin the full sweep output for d91cdde0 (scripts/scan_frame_stacks.py).
+
+    Regression fixture for the 2026-09-09 sampled corpus sweep: the
+    recording must classify as exactly 2 FLASH_RESET (48, 92), 6
+    HIGHLIGHT (19, 20, 21, 35, 38, 61) and 1 LEVEL_WIN (70), with C3
+    (settled ≈ level-start ≤ TOL) satisfied on both flashes.
+    """
+
+    def test_multi_layer_frames_exactly_nine(self, frames):
+        multi = [i for i, f in enumerate(frames) if len(f) > 1]
+        assert multi == [19, 20, 21, 35, 38, 48, 61, 70, 92]
+
+    def test_flash_frames_are_48_and_92(self, frames):
+        flashes = [i for i, f in enumerate(frames) if classify_stack(f) is StackClass.FLASH_RESET]
+        assert flashes == [48, 92]
+
+    def test_highlight_frames_are_the_six_known(self, frames):
+        highlights = [i for i, f in enumerate(frames) if classify_stack(f) is StackClass.HIGHLIGHT]
+        assert highlights == [19, 20, 21, 35, 38, 61]
+
+    def test_win_frame_is_70(self, frames):
+        wins = [i for i, f in enumerate(frames) if classify_stack(f) is StackClass.LEVEL_WIN]
+        assert wins == [70]
+
+    def test_c3_holds_on_both_flashes(self, frames):
+        level_starts = _level_start_boards(frames)
+        for i in (48, 92):
+            settled = settled_board(frames[i])
+            start = level_starts[i]
+            tol = reset_tol(len(start) * len(start[0]))
+            assert diff_count(settled, start) <= tol, f"frame {i}"
+
+
+def _level_start_boards(frames: list[list[list[list[int]]]]) -> list[list[list[int]]]:
+    """Mirror the sweep's level-start tracker (settled board at the last
+    ``levels_completed`` increment; frame 0 for level 1)."""
+    import json as _json
+
+    data_frames: list[dict] = []
+    with _RECORDING.open() as fh:
+        for line in fh:
+            data_frames.append(_json.loads(line)["data"])
+    starts: list[list[list[int]]] = []
+    last_level: int | None = None
+    start_board: list[list[int]] | None = None
+    for d in data_frames:
+        levels = d.get("levels_completed")
+        if last_level is None or levels != last_level or start_board is None:
+            start_board = settled_board(d["frame"])
+            last_level = levels
+        starts.append(start_board)
+    return starts
