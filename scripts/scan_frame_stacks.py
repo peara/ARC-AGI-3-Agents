@@ -50,6 +50,7 @@ from agents.simulator_agent.frame_layers import (  # noqa: E402
 
 # --- Recording loading (total: malformed lines are skipped, not fatal) --------
 
+
 def load_frames(path: str) -> tuple[list[dict[str, Any]], list[str]]:
     """Load ``.recording.jsonl`` data dicts; return (frames, skip notes).
 
@@ -76,11 +77,14 @@ def load_frames(path: str) -> tuple[list[dict[str, Any]], list[str]]:
             if isinstance(data, dict) and "frame" in data:
                 frames.append(data)
             else:
-                notes.append(f"line {lineno}: no data.frame field (scorecard-only line?)")
+                notes.append(
+                    f"line {lineno}: no data.frame field (scorecard-only line?)"
+                )
     return frames, notes
 
 
 # --- Level-start tracking -----------------------------------------------------
+
 
 def level_start_boards(frames: list[dict[str, Any]]) -> list[list[list[int]] | None]:
     """Per-frame level-start board (settled board at the last level boundary).
@@ -112,6 +116,7 @@ def level_start_boards(frames: list[dict[str, Any]]) -> list[list[list[int]] | N
 
 
 # --- Per-recording scan -------------------------------------------------------
+
 
 def scan_recording(path: str) -> dict[str, Any]:
     """Scan one recording; return its result dict (never raises)."""
@@ -149,7 +154,9 @@ def scan_recording(path: str) -> dict[str, Any]:
             "class": cls.value,
             "layers": len(frame),
             "anim_uniform": all(
-                isinstance(layer, list) and layer and isinstance(layer[0], list)
+                isinstance(layer, list)
+                and layer
+                and isinstance(layer[0], list)
                 and all(
                     isinstance(r, list) and r and all(c == layer[0][0] for c in r)
                     for r in layer
@@ -176,6 +183,7 @@ def scan_recording(path: str) -> dict[str, Any]:
 
 # --- Output -------------------------------------------------------------------
 
+
 def render_table(results: list[dict[str, Any]]) -> str:
     """Human-readable per-frame table + per-recording totals."""
     lines: list[str] = []
@@ -186,17 +194,21 @@ def render_table(results: list[dict[str, Any]]) -> str:
             lines.append(f"  ERROR: {res['error']}")
             continue
         if res["skipped_lines"]:
-            lines.append(f"  skipped {len(res['skipped_lines'])} malformed line(s): "
-                         + "; ".join(res["skipped_lines"][:3])
-                         + (" ..." if len(res["skipped_lines"]) > 3 else ""))
+            lines.append(
+                f"  skipped {len(res['skipped_lines'])} malformed line(s): "
+                + "; ".join(res["skipped_lines"][:3])
+                + (" ..." if len(res["skipped_lines"]) > 3 else "")
+            )
         if not res["rows"]:
             lines.append("  (no multi-layer frames)")
         for row in res["rows"]:
             extra = ""
             if row["class"] == StackClass.FLASH_RESET.value:
                 if row.get("diff_settled_vs_level_start") is not None:
-                    extra = (f" diff(settled, level_start)={row['diff_settled_vs_level_start']}"
-                             f" tol={row['tol']} C3={'OK' if row['c3_ok'] else 'FAIL'}")
+                    extra = (
+                        f" diff(settled, level_start)={row['diff_settled_vs_level_start']}"
+                        f" tol={row['tol']} C3={'OK' if row['c3_ok'] else 'FAIL'}"
+                    )
                 else:
                     extra = " C3=FAIL(no level_start)"
             lines.append(
@@ -211,6 +223,7 @@ def render_table(results: list[dict[str, Any]]) -> str:
 
 
 # --- Sample selection ---------------------------------------------------------
+
 
 def _count_multi_layer(path: str) -> int:
     """Count multi-layer frames in a recording (0 on any error)."""
@@ -239,7 +252,7 @@ def pick_sample(directory: str, per_group: int = 2) -> list[str]:
     picked: list[str] = []
     for (_game, _agent), files in sorted(groups.items()):
         scored = sorted(
-            (( _count_multi_layer(os.path.join(directory, f)), f) for f in files),
+            ((_count_multi_layer(os.path.join(directory, f)), f) for f in files),
             key=lambda t: (-t[0], t[1]),
         )
         hits = [f for n, f in scored if n > 0]
@@ -248,9 +261,7 @@ def pick_sample(directory: str, per_group: int = 2) -> list[str]:
         if not chosen and zeros:
             chosen = zeros[:1]  # cover the prefix even with no multi-layer frames
         for anchor in mandatory:
-            if any(anchor in f for f in files) and not any(
-                anchor in f for f in chosen
-            ):
+            if any(anchor in f for f in files) and not any(anchor in f for f in chosen):
                 chosen.append(next(f for f in files if anchor in f))
         picked.extend(os.path.join(directory, f) for f in chosen)
     return sorted(set(picked))
@@ -258,12 +269,18 @@ def pick_sample(directory: str, per_group: int = 2) -> list[str]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Corpus-wide animation-stack sweep over ARC-AGI-3 recordings.")
+        description="Corpus-wide animation-stack sweep over ARC-AGI-3 recordings."
+    )
     parser.add_argument("recording", nargs="?", help="Path to one .recording.jsonl")
-    parser.add_argument("--all", metavar="DIR", help="Scan every *.recording.jsonl under DIR")
-    parser.add_argument("--sample", metavar="DIR",
-                        help="Scan a per-game/agent subset of DIR (≤ ~20 recordings, "
-                             "prioritising multi-layer-heavy recordings)")
+    parser.add_argument(
+        "--all", metavar="DIR", help="Scan every *.recording.jsonl under DIR"
+    )
+    parser.add_argument(
+        "--sample",
+        metavar="DIR",
+        help="Scan a per-game/agent subset of DIR (≤ ~20 recordings, "
+        "prioritising multi-layer-heavy recordings)",
+    )
     parser.add_argument("--json", metavar="PATH", help="Write JSON summary to PATH")
     args = parser.parse_args()
 
@@ -293,9 +310,9 @@ def main() -> None:
         summary = {
             "recordings_scanned": len(results),
             "recordings_ok": sum(1 for r in results if r["ok"]),
-            "totals": dict(sorted(sum(
-                (Counter(r["counts"]) for r in results), Counter()
-            ).items())),
+            "totals": dict(
+                sorted(sum((Counter(r["counts"]) for r in results), Counter()).items())
+            ),
             "per_recording": [
                 {
                     "recording": r["recording"],
