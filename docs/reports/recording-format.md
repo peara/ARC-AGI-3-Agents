@@ -1,7 +1,7 @@
 # Recording Format Reference
 
 > Canonical reference for `*.recording.jsonl` and `*.llm.jsonl` structure,
-> timing semantics, and common pitfalls. Last updated: 2026-07-14.
+> timing semantics, and common pitfalls. Last updated: 2026-09-09.
 
 ---
 
@@ -50,7 +50,7 @@ Each line in `*.recording.jsonl` is a JSON object with a `data` key:
 |---|---|---|
 | `action_input.id` | int | The action that **produced** this frame (see §3 below) |
 | `available_actions` | list[int] | Correct action list for this game |
-| `frame` | list | The 64×64 colour-index grid (triple-nested, see §4) |
+| `frame` | list | The 64×64 colour-index grid (triple-nested, see §4; multi-layer case in §7) |
 | `scene_state.scene` | dict | Entity/track data — **see §3 timing warning** |
 | `scene_state.effect_context` | dict | Rule state, proposed/confirmed rules |
 | `levels_completed` | int | Levels completed so far |
@@ -184,7 +184,8 @@ for i in range(len(frames)):
 ## 4. Grid format
 
 `data.frame` is triple-nested: `[[[row0_col0, row0_col1, ...], ...]]`.
-The outer list wraps a single "channel" (always 1 subframe), the middle list
+The outer list wraps the subframe layers (usually exactly 1 — see §7 for
+the multi-layer animation-stack case), the middle list
 is rows, the inner list is column values (colour indices 0–15).
 
 Unwrap:
@@ -264,7 +265,139 @@ Always verify against the recording, not from memory.)
 
 ---
 
-## 7. Debugging scripts
+## 7. Animation stacks (multi-layer frames)
+
+Everything in §4 assumed `data.frame` wraps a single board. That is the
+common case, but not the whole contract. The server sometimes returns a
+frame as a **list of boards** — `[layer][row][col]` — where the extra
+layers are a short animation played on top of the board. `arc_agi/wrapper.py`
+serializes `resp.frame` verbatim (one `.tolist()` per layer, no unwrapping),
+and the recorder is faithful, so whatever the server sent is exactly what
+lands in the recording line. Most frames have exactly 1 layer; a frame with
+more than one is an **animation stack**.
+
+Corpus-wide reality (sampled sweep over 19 recordings / 13 game groups —
+see [`docs/diary/2026-09-09-stack-sweep.md`](../diary/2026-09-09-stack-sweep.md)):
+multi-layer frames appear in ls20-class games (18 flash_reset + 131
+highlight + 3 level_win across 143 multi-layer frames in the sample);
+wa30-class runs show none. Animation stacks are not a wa30 phenomenon —
+do not generalize wa30's colour-layer table (§6) to them. This section
+documents a different pattern: temporal animation layers, not colour
+decomposition.
+
+### 7.1 The three stack classes
+
+The classes below come from the d91cdde0 incident run
+(ls20, simulatorfirst, 100 frames — full triage in
+[`docs/diary/2026-09-09-d91cdde0-exception-flow-triage.md`](../diary/2026-09-09-d91cdde0-exception-flow-triage.md)).
+The proof for each is the **continuity diff profile**: for a stack at frame
+N, diff each layer against the next frame's settled board. The layer that
+matches (diff ≈ 0, HUD aside) is the one the game continues from — that
+layer is "the real board".
+
+**FLASH_RESET** — 6 layers = 5 uniform single-colour animation boards +
+settled restored board. d91cdde0 frames 48 and 92:
+
+| Layer | Content | diff vs next settled board |
+|---|---|---|
+| 0–4 | uniform single-colour animation boards | 4014 each |
+| 5 (last) | settled restored board | 52 (HUD only) |
+
+Profile `[4014×5, 52]`: the next frame continues from the **LAST** layer.
+The settled board is ≈ the level-start board within reset tolerance (f48:
+4 cells from level start).
+
+**HIGHLIGHT** — 6 layers = 5 identical base boards + highlighted last
+layer. d91cdde0 frames 19/20/21/35/38/61. Two distinct behaviours:
+
+| Frames | Next frame continues from | Profile | Reading |
+|---|---|---|---|
+| 19, 20 | **layer 0** | `[0, 0, 0, 0, 0, 76]` | the highlight is transient and does NOT persist |
+| 21, 35, 38, 61 | layer 0, but the base lags the landing change by one frame | `[128×5, 52]` | a real diff at the next transition — legitimate modeling signal |
+
+The `[0,0,0,0,0,76]` profile is the falsification: an unconditional
+"always take the last layer" rule is wrong for highlights.
+
+**LEVEL_WIN** — 2 layers = final old-level board + first new-level board.
+d91cdde0 frame 70:
+
+| Layer | Content | diff vs next settled board |
+|---|---|---|
+| 0 | final old-level board | 1459 |
+| 1 (last) | first new-level board | 54 |
+
+Profile `[1459, 54]`: the next frame continues from the **LAST** layer.
+
+### 7.2 The class-aware settled-board rule
+
+Given the evidence above, "which layer is the board" cannot be a fixed
+index. The rule as implemented in
+`agents/simulator_agent/frame_layers.py` (`settled_board()`):
+
+| Stack | Settled board |
+|---|---|
+| 1 layer | layer 0 (byte-identity — the same object, no copy) |
+| FLASH_RESET, LEVEL_WIN | last layer |
+| HIGHLIGHT / other multi-layer | layer 0 |
+
+Classification itself is `classify_stack()` in the same module (uniform
+animation layers → FLASH_RESET; identical non-uniform base layers →
+HIGHLIGHT; 2 non-uniform layers → LEVEL_WIN; anything else → UNKNOWN).
+Note that perception's `to_grid` (`perception/objects.py`) documents the
+last-sub-frame default — correct for flash/win stacks, **wrong for
+highlight stacks** (see §7.5). simulator_agent uses its own class-aware
+helper instead.
+
+### 7.3 The board-reset mechanic
+
+The FLASH_RESET stack is the visible half of a server-side mechanic: when a
+level's action budget runs out, the whole board plays a flash animation and
+is then restored to the level start (the player respawns; the budget bar
+refills — game-dependent HUD, not load-bearing). The engine fields say
+nothing about it: `full_reset=False`, `levels_completed` unchanged,
+`state=NOT_FINISHED`. There are **no engine flags** — detection must be
+self-computed from the stack shape. The conjunctive detector (C1–C4) and
+the tolerance `TOL = max(64, cells // 32)` (128 cells on a 64×64 board)
+live in `agents/simulator_agent/frame_layers.py` (`is_board_reset`,
+`reset_tol`); the RESET-action mapping table it composes with is in
+`agents/simulator_agent/reset_policy.py` — don't restate it here.
+
+### 7.4 Corpus-wide findings
+
+From the sampled sweep (19 recordings, 13 game groups,
+[`docs/diary/2026-09-09-stack-sweep.md`](../diary/2026-09-09-stack-sweep.md)):
+
+- Every FLASH_RESET in the sample satisfied C3 (settled board within
+  tolerance of level start); zero C3 failures, zero UNKNOWN
+  classifications.
+- The 553ef211 9-consecutive multi-layer streak (frames 95–103) triaged as
+  a HIGHLIGHT streak: frozen board + a 76-cell repaint in the animation
+  layers. The detector correctly stays silent on every streak frame; the
+  two genuine flashes in that recording (43, 87) fire exactly as expected.
+
+### 7.5 Known pitfalls
+
+- **`scene_state` on flash frames describes the ANIMATION board.** The
+  perception pass ran on layer 0 of the stack (the flat flash colour), so
+  entities extracted from it are garbage. For offline perception analysis,
+  pair `scene_state[N]` with the SETTLED frame, not with `frame[N]`
+  layer 0. (This compounds the §3 one-frame lag — check both.)
+- **perception's `to_grid` last-layer default** is correct for flash/win
+  stacks and WRONG for highlight stacks (documented limitation;
+  simulator_agent now uses its own `frame_layers` helper).
+- **Other agents' exposure** (known, unfixed, out of scope):
+  `agents/duck_harness_agent/agent.py` sites 121, 425-426, 582 read
+  `frame[0]` unconditionally;
+  `agents/langgraph_vision_agent/observe.py` 86-87 handles it partially —
+  it takes `frame[0]` only when `len(frame) == 1`, else passes the whole
+  stack through.
+- **Corpus indexing:** `harness.frames[k]` == recording line k−1 (the
+  offline loader prepends a synthetic reset at `[0]`). Recording frame 48
+  is `corpus[49]`.
+
+---
+
+## 8. Debugging scripts
 
 The `scripts/` directory contains CLI tools for recording analysis. The most
 relevant ones for understanding timing and entity data:
