@@ -30,6 +30,7 @@ models are under consideration for Kaggle).
       | action that PRODUCED frame i | `actions[i-1]` (state-keyed pairing; frame 0 is produced by RESET itself) |
 
       The virtual RESET pair: `frames == [F0copy, F0, ...]` — the `[0]/[1]` board duplicate IS the RESET transition (`(B0, RESET) → B0`). Live corpora are pair-seeded via `update_state(reset_seeded=True)` (one-time per level 1, tracked agent-side by `ResetSeedTracker`); levels 2+ reseed grids-only, no fabricated RESET. Offline corpora already carry the pair shape (the synthetic env.reset() frame duplicates the recorded RESET result).
+    - `frame_layers.py` — frame-stack classification (SINGLE/FLASH_RESET/LEVEL_WIN/HIGHLIGHT/UNKNOWN), class-aware `settled_board` (last for flash/win, layer 0 for highlights), board-reset detector (C1-C4, `TOL=max(64, cells//32)`)
 - `vision/` — grid rendering for multimodal LLM input (palette + PIL-based image generation)
   - `palette.py` — `ARCADE_PALETTE`: canonical 16-color RGBA tuples for ARC-AGI-3 grid indices
   - `render.py` — `grid_to_image` (64×64 → 256×256 PNG), `image_to_base64`, `make_image_block`, `make_multimodal_user_message`
@@ -62,7 +63,7 @@ models are under consideration for Kaggle).
   - `engine.py` — `GroupingEngine`: one-function API (`update()` every frame → `list[ConfirmedGroup]`)
   - `proposal.py` — `GroupProposal` / `ProposedGroup` frozen dataclasses
   - `llm_probe.py` — standalone script: replay recording → heuristics → LLM → verdicts
-- `scripts/` — offline analysis over `*.recording.jsonl`
+- `scripts/` — offline analysis over `*.recording.jsonl` (e.g. `scan_frame_stacks.py` — per-game-sampled animation-stack sweep)
 - `recordings/` — game replays. `tests/reference_recordings.json` is the manifest.
 - `docs/` — design docs. `reports/` are living docs (e.g. `llm-curiosity-agent.md`), `brainstorms/` are future-session stubs, `diary/` are dated notes. **Keep design docs updated when behaviour changes.**
 
@@ -164,6 +165,7 @@ Note: mid-turn `frame=N` in workflow logs refers to the frame observed at the st
 | `effects.engine_log` | Rule context diff per engine step | `+ proposed:`, `↑ bucket→bucket`, `- pruned` |
 | `agents.simulator_agent.workflow` | Workflow phase lifecycle | `frame=N phase=EXPLORE actions=N`, `frame=N set_phase EXPLORE→MODEL reason='...'`, `frame=N set_phase→PLAN REJECTED: ...`, `frame=N guardrail: MODEL→EXPLORE (5 consecutive check failures)` (WARNING), `frame=N exception_flow #N {old}→MODEL` |
 | `simulator.reset_policy` | RESET decisions: seeding, bfs exclusion, predict skip | `reset seed marked for game_level=N`, `bfs: excluded RESET branch(es) ... per reset_policy` (DEBUG), `predict_and_compare: skipping RESET action 0 per reset_policy` (DEBUG) |
+| `simulator.board_reset` | Board-reset detection + consumption | `frame=N board_reset detected action_id=X layers=N diff=N cells`, `frame=N board_reset (path invalidated; phase=… preserved)` |
 
 ### Quick diagnostics
 

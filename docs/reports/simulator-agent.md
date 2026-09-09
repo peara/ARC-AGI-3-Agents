@@ -1,7 +1,7 @@
 # Simulator-First Agent — Design Document
 
 > Architecture and data flow for the SimulatorFirstAgent (simulatorfirst) and the SimulatorSandbox.
-> Last updated: 2026-09-08
+> Last updated: 2026-09-09
 
 ---
 
@@ -280,6 +280,134 @@ shape, so recordings and corpora stay comparable without format changes.
 - **Repo-wide RESET-constant consolidation** — `perception/_roles_helpers.py`
   and `scripts/` copies of `RESET_ACTION = 0` remain; only simulator_agent
   was consolidated to import from `perception.session`.
+
+---
+
+## 3b. Board resets (budget exhaustion)
+
+> Incident `d91cdde0` (ls20, 100 frames): two engine flashes (frames 48, 92)
+> each triggered multi-minute MODEL churn spirals — a phantom all-yellow
+> board entered the corpus, one simulate crash cascaded from it, and
+> post-flash `check()` failures tripped the 5-failure guardrail. Triage:
+> `docs/diary/2026-09-09-d91cdde0-exception-flow-triage.md`. This section
+> documents the shipped fix (plan `.omo/plans/simulator-board-reset.md`,
+> commits `3e54de0`…`e064c71`).
+
+### The mechanic
+
+ARC-AGI-3 engines can attach a per-level action budget. When the agent
+exhausts it, the engine flashes the whole board (a 6-layer animation stack:
+5 uniform single-colour layers, then the settled board restored to the level
+start — player respawned, budget HUD refilled, all game-dependent) and
+continues the level. Crucially the engine flags nothing: `full_reset=False`,
+`levels_completed` unchanged, `state=NOT_FINISHED`. From the API's point of
+view nothing happened; only the frame stack shows it. The animation-stack
+frame format (server contract, the three stack classes, and the class-aware
+settled-board rule) is specified in
+[`recording-format.md` §7](recording-format.md#7-animation-stacks-multi-layer-frames)
+— cite, don't restate.
+
+### Detection contract
+
+Implemented in `agents/simulator_agent/frame_layers.py` (`is_board_reset`) —
+cite it, don't restate internals. Conjunctive, never raises:
+
+- **C1** — `len(frame) > 1` (a 1-layer board is never a flash, however small
+  its diff);
+- **C2** — every animation layer (`layers[:-1]`) is uniform single-colour;
+- **C3** — the settled last layer ≈ the level-start board (`_grids[0]`)
+  within `TOL = max(64, cells // 32)` (= 128 on 64×64);
+- **C4** — `not is_reset(action)` (explicit RESET is `reset_policy`'s job;
+  the detector fires only on *observed* resets).
+
+The detector is validated to fire exactly on the real flashes and never on
+highlights: on `d91cdde0` it fires exactly {48, 92}; on the `553ef211`
+9-frame highlight streak (frames 95-103) it correctly does not fire on any
+streak frame (non-uniform animation layers fail C2; settled 148 cells from
+level start fails C3). Sweep evidence:
+`docs/diary/2026-09-09-stack-sweep.md`.
+
+### RESET-parity handling (the behavioral heart)
+
+A board reset is a RESET the engine performed on its own, so the agent
+handles it at RESET parity — and no further: everything that survives a
+RESET survives a flash.
+
+- **Hard-abort.** The sandbox's `action()` raises `BoardReset` the moment
+  detection fires, BEFORE `predict_and_compare` — the flash diff never
+  becomes an exception flow, and the remaining planned actions in the batch
+  never execute (they would burn the fresh budget on a board the old path
+  no longer describes). Mirrors the `LevelTransition` abort; detection is
+  independent of simulate registration (works in EXPLORE too).
+- **Consumption at the turn boundary.** `_board_reset_pending` is set in
+  the sandbox and consumed exactly once at the top of the next `run()`
+  iteration (`agent.py`), mirroring the level-transition flag's shape.
+- **`workflow.on_board_reset()` sets `_last_path=None` ONLY.** Phase,
+  corpus, history, notes, and simulate are ALL preserved — deliberately NOT
+  `reset_to_explore`. Movement mechanics are identical after the restore;
+  re-exploring would be pure waste. The only write in the handler body is
+  the path invalidation (pinned by
+  `tests/unit/simulator_agent/test_board_reset_integration.py`).
+- **`BOARD_RESET_TEXT` informs the model** (`prompts.py`): the board was
+  restored and the budget refreshed, this is engine feedback not a simulator
+  bug — re-plan via `bfs(current_frame, goal)`, do NOT rewrite `simulate()`,
+  do NOT re-explore, and record the budget via `update_notes`.
+- **LevelTransition precedence.** The board-reset block runs AFTER the
+  level-transition block in `run()`; a response that trips both detectors
+  raises `LevelTransition` first, so the board-reset path only ever sees a
+  lone flash.
+
+### check()/diagnose() skip-set
+
+The flash transition is recorded in `_engine_event_transitions` and excluded
+from `check()`/`diagnose()` scoring (both the aggregates and the per-frame
+metrics); the corpus retains the transition. RESET-action transitions are
+still scored per `check_includes_reset()` — the skip-set is for engine
+events only. Rationale: without the skip, every post-flash `check()` would
+report `wrong_cells > 0` (no simulate models the flash), the 5-consecutive
+check-failure guardrail would fire, and the workflow would churn
+MODEL→EXPLORE for a non-event.
+
+### Success metric
+
+From the triage diary (conservative):
+
+- **Flash-caused exception flows → 0** (the flash transition is detected and
+  handled at RESET-parity before `predict_and_compare` runs).
+- **Flash-cascaded simulate-crash flows → 0** transitively (the settled board
+  replaces the phantom, so `detect_player`'s `min()` cannot go empty).
+- **Conservative wall-clock target: ~30% reduction on ls20-class runs.** The
+  `d91cdde0` run spent 3h40m wall-clock, ~219 of 220 min LLM latency; the
+  plan removes only the flash-induced churn share, not the inherent call
+  latency.
+- The **11 real-divergence + 3 highlight-transition + 1 independent-crash**
+  exception flows from `d91cdde0` remain by design — legitimate modeling
+  signal the exception-flow mechanism exists to surface.
+
+### Cross-references
+
+- `agents/simulator_agent/frame_layers.py` — classifier, `settled_board`,
+  `is_board_reset` (C1-C4, TOL).
+- [`recording-format.md` §7](recording-format.md#7-animation-stacks-multi-layer-frames)
+  — animation-stack frame format, the full reference.
+- `docs/diary/2026-09-09-d91cdde0-exception-flow-triage.md` — the 17-flow
+  triage and success metric.
+- `docs/diary/2026-09-09-stack-sweep.md` — sampled sweep
+  (`scripts/scan_frame_stacks.py`, per-game-sampled animation-stack sweep;
+  sampled scope by design — extend the sample if a future run shows missed
+  or false detections), the `d91cdde0` pin, and the `553ef211` streak
+  verdict.
+
+### Known deferred items
+
+- **Frame-scoped `set_ignore`** — the ignore mask is global; per-frame
+  scoping is deferred.
+- **Other agents' exposure** — `duck_harness_agent` and
+  `langgraph_vision_agent`'s `observe.py` read raw layer 0 on multi-layer
+  frames; documented in `recording-format.md` §7, not fixed here.
+- **Perception `to_grid` highlight limitation** — takes the last layer for
+  3D stacks (the falsified always-last rule); simulator_agent no longer uses
+  it (migrated to `settled_board`), but perception retains the behaviour.
 
 ---
 
