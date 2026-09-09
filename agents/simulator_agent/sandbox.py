@@ -286,6 +286,13 @@ class SimulatorSandbox:
         # boundary, mirroring _transition_pending's cross-turn semantics).
         self._board_reset_pending: bool = False
 
+        # Transition indices produced by engine-initiated board resets
+        # (the level-budget flash). Scoring-only: check()/diagnose() skip
+        # them (no simulate can model the unmodelable restore), but the
+        # corpus retains the transitions. RESET-action transitions are
+        # still scored per check_includes_reset().
+        self._engine_event_transitions: set[int] = set()
+
         # Worker-scoped stdout capture (run_code): the buffer installed as
         # sys.stdout for the exec worker, and the stream it replaced.
         self._worker_stdout: StringIO | None = None
@@ -467,6 +474,7 @@ class SimulatorSandbox:
                 frame_layers_raw, self._grids[0], action_is_reset=is_reset(action_id)
             ):
                 self._board_reset_pending = True
+                self._engine_event_transitions.add(len(self._actions) - 1)
                 BOARD_RESET_LOGGER.info(
                     "frame=%d board_reset detected action_id=%s layers=%d diff=%d cells",
                     len(self._grids) - 1, action_id, len(frame_layers_raw),
@@ -599,6 +607,7 @@ class SimulatorSandbox:
                 self._actions,
                 verbose=True,
                 ignore_mask=self._ignore_mask,
+                skip_transitions=self._engine_event_transitions,
             )
             self._last_check_result = result
             return result
@@ -629,7 +638,11 @@ class SimulatorSandbox:
                 )
                 return {"error": "no frames recorded"}
             return diagnose_fn(
-                fn, self._grids, self._actions, ignore_mask=self._ignore_mask
+                fn,
+                self._grids,
+                self._actions,
+                ignore_mask=self._ignore_mask,
+                skip_transitions=self._engine_event_transitions,
             )
 
         ns["diagnose"] = diagnose
@@ -988,10 +1001,11 @@ class SimulatorSandbox:
     def reset_for_level_transition(self) -> None:
         """Clear per-level state after a ``LevelTransition`` hard-abort.
 
-        Clears the 11 per-level structures (grids, actions, check state,
-        ignore mask, correct-frame cache, pending exception flow, pending
-        images, current frame, previous grid, last action result, and the
-        matching namespace vars). PRESERVES ``_simulate``, ``_simulate_source``
+        Clears the 12 per-level structures (grids, actions, check state,
+        ignore mask, correct-frame cache, pending exception flow,
+        engine-event transition set, pending images, current frame,
+        previous grid, last action result, and the matching namespace
+        vars). PRESERVES ``_simulate``, ``_simulate_source``
         (the LLM's carried-forward hypothesis) and ``_pending_notes`` (notes
         recorded on the transition turn survive the clear). The
         ``_transition_pending`` flag is intentionally NOT cleared here — it
@@ -1008,6 +1022,7 @@ class SimulatorSandbox:
         self._ignore_mask = set()
         self._prev_correct_frames = set()
         self._pending_exception_flow = None
+        self._engine_event_transitions = set()
         self.pending_images = []
         self._current_frame = None
         self._previous_grid = None
@@ -1303,6 +1318,7 @@ class SimulatorSandbox:
             self._actions,
             verbose=False,
             ignore_mask=self._ignore_mask,
+            skip_transitions=self._engine_event_transitions,
         )
 
         if "error" in result:

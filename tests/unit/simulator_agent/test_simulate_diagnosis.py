@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from agents.simulator_agent.check import run_check
+from agents.simulator_agent.check import diagnose, run_check
 from agents.simulator_agent.prompts import EXCEPTION_FLOW_TEXT
 
 
@@ -386,3 +386,137 @@ def test_check_no_reset_transitions_no_degenerate_surfacing(capsys) -> None:
     assert result["degenerate_reset_frames"] == 0
     for frame_result in result["per_frame"]:
         assert frame_result.get("degenerate_reset", False) is False
+
+
+# ── skip_transitions: scoring-only exclusion (task 7) ──────────────────────
+
+
+def _three_transition_corpus() -> tuple[
+    list[list[list[int]]],
+    list[int],
+]:
+    """3 grids / 2 transitions; transition 1 is the 'flash' stand-in.
+
+    Transition 0: (g0, 1) → g1 — one cell 0→3.
+    Transition 1: (g1, 2) → g2 — one cell 0→5 (identity simulate misses it).
+    """
+    base = [[0] * 4 for _ in range(4)]
+    g0 = [row[:] for row in base]
+    g1 = [row[:] for row in base]
+    g1[0][0] = 3
+    g2 = [row[:] for row in g1]
+    g2[1][1] = 5
+    return [g0, g1, g2], [1, 2]
+
+
+@pytest.mark.unit
+def test_check_skip_transitions_excluded_from_totals() -> None:
+    """Skipped index: no per-frame entry, no aggregate contribution."""
+    grids, actions = _three_transition_corpus()
+
+    result = run_check(
+        _identity_simulate, grids, actions, verbose=False,
+        skip_transitions={1},
+    )
+
+    assert result["frames_total"] == 1
+    assert result["frames_correct"] == 0
+    assert [fr["frame"] for fr in result["per_frame"]] == [0]
+    assert result["total_wrong"] == 1
+    assert result["total_changed"] == 1
+    assert result["total_correct"] == 0
+    assert result["skipped_transitions"] == [1]
+    assert result["wrong_cells"] == 1
+
+
+@pytest.mark.unit
+def test_check_skip_transitions_empty_set_equals_none() -> None:
+    """skip_transitions=set() behaves exactly like None (old behavior)."""
+    grids, actions = _three_transition_corpus()
+
+    baseline = run_check(_identity_simulate, grids, actions, verbose=False)
+    empty = run_check(
+        _identity_simulate, grids, actions, verbose=False,
+        skip_transitions=set(),
+    )
+
+    assert empty == baseline
+
+
+@pytest.mark.unit
+def test_check_skip_transitions_out_of_range_ignored() -> None:
+    """Out-of-range indices in the skip set are ignored gracefully."""
+    grids, actions = _three_transition_corpus()
+
+    result = run_check(
+        _identity_simulate, grids, actions, verbose=False,
+        skip_transitions={5, 99, -1},
+    )
+
+    assert result["frames_total"] == 2
+    assert result["skipped_transitions"] == []
+    assert result["total_wrong"] == 2
+
+
+@pytest.mark.unit
+def test_check_skip_transitions_reset_transition_still_scored() -> None:
+    """RESET-action transitions are NOT excludable via the skip seam's
+    sibling path — check_includes_reset() policy is untouched: a skipped
+    set that omits the RESET transition leaves it scored (pin)."""
+    grids, actions = _reset_first_corpus()
+
+    result = run_check(
+        _identity_simulate, grids, actions, verbose=False,
+        skip_transitions=set(),
+    )
+
+    assert result["frames_total"] == 2
+    assert result["per_frame"][0]["degenerate_reset"] is True
+    assert result["degenerate_reset_frames"] == 1
+
+
+@pytest.mark.unit
+def test_diagnose_skip_transitions_excluded_from_totals(capsys) -> None:
+    """diagnose() skip: skipped index contributes to no aggregate."""
+    grids, actions = _three_transition_corpus()
+
+    result = diagnose(
+        _identity_simulate, grids, actions, skip_transitions={1}
+    )
+    out = capsys.readouterr().out
+
+    assert result["total_wrong"] == 1
+    assert result["total_missed"] == 1
+    assert result["frames_total"] == 1
+    assert result["skipped_transitions"] == [1]
+    assert "Frame 1" not in out
+
+
+@pytest.mark.unit
+def test_diagnose_skip_transitions_empty_equals_none(capsys) -> None:
+    """diagnose() empty skip set == None == old behavior."""
+    grids, actions = _three_transition_corpus()
+
+    baseline = diagnose(_identity_simulate, grids, actions)
+    baseline_out = capsys.readouterr().out
+    empty = diagnose(
+        _identity_simulate, grids, actions, skip_transitions=set()
+    )
+    empty_out = capsys.readouterr().out
+
+    assert empty == baseline
+    assert empty_out == baseline_out
+
+
+@pytest.mark.unit
+def test_diagnose_skip_transitions_out_of_range_ignored() -> None:
+    """diagnose() out-of-range skip indices are ignored gracefully."""
+    grids, actions = _three_transition_corpus()
+
+    result = diagnose(
+        _identity_simulate, grids, actions, skip_transitions={7, 42}
+    )
+
+    assert result["frames_total"] == 2
+    assert result["skipped_transitions"] == []
+    assert result["total_wrong"] == 2

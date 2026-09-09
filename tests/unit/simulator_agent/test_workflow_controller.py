@@ -361,3 +361,27 @@ class TestApplyEscapeGuardrails:
             and "guardrail: MODEL→EXPLORE (5 consecutive check failures)" in r.message
             for r in caplog.records
         )
+
+
+@pytest.mark.unit
+def test_clean_check_result_does_not_increment_failures(plain_sandbox) -> None:
+    """Task 7 pin: a clean (wrong_cells==0) check result resets — never
+    increments — _check_failures, so the 5-consecutive-failures guardrail
+    cannot trip on post-flash checks (engine-event transitions are now
+    excluded from check() scoring upstream)."""
+    sandbox = plain_sandbox()
+    controller = WorkflowController(sandbox)
+    controller.set_phase("MODEL", "ready to model")
+    controller._check_failures = 4  # one failure away from the guardrail
+
+    controller.on_check_result({"wrong_cells": 0})
+
+    assert controller._check_failures == 0
+    assert controller.phase == Phase.MODEL
+
+    # Repeated clean results keep the counter pinned at 0.
+    for _ in range(10):
+        controller.on_check_result({"wrong_cells": 0})
+    assert controller._check_failures == 0
+    controller.update(action_counter=0)
+    assert controller.phase == Phase.MODEL

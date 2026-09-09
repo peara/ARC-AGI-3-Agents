@@ -16,6 +16,7 @@ def run_check(
     *,
     verbose: bool = True,
     ignore_mask: set[tuple[int, int]] | None = None,
+    skip_transitions: set[int] | None = None,
 ) -> dict[str, Any]:
     """Test *simulate_fn* against all recorded frame transitions.
 
@@ -32,6 +33,14 @@ def run_check(
     spurious counts — use ``set_ignore()`` to skip HUD cells that change every
     frame regardless of the action.
 
+    If *skip_transitions* is provided, those transition indices are excluded
+    from scoring entirely: no per-frame entry, no simulate call, and no
+    contribution to any aggregate (totals, accuracy denominators,
+    frames_correct/frames_total).  Use this for engine-initiated board resets
+    whose transition no simulate can model (the level-budget flash).  RESET
+    *actions* remain scored per ``check_includes_reset()`` — only
+    engine-event transitions are skipped.  Out-of-range indices are ignored.
+
     Returns aggregate + per-frame metrics.  Prints a summary when *verbose*.
     """
     results: list[dict[str, Any]] = []
@@ -40,11 +49,17 @@ def run_check(
     total_correct = 0
     total_spurious = 0
     frames_correct = 0
-    frames_total = max(len(grids) - 1, 0)
+    skip = skip_transitions or set()
+    all_transitions = max(len(grids) - 1, 0)
+    scored_transitions = [
+        i for i in range(all_transitions) if i not in skip
+    ]
+    frames_total = len(scored_transitions)
+    skipped_transitions = sorted(i for i in skip if 0 <= i < all_transitions)
     degenerate_reset_frames = 0
     score_reset = check_includes_reset()
 
-    for i in range(frames_total):
+    for i in scored_transitions:
         grid_before = grids[i]
         action = actions[i]
         grid_after = grids[i + 1]
@@ -146,6 +161,8 @@ def run_check(
         "frames_correct": frames_correct,
         "frames_total": frames_total,
         "degenerate_reset_frames": degenerate_reset_frames,
+        "skipped_transitions": skipped_transitions,
+        "wrong_cells": total_wrong,
         "per_frame": results,
     }
 
@@ -155,6 +172,7 @@ def diagnose(
     grids: list[list[list[int]]],
     actions: list[int],
     ignore_mask: set[tuple[int, int]] | None = None,
+    skip_transitions: set[int] | None = None,
 ) -> dict[str, Any]:
     """Run simulate on all frames and print semantic error analysis.
 
@@ -163,15 +181,25 @@ def diagnose(
     is causing problems.
 
     If *ignore_mask* is provided, those cells are excluded from the analysis.
+
+    If *skip_transitions* is provided, those transition indices are excluded
+    from scoring and from every aggregate total (same semantics as
+    :func:`run_check`).  Out-of-range indices are ignored.
     """
     print("=== Diagnosis ===")
     total_wrong = 0
     total_missed = 0
     total_spurious = 0
     total_wrong_val = 0
-    frames_total = max(len(grids) - 1, 0)
+    skip = skip_transitions or set()
+    all_transitions = max(len(grids) - 1, 0)
+    scored_transitions = [
+        i for i in range(all_transitions) if i not in skip
+    ]
+    frames_total = len(scored_transitions)
+    skipped_transitions = sorted(i for i in skip if 0 <= i < all_transitions)
 
-    for i in range(frames_total):
+    for i in scored_transitions:
         grid_before = grids[i]
         action = actions[i]
         grid_after = grids[i + 1]
@@ -255,6 +283,8 @@ def diagnose(
         "total_missed": total_missed,
         "total_spurious": total_spurious,
         "total_wrong_val": total_wrong_val,
+        "frames_total": frames_total,
+        "skipped_transitions": skipped_transitions,
     }
 
 
