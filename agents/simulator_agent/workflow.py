@@ -217,6 +217,26 @@ class WorkflowController:
         logger.info("frame=%d exception_flow #%d %s→MODEL (path invalidated)",
                     self._action_counter - 1, self._exception_flow_count, old_phase)
 
+    def on_board_reset(self) -> None:
+        """Board-reset consumption: invalidate the path, preserve everything else.
+
+        RESET-parity (incident d91cdde0): when the engine exhausts a level's
+        action budget it flashes and restores the board to the level start.
+        The pre-reset path described the pre-reset board, so it is invalid —
+        but NOTHING else changes: movement mechanics are identical, the
+        corpus/history/notes stay valid, and the phase (typically EXECUTE)
+        must be preserved. This is deliberately NOT ``reset_to_explore``:
+        the only write in this body is ``self._last_path = None`` (pinned
+        by tests/unit/simulator_agent/test_board_reset_integration.py).
+        """
+        frame = self._action_counter - 1
+        self._last_path = None
+        logger.info(
+            "frame=%d board_reset (path invalidated; phase=%s preserved)",
+            frame,
+            self._phase.value,
+        )
+
     def reset_to_explore(self, reason: str = "level transition") -> None:
         """Hard reset per-level workflow state to EXPLORE (e.g. on level transition).
 

@@ -16,6 +16,8 @@ from agents.simulator_agent.prompts import (
     AGENT_SIMULATOR_TOOLS_ADDENDUM,
     AGENT_SYSTEM_PROMPT,
     AGENT_WORLD_MODEL_ADDENDUM,
+    BOARD_RESET_TEXT,
+    LEVEL_TRANSITION_TEXT,
     SYSTEM_PROMPT,
 )
 
@@ -163,3 +165,69 @@ def test_previous_frame_virtual_reset_pair_documented():
     text = AGENT_RUNTIME_STATE_ADDENDUM
     assert "On the first turn it equals `current_frame`" in text
     assert "virtual RESET pair" in text
+
+
+# ── BOARD_RESET_TEXT (Task 8, RESET-parity) ────────────────────────────────
+
+
+@pytest.mark.unit
+def test_board_reset_text_formats_with_action_id_only():
+    """The template's only placeholder is {action_id} — str.format with
+    just the action id must succeed and no other braces may exist."""
+    formatted = BOARD_RESET_TEXT.format(action_id=3)
+    assert "action 3" in formatted
+    assert "{" not in formatted and "}" not in formatted
+
+
+@pytest.mark.unit
+def test_board_reset_text_six_content_elements():
+    """The six content elements are the contract:
+    1. budget-exhausted cause
+    2. board-restored fact
+    3. do-NOT-rewrite-simulate
+    4. do-NOT-re-explore
+    5. re-plan-with-bfs
+    6. budget-size recording via update_notes
+    """
+    text = BOARD_RESET_TEXT
+    # 1. budget-exhausted cause
+    assert "level action budget exhausted" in text
+    # 2. board-restored fact
+    assert "restored" in text and "level" in text
+    # 3. do-NOT-rewrite-simulate
+    assert "do NOT rewrite simulate()" in text
+    # 4. do-NOT-re-explore
+    assert "Do NOT re-explore" in text
+    # 5. re-plan-with-bfs
+    assert "bfs(current_frame, goal)" in text
+    # 6. budget-size recording via update_notes
+    assert "update_notes" in text
+    assert "action budget" in text
+
+
+@pytest.mark.unit
+def test_board_reset_text_header_and_turn_task_style():
+    """Mirror LEVEL_TRANSITION_TEXT style: bracketed header, 'Your task in
+    THIS turn (do exactly this, then stop)', numbered steps."""
+    text = BOARD_RESET_TEXT
+    assert text.startswith("[ BOARD RESET")
+    assert "Your task in THIS turn (do exactly this, then stop):" in text
+    assert "1. Call update_notes" in text
+    assert "2. Re-plan" in text
+    assert "3. Do NOT re-explore" in text
+
+
+@pytest.mark.unit
+def test_level_transition_text_regression_pin_unchanged():
+    """Regression pin: LEVEL_TRANSITION_TEXT's contract is untouched by
+    the board-reset work (header, win result, cleared history, carried
+    simulate hypothesis, no-action instruction)."""
+    text = LEVEL_TRANSITION_TEXT
+    assert text.startswith("[ LEVEL TRANSITION — LEVEL {levels_completed} COMPLETED ]")
+    assert "action {action_id}" in text
+    assert "level_completed=True" in text
+    assert "frame history and check results from the previous level were cleared" in text
+    assert "HYPOTHESIS" in text
+    assert "Do NOT take any actions" in text
+    assert "Do NOT re-verify the win" in text
+    assert "{levels_completed}" in text and "{action_id}" in text

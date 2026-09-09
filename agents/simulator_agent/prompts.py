@@ -469,6 +469,23 @@ After update_notes, in a NEW turn you will re-explore this fresh board \
 from scratch (it may move differently)."""
 
 
+BOARD_RESET_TEXT = """\
+[ BOARD RESET — level action budget exhausted ]
+
+Your last batch contained action {action_id}. The board flashed and was restored \
+to this level's start state; the per-level budget was refreshed (your remaining \
+move budget for this level is now full). This is engine feedback, NOT a simulator \
+bug — do NOT rewrite simulate().
+
+Your task in THIS turn (do exactly this, then stop):
+1. Call update_notes: record the level's action budget (moves used before the \
+reset) and that the board restored to the level start; clear the stale plan.
+2. Re-plan from the current board: bfs(current_frame, goal). Your previous path \
+described the pre-reset board and is invalid.
+3. Do NOT re-explore — movement mechanics did not change. Keep plans shorter \
+than the level budget."""
+
+
 # ── System prompt ───────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT: str = """\
@@ -617,5 +634,6 @@ __all__ = [
     "AGENT_PYTHON_TOOL_SCHEMA",
     "UPDATE_NOTES_TOOL_SCHEMA",
     "LEVEL_TRANSITION_TEXT",
+    "BOARD_RESET_TEXT",
     "build_agent_user_prompt",
 ]

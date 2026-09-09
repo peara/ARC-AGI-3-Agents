@@ -49,6 +49,7 @@ from agents.simulator_agent.frame_layers import settled_board
 from agents.simulator_agent.prompts import (
     AGENT_PYTHON_TOOL_SCHEMA,
     AGENT_SYSTEM_PROMPT,
+    BOARD_RESET_TEXT,
     LEVEL_TRANSITION_TEXT,
     UPDATE_NOTES_TOOL_SCHEMA,
     build_agent_user_prompt,
@@ -281,6 +282,30 @@ class SimulatorFirstAgent(LoopAgent):
 
             if transition_active:
                 user_content[0]["content"].insert(0, {"type": "text", "text": transition_msg})
+
+            # Board-reset turn (RESET-parity): the engine flashed and restored
+            # the board to the level start. Runs AFTER the LevelTransition
+            # block (LevelTransition precedence — defensive: a response that
+            # trips both detectors raises LevelTransition first, so this
+            # block only ever sees a lone flash). Mirrors the transition
+            # block's SHAPE but REMOVES the destructive lines: history,
+            # notes, plan, corpus, and phase all survive — only the stale
+            # path is invalidated (workflow.on_board_reset) and the flag is
+            # consumed exactly once. The turn proceeds normally.
+            if self._sandbox._board_reset_pending:
+                logger.info(
+                    "simulatorfirst: frame=%d BOARD RESET detected (action=%s)",
+                    self.action_counter - 1,
+                    self._sandbox._action_taken,
+                )
+                board_reset_msg = BOARD_RESET_TEXT.format(
+                    action_id=self._sandbox._action_taken
+                )
+                self._workflow.on_board_reset()
+                self._sandbox._board_reset_pending = False  # consume exactly once
+                user_content[0]["content"].insert(
+                    0, {"type": "text", "text": board_reset_msg}
+                )
 
             messages: list[dict[str, Any]] = self._trim_messages_for_context(
                 [
