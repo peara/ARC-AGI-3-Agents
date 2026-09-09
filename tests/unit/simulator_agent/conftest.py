@@ -114,6 +114,7 @@ def make_seeded_live_sandbox(
     s.pending_images: list[dict[str, Any]] = []
     s._pending_notes: dict[str, str] = {}
     s._transition_pending = False
+    s._board_reset_pending = False
     s.namespace = s._build_namespace()
     s._protected_tools = {
         k: s.namespace[k]

@@ -33,7 +33,11 @@ from typing import Any
 
 from agents.simulator_agent.check import diagnose as diagnose_fn
 from agents.simulator_agent.check import run_check
-from agents.simulator_agent.frame_layers import settled_board
+from agents.simulator_agent.frame_layers import (
+    diff_count,
+    is_board_reset,
+    settled_board,
+)
 from agents.simulator_agent.reset_policy import (
     RESET_ACTION,
     bfs_includes_reset,
@@ -64,6 +68,9 @@ logger = logging.getLogger(__name__)
 
 # single RESET-decision log channel — see reset_policy.py
 RESET_POLICY_LOGGER = logging.getLogger("simulator.reset_policy")
+
+# board-reset detection channel — see frame_layers.is_board_reset
+BOARD_RESET_LOGGER = logging.getLogger("simulator.board_reset")
 
 # ── Sandbox security ──────────────────────────────────────────────────────
 
@@ -139,6 +146,29 @@ class LevelTransition(Exception):
     explicitly in ``run_code()`` BEFORE the broad ``except Exception`` and
     converted to the marker output ``"[LEVEL COMPLETED — board transitioning; stop]"``
     with the winning action id preserved in ``self._action_taken``.
+    """
+
+
+class BoardReset(Exception):
+    """Raised inside ``action()`` when the response stack is a board-reset flash.
+
+    Engine-initiated level-budget exhaustion: the API restored the board to
+    the level start after an action (incident d91cdde0 f48/f92 — 6-layer
+    stacks, 5 uniform animation layers over the restored board). This is
+    NOT a level completion (``levels_completed`` unchanged — that is
+    ``LevelTransition``'s job) and NOT an action-0 RESET (``reset_policy``
+    owns that predicate). Detection is class-aware via
+    ``frame_layers.is_board_reset`` against the level-start reference
+    ``self._grids[0]``.
+
+    Hard-aborts the current ``run_code()`` batch exactly like
+    ``LevelTransition``: remaining batched actions never execute (they
+    would step on the restored board mid-flash). Caught explicitly in
+    ``run_code()`` BEFORE the broad ``except Exception`` and converted to
+    the marker output ``"[BOARD RESET — level budget exhausted; board
+    restored to start; stop acting]"`` with the triggering action id
+    preserved in ``self._action_taken``. ``_board_reset_pending`` stays
+    ALIVE for agent-side consumption at the next turn boundary (Task 8).
     """
 
 
@@ -249,6 +279,12 @@ class SimulatorSandbox:
         # Level-transition hard-abort flag (set when a winning action is
         # detected inside action(); consumed by run_code's except chain).
         self._transition_pending: bool = False
+
+        # Board-reset hard-abort flag (set when a flash stack is detected
+        # inside action(); consumed by run_code's return path — the flag
+        # itself stays alive for agent-side consumption at the next turn
+        # boundary, mirroring _transition_pending's cross-turn semantics).
+        self._board_reset_pending: bool = False
 
         # Worker-scoped stdout capture (run_code): the buffer installed as
         # sys.stdout for the exec worker, and the stream it replaced.
@@ -364,6 +400,12 @@ class SimulatorSandbox:
                     f"Level already completed this batch (action {action_id} skipped)"
                 )
 
+            # Board-reset hard-abort: a previous action in this batch already
+            # triggered the engine's level-budget flash. Remaining actions
+            # would step on the restored board mid-flash — refuse them.
+            if self._board_reset_pending:
+                raise BoardReset("Board already reset this batch — stop acting")
+
             # Append to grid/action history
             # We need _grids to have len(_actions) + 1 entries for check() to work:
             # _grids[i] = grid before action i, _grids[i+1] = grid after action i
@@ -411,6 +453,30 @@ class SimulatorSandbox:
                 self._transition_pending = True
                 raise LevelTransition(
                     f"Level completed after action {action_id}"
+                )
+
+            # Board-reset detection: the response stack is the engine's
+            # level-budget flash (uniform animation layers over a board
+            # restored to the level start). The raise happens BEFORE
+            # predict_and_compare, so the flash diff never enters the
+            # exception flow — structural skip per reset-parity, no dead
+            # branch inside predict_and_compare. Detection is independent
+            # of simulate registration (works in EXPLORE phase too).
+            frame_layers_raw = response.get("frame_layers")
+            if frame_layers_raw and self._grids and is_board_reset(
+                frame_layers_raw, self._grids[0], action_is_reset=is_reset(action_id)
+            ):
+                self._board_reset_pending = True
+                BOARD_RESET_LOGGER.info(
+                    "frame=%d board_reset detected action_id=%s layers=%d diff=%d cells",
+                    len(self._grids) - 1, action_id, len(frame_layers_raw),
+                    diff_count(frame_layers_raw[-1], self._grids[0]),
+                )
+                BOARD_RESET_LOGGER.debug(
+                    "board-reset transition excluded from predict-and-compare per reset-parity"
+                )
+                raise BoardReset(
+                    f"Level budget exhausted after action {action_id}; board restored to start"
                 )
 
             # ── Predict-and-compare (extracted to predict_and_compare method) ─
@@ -1060,6 +1126,8 @@ class SimulatorSandbox:
                 logger.warning(f"simulatorfirst: sandbox budget exceeded: {exc}")
             except LevelTransition:
                 result["error"] = None
+            except BoardReset:
+                result["error"] = None
             except BaseException as exc:  # noqa: BLE001 — sandbox boundary
                 result["error"] = f"{type(exc).__name__}: {exc}"
             finally:
@@ -1120,6 +1188,18 @@ class SimulatorSandbox:
             self.reset_for_level_transition()
             return (
                 "[LEVEL COMPLETED — board transitioning; stop]",
+                None,
+                self._action_taken,
+            )
+
+        if self._board_reset_pending and not timed_out:
+            # No state clear here (RESET-parity): the corpus already holds
+            # the reset transition (pre-flash grid + action + restored
+            # grid). _board_reset_pending stays ALIVE for agent-side
+            # consumption at the next turn boundary — only the marker is
+            # returned.
+            return (
+                "[BOARD RESET — level budget exhausted; board restored to start; stop acting]",
                 None,
                 self._action_taken,
             )
