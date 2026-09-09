@@ -54,6 +54,7 @@ from pathlib import Path
 from typing import Any
 
 from agents.simulator_agent.agent import ITER0_RESET_PROVENANCE
+from agents.simulator_agent.frame_layers import settled_board
 from agents.simulator_agent.reset_policy import RESET_ACTION, is_reset
 from agents.simulator_agent.sandbox import SimulatorSandbox
 from agents.simulator_agent.workflow import Phase, WorkflowController
@@ -158,7 +159,9 @@ def _make_step_env_callback(
             raise RuntimeError(f"env.step returned None for action {action_id}")
 
         prev = state["prev"]
-        curr_grid: list[list[int]] = [list(row) for row in frame.frame[0]]
+        # env.step returns FrameDataRaw (ndarray layers); settled_board
+        # passes SINGLE layer 0 through unchanged, list() normalizes rows.
+        curr_grid: list[list[int]] = [list(row) for row in settled_board(frame.frame)]
         prev_levels = harness.frames[-1].levels_completed or 0
         curr_levels = frame.levels_completed or 0
         if prev is not None:
@@ -282,13 +285,16 @@ def reconstruct(
 
     # Unified convention (single owner reset_policy — see module docstring):
     # the corpus IS the full harness frames, synthetic reset at [0] included.
-    # sandbox grid j == harness.frames[j] element-wise; actions carry every
-    # recorded action with "RESET" normalized to 0 (is_reset), so the
-    # virtual RESET pair ([B0, B0], [0]) occupies slots 0/1 for RESET-first
-    # recordings — the same shape the NEW live agent's pair-seeded corpus
-    # has, and byte-for-byte the offline loading path's output.
+    # sandbox grid j == settled_board(harness.frames[j]) element-wise;
+    # actions carry every recorded action with "RESET" normalized to 0
+    # (is_reset), so the virtual RESET pair ([B0, B0], [0]) occupies slots
+    # 0/1 for RESET-first recordings — the same shape the NEW live agent's
+    # pair-seeded corpus has, and byte-for-byte the offline loading path's
+    # output. settled_board keeps flash frames (e.g. d91cdde0 f48/f92)
+    # carrying the restored board instead of the uniform phantom layer 0.
     grids = [
-        [[cell for cell in row] for row in fd.frame[0]] for fd in harness.frames
+        [[cell for cell in row] for row in settled_board(fd.frame)]
+        for fd in harness.frames
     ]
     sandbox_actions = [
         RESET_ACTION if is_reset(ai["id"]) else int(ai["id"])
@@ -448,8 +454,8 @@ def verify_reconstruction(state: ReconstructedState) -> dict[str, Any]:
     checks["ignore_cells"] = len(sandbox._ignore_mask)  # noqa: SLF001
 
     # 2. exception flow reproduction: predict_and_compare on the divergence
-    prev = [list(r) for r in state.harness.frames[-2].frame[0]]
-    curr = [list(r) for r in state.harness.frames[-1].frame[0]]
+    prev = [list(r) for r in settled_board(state.harness.frames[-2].frame)]
+    curr = [list(r) for r in settled_board(state.harness.frames[-1].frame)]
     sandbox._pending_exception_flow = None  # noqa: SLF001
     sandbox.predict_and_compare(prev, curr, 1)
     pending = sandbox._pending_exception_flow  # noqa: SLF001

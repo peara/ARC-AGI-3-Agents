@@ -33,6 +33,7 @@ from typing import Any
 
 from agents.simulator_agent.check import diagnose as diagnose_fn
 from agents.simulator_agent.check import run_check
+from agents.simulator_agent.frame_layers import settled_board
 from agents.simulator_agent.reset_policy import (
     RESET_ACTION,
     bfs_includes_reset,
@@ -51,7 +52,6 @@ from agents.simulator_agent.tools import (
     print_region,
     segment_atoms,
 )
-from perception.objects import to_grid
 from replay.harness import ReplayHarness
 from vision.render import (
     draw_boxes_on_grid,
@@ -204,8 +204,14 @@ class SimulatorSandbox:
             self._grids: list[list[list[int]]] = []
             self._actions: list[int] = []
             for fd in harness.frames:
-                grid_2d = to_grid(fd.frame)
-                self._grids.append(grid_2d.tolist())
+                # settled_board: class-aware layer pick — flash frames
+                # (d91cdde0 f48/f92) carry the restored board, not the
+                # uniform phantom layer 0. FrameData.frame is already
+                # [layer][row][col]; settled_board returns the settled
+                # layer directly (plain lists — no tolist() needed).
+                self._grids.append(
+                    [[cell for cell in row] for row in settled_board(fd.frame)]
+                )
             for ai in harness.action_inputs:
                 action_id = ai["id"]
                 if is_reset(action_id):

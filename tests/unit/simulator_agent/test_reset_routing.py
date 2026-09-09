@@ -57,11 +57,12 @@ def _make_offline_sandbox(
     from types import SimpleNamespace
 
     # Two distinct 2x2 boards so the corpus has one real transition.
+    # FrameData.frame is [layer][row][col] — 1-layer frames included.
     board_a = [[1, 2], [3, 4]]
     board_b = [[5, 6], [7, 8]]
     frames = [
-        SimpleNamespace(frame=[row[:] for row in board_a]),
-        SimpleNamespace(frame=[row[:] for row in board_b]),
+        SimpleNamespace(frame=[[row[:] for row in board_a]]),
+        SimpleNamespace(frame=[[row[:] for row in board_b]]),
     ]
 
     class _StubHarness:
