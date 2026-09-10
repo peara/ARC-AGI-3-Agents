@@ -198,6 +198,42 @@ def test_frozen_simulate_survives_helper_redefinition(plain_sandbox) -> None:
 
 
 @pytest.mark.unit
+def test_set_simulate_captures_source_from_run_code(seeded_live_sandbox, win_callback) -> None:
+    """Incident 5681a14a: _simulate_source stayed empty forever.
+
+    Commit 24a8cc8 accidentally deleted the ``self._simulate_source``
+    assignment while restructuring ``set_simulate`` for the freeze
+    mechanism, and ``inspect.getsource`` cannot read exec'd code anyway
+    (co_filename "<sandbox>" is not a real file). Net effect: every
+    recording since Aug 30 recorded ``simulate_source: ""`` and the
+    set_simulate ack always printed "(source unavailable)".
+
+    Regression: the real run_code → set_simulate path must capture the
+    actual function body.
+    """
+    s = seeded_live_sandbox(win_callback, current_frame=[[0] * 8 for _ in range(8)])
+
+    code = (
+        "def my_simulate(grid, action):\n"
+        "    return copy_grid(grid)\n"
+        "set_simulate(my_simulate)\n"
+    )
+    output, error, _ = s.run_code(code)
+
+    assert error is None
+    assert "[set_simulate] registered" in output
+    assert "(source unavailable)" not in output, (
+        "ack could not read the source — linecache seeding broken"
+    )
+    assert "def my_simulate(grid, action):" in output, (
+        "ack first line should show the real source now"
+    )
+    assert "def my_simulate(grid, action):" in s._simulate_source
+    assert "return copy_grid(grid)" in s._simulate_source
+    assert s._simulate_source != "(source unavailable)"
+
+
+@pytest.mark.unit
 def test_tool_protection_restores_overwrite(plain_sandbox) -> None:
     s = plain_sandbox()
     s.namespace = {

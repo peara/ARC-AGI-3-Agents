@@ -20,6 +20,7 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import io
+import linecache
 import logging
 import re
 import sys
@@ -357,8 +358,10 @@ class SimulatorSandbox:
             try:
                 import inspect as _inspect
                 src = _inspect.getsource(func)
+                self._simulate_source = src
                 first_line = src.splitlines()[0] if src else "(no source)"
             except Exception:
+                self._simulate_source = "(source unavailable)"
                 first_line = "(source unavailable)"
             print(
                 f"[set_simulate] registered (helper definitions frozen at "
@@ -1087,6 +1090,17 @@ class SimulatorSandbox:
 
         if _DUNDER_PATTERN.search(code):
             return ("", "Error: dunder attributes are not allowed", None)
+
+        # Seed linecache so inspect.getsource() works for exec'd code
+        # (co_filename "<sandbox>" is not a real file). Incident 5681a14a:
+        # without this, set_simulate() never captured the source and every
+        # recording recorded an empty _simulate_source.
+        linecache.cache["<sandbox>"] = (
+            len(code),
+            None,
+            code.splitlines(True),
+            "<sandbox>",
+        )
 
         # Restricted builtins
         raw_builtins = __builtins__
