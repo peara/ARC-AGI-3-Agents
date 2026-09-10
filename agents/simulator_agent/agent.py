@@ -55,7 +55,7 @@ from agents.simulator_agent.prompts import (
     build_agent_user_prompt,
 )
 from agents.simulator_agent.reset_policy import ResetSeedTracker, is_reset
-from agents.simulator_agent.sandbox import SimulatorSandbox
+from agents.simulator_agent.sandbox import BOARD_RESET_MARKER, SimulatorSandbox
 from agents.simulator_agent.workflow import (
     SET_PHASE_TOOL_SCHEMA,
     SpiralGuard,
@@ -99,6 +99,7 @@ class SimulatorFirstAgent(LoopAgent):
 
         self._current_grid_levels_completed: int = 0
         self._transition_ended_turn: bool = False
+        self._board_reset_ended_turn: bool = False
         self._non_action_calls: int = 0
 
         # Agent-side one-time RESET-seed flag per level (reset_policy.py).
@@ -203,6 +204,7 @@ class SimulatorFirstAgent(LoopAgent):
 
             # ── 2. Per-turn setup ─────────────────────────────────────
             self._transition_ended_turn = False
+            self._board_reset_ended_turn = False
 
             if latest_frame.levels_completed is not None:
                 self._current_grid_levels_completed = latest_frame.levels_completed
@@ -511,6 +513,16 @@ class SimulatorFirstAgent(LoopAgent):
                             }
                         )
 
+                        # Board reset: exit BEFORE the branch's trailing
+                        # continue — the loop-bottom checks are unreachable
+                        # from this branch. The turn boundary then consumes
+                        # the pending flag and injects BOARD_RESET_TEXT
+                        # (incident 6685d7d2: without this exit the loop
+                        # spirals on a dead batch until the cap kills the
+                        # run).
+                        if self._board_reset_ended_turn:
+                            return messages, False
+
                         # If sandbox errored, continue loop (tool result
                         # already appended)
                         continue
@@ -530,6 +542,13 @@ class SimulatorFirstAgent(LoopAgent):
             # Level transition: exit the tool loop immediately so the
             # outer game loop handles the reset.
             if self._transition_ended_turn:
+                return messages, False
+            # Board reset: exit (False — RESET-parity, history survives) so
+            # the outer loop's turn boundary consumes the pending flag and
+            # injects BOARD_RESET_TEXT (incident 6685d7d2: without this
+            # exit the loop spirals on a dead batch until the cap kills
+            # the run).
+            if self._board_reset_ended_turn:
                 return messages, False
         return messages, False
 
@@ -628,6 +647,14 @@ class SimulatorFirstAgent(LoopAgent):
         output, error, action_taken_id = self._sandbox.run_code(code)
         if output and "LEVEL COMPLETED" in output:
             self._transition_ended_turn = True
+        if output and BOARD_RESET_MARKER in output:
+            # Board-reset turn end (incident 6685d7d2): the batch was
+            # hard-aborted by the engine flash. End the tool loop NOW so
+            # the next outer-loop iteration consumes the pending flag and
+            # injects BOARD_RESET_TEXT — without this the loop keeps
+            # nudging the LLM to act into a dead batch until the spiral
+            # cap kills the run.
+            self._board_reset_ended_turn = True
         if not had_simulate and self._sandbox._simulate is not None:
             logger.info(
                 f"simulatorfirst: simulate function registered at frame {self.action_counter - 1}"
