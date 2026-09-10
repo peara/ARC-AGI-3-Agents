@@ -105,9 +105,7 @@ def _flash_response(
         "adjacency": frozenset(),
         "history": [],
         "grid": [row[:] for row in settled_board(flash_stack)],
-        "frame_layers": [
-            [list(row) for row in layer] for layer in flash_stack
-        ],
+        "frame_layers": [[list(row) for row in layer] for layer in flash_stack],
         "valid_actions": [0, 1, 2, 3, 4],
         "last_action_result": {
             "level_completed": False,
@@ -210,15 +208,14 @@ class TestFlashDetection:
         self, d91_frames: list[list[list[int]]]
     ) -> None:
         """A second action() in the same batch raises BoardReset again via
-        the re-entry guard (mirrors _transition_pending's guard)."""
+        the re-entry guard (mirrors _transition_pending's guard). The
+        refused action sits BEFORE the callback (incident 6685d7d2): it
+        steps neither the env nor the scripted response stack, and nothing
+        appends to the corpus."""
         level_start = settled_board(d91_frames[0])
         calls: list[int] = []
-        # The re-entry guard sits after the callback call (mirroring the
-        # LevelTransition idiom) — the guarded action still consumes a
-        # scripted response but never appends to the corpus.
         responses = [
             _flash_response(d91_frames[_FLASH_48], level_start),
-            _normal_response([row[:] for row in level_start]),
         ]
         sb = _seed_sandbox(_scripted_callback(responses, calls), level_start)
 
@@ -227,7 +224,7 @@ class TestFlashDetection:
         with pytest.raises(BoardReset, match="already reset this batch"):
             sb.namespace["action"](4)
 
-        assert calls == [3, 4]
+        assert calls == [3], "refused action must not reach the callback"
         assert sb._actions == [0, 3]  # the guarded action never appended
 
 
@@ -248,13 +245,14 @@ class TestBatchAbort:
         ]
         sb = _seed_sandbox(_scripted_callback(responses, calls), level_start)
 
-        output, error, action_taken = sb.run_code(
-            "for a in [3,3,4,4,4]: action(a)"
-        )
+        output, error, action_taken = sb.run_code("for a in [3,3,4,4,4]: action(a)")
 
         assert error is None
         assert action_taken == 3
-        assert "[BOARD RESET — level budget exhausted; board restored to start; stop acting]" in output
+        assert (
+            "[BOARD RESET — level budget exhausted; board restored to start; stop acting]"
+            in output
+        )
         assert len(calls) < 5
         assert sb._board_reset_pending is True
         assert sb._grids[-1] == restored
@@ -308,9 +306,7 @@ class TestNoFalsePositives:
         assert sb._board_reset_pending is False
         assert resp is not None
 
-    def test_win_response_no_raise(
-        self, d91_frames: list[list[list[int]]]
-    ) -> None:
+    def test_win_response_no_raise(self, d91_frames: list[list[list[int]]]) -> None:
         """d91cdde0 f70's real 2-layer win stack does NOT fire (C2/C3 —
         the settled layer is the NEW level's board, 1425 cells from the
         level-1 start)."""
@@ -324,9 +320,7 @@ class TestNoFalsePositives:
         assert sb._board_reset_pending is False
         assert resp is not None
 
-    def test_reset_action_no_detection(
-        self, d91_frames: list[list[list[int]]]
-    ) -> None:
+    def test_reset_action_no_detection(self, d91_frames: list[list[list[int]]]) -> None:
         """C4: an explicit RESET action (0) never fires the detector —
         reset_policy owns RESET semantics."""
         level_start = settled_board(d91_frames[0])
@@ -387,7 +381,9 @@ class TestFlagSurvival:
         timeout path (flag NOT consumed by timeout)."""
         level_start = settled_board(d91_frames[0])
         sb = _seed_sandbox(
-            _scripted_callback([_flash_response(d91_frames[_FLASH_48], level_start)], []),
+            _scripted_callback(
+                [_flash_response(d91_frames[_FLASH_48], level_start)], []
+            ),
             level_start,
         )
         sb._board_reset_pending = True
@@ -415,7 +411,9 @@ class TestFlagSurvival:
         flag is an instance attribute — unaffected."""
         level_start = settled_board(d91_frames[0])
         sb = _seed_sandbox(
-            _scripted_callback([_flash_response(d91_frames[_FLASH_48], level_start)], []),
+            _scripted_callback(
+                [_flash_response(d91_frames[_FLASH_48], level_start)], []
+            ),
             level_start,
         )
         sb._board_reset_pending = True
@@ -428,9 +426,7 @@ class TestFlagSurvival:
     def test_reset_for_level_transition_preserves_flag(self) -> None:
         """reset_for_level_transition() clears per-level state but does
         NOT touch _board_reset_pending (consumption is agent-side)."""
-        sb = make_seeded_live_sandbox(
-            _scripted_callback([], [])
-        )
+        sb = make_seeded_live_sandbox(_scripted_callback([], []))
         sb._board_reset_pending = True
 
         sb.reset_for_level_transition()

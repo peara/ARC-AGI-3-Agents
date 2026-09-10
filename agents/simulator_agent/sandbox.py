@@ -72,6 +72,11 @@ RESET_POLICY_LOGGER = logging.getLogger("simulator.reset_policy")
 # board-reset detection channel — see frame_layers.is_board_reset
 BOARD_RESET_LOGGER = logging.getLogger("simulator.board_reset")
 
+# run_code() output marker when a batch was hard-aborted by a board reset;
+# agent.py's tool loop detects this substring to end the turn — the raise
+# site (sandbox.py) and the detector (agent.py) must never drift apart.
+BOARD_RESET_MARKER = "[BOARD RESET — level budget exhausted; board restored to start; stop acting]"
+
 # ── Sandbox security ──────────────────────────────────────────────────────
 
 _ALLOWED_IMPORTS = frozenset(
@@ -149,7 +154,7 @@ class LevelTransition(Exception):
     """
 
 
-class BoardReset(Exception):
+class BoardReset(BaseException):
     """Raised inside ``action()`` when the response stack is a board-reset flash.
 
     Engine-initiated level-budget exhaustion: the API restored the board to
@@ -161,14 +166,22 @@ class BoardReset(Exception):
     ``frame_layers.is_board_reset`` against the level-start reference
     ``self._grids[0]``.
 
+    Derives from ``BaseException`` (same reasoning as
+    ``SandboxBudgetExceeded`` below): sandboxed code must not be able to
+    swallow the batch-abort with ``except Exception`` and keep spinning
+    refused calls — the unwind must be unconditional.
+
     Hard-aborts the current ``run_code()`` batch exactly like
     ``LevelTransition``: remaining batched actions never execute (they
     would step on the restored board mid-flash). Caught explicitly in
     ``run_code()`` BEFORE the broad ``except Exception`` and converted to
-    the marker output ``"[BOARD RESET — level budget exhausted; board
-    restored to start; stop acting]"`` with the triggering action id
+    the marker output ``BOARD_RESET_MARKER`` with the triggering action id
     preserved in ``self._action_taken``. ``_board_reset_pending`` stays
     ALIVE for agent-side consumption at the next turn boundary (Task 8).
+
+    Refusal ordering (incident 6685d7d2): the pre-flag check in ``action()``
+    raises BEFORE ``step_env_callback`` — a refused call must not step the
+    real environment.
     """
 
 
@@ -391,14 +404,6 @@ class SimulatorSandbox:
             ) or self._last_action_result.get("game_over"):
                 raise RuntimeError("Game already won/over — no more actions allowed")
 
-            self.actions_this_turn += 1
-
-            # Remember the grid before action for history tracking
-            prev_grid = self._current_frame
-
-            # Call the callback directly (in-process)
-            response = self._step_env_callback(action_id, action_data)
-
             # Level-transition hard-abort: a previous action in this batch
             # already completed a level. Remaining actions would step on the
             # new level's fresh board — refuse them.
@@ -410,8 +415,22 @@ class SimulatorSandbox:
             # Board-reset hard-abort: a previous action in this batch already
             # triggered the engine's level-budget flash. Remaining actions
             # would step on the restored board mid-flash — refuse them.
+            # Both refusals sit BEFORE step_env_callback: stepping then
+            # discarding burns real action budget, records frames the
+            # sandbox corpus never ingests (env ↔ corpus divergence), and
+            # leaves _action_taken=None so SpiralGuard miscounts real
+            # actions as non-action calls (incident 6685d7d2 — 14 real
+            # steps wasted post-flash).
             if self._board_reset_pending:
                 raise BoardReset("Board already reset this batch — stop acting")
+
+            self.actions_this_turn += 1
+
+            # Remember the grid before action for history tracking
+            prev_grid = self._current_frame
+
+            # Call the callback directly (in-process)
+            response = self._step_env_callback(action_id, action_data)
 
             # Append to grid/action history
             # We need _grids to have len(_actions) + 1 entries for check() to work:
@@ -1214,7 +1233,7 @@ class SimulatorSandbox:
             # consumption at the next turn boundary — only the marker is
             # returned.
             return (
-                "[BOARD RESET — level budget exhausted; board restored to start; stop acting]",
+                BOARD_RESET_MARKER,
                 None,
                 self._action_taken,
             )
