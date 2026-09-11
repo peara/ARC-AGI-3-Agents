@@ -33,9 +33,11 @@ from agents.llm_client import LLMClient
 from agents.loop_agent import LoopAgent
 from agents.simulator_agent.conversation import (
     IMAGE_TOKEN_COST,
+    SIM_STATE_HEADER,
     drop_oldest_history_block,
     drop_until_first_user_message,
     estimate_tokens,
+    is_sim_state_block,
     keep_recent_assistant_turns,
     persistent_history_messages,
     strip_notes_messages,
@@ -77,8 +79,9 @@ MIDGAME_RESET_PROVENANCE = (
 )
 
 # Header of the injected [Simulator state] block (see _build_sim_state_block).
+# Defined in conversation.py (import-cycle: agent imports conversation);
+# re-imported above so the name stays importable from agent.py (hook + tests).
 # Identification is by this prefix, never by position alone.
-SIM_STATE_HEADER = "[Simulator state]"
 
 # Magic-string sentinel written by sandbox.set_simulate when getsource fails
 # (sandbox.py:364). The builder treats it as "no source captured".
@@ -1159,11 +1162,7 @@ class SimulatorFirstAgent(LoopAgent):
         if block is None:
             return
         for i, msg in enumerate(messages):
-            if (
-                msg.get("role") == "user"
-                and isinstance(msg.get("content"), str)
-                and msg["content"].startswith(SIM_STATE_HEADER)
-            ):
+            if is_sim_state_block(msg):
                 if msg["content"] != block:
                     msg["content"] = block
                 return

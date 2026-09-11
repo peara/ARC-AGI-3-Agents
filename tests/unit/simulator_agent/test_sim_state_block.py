@@ -26,6 +26,7 @@ import numpy as np
 import pytest
 
 from agents.simulator_agent.agent import SIM_STATE_HEADER, SimulatorFirstAgent
+from agents.simulator_agent.conversation import is_sim_state_block
 
 _HEADER = f"{SIM_STATE_HEADER} (authoritative; refreshed every call)"
 
@@ -500,3 +501,204 @@ def test_hook_position_always_index1() -> None:
         assert idx == 1, (
             f"call {call_idx}: block at index {idx} under trim pressure, expected 1"
         )
+
+
+# ── Trim exemption + persistent-history strip (Task 3) ───────────────────
+#
+# These exercise the REAL conversation.py pipeline functions directly
+# (pure functions — no agent construction needed). The block counts toward
+# estimate_tokens but is never selected for dropping; persistent history
+# strips it before the budget trim.
+
+
+def _block_msg() -> dict[str, Any]:
+    """A minimal [Simulator state] block message (header prefix is what
+    is_sim_state_block keys on — content body is irrelevant here)."""
+    return {"role": "user", "content": f"{SIM_STATE_HEADER} (authoritative; refreshed every call)\nignore: none"}
+
+
+def _tool_pairing_ok(messages: list[dict[str, Any]]) -> bool:
+    """Every role:tool message must be preceded by its assistant tool_calls
+    partner (the API pairing invariant conversation.py pins)."""
+    prev_role: str | None = None
+    prev_tool_calls: Any = None
+    for m in messages:
+        if m.get("role") == "tool":
+            if prev_role != "assistant" or not prev_tool_calls:
+                return False
+        prev_role = m.get("role")
+        prev_tool_calls = m.get("tool_calls")
+    return True
+
+
+@pytest.mark.unit
+def test_trim_exemption_keeps_block() -> None:
+    """Budget-forced trim with the block at history head: the block survives
+    at index 1 of the trimmed output, the oldest post-block history drops
+    first, and no tool message appears before its assistant tool_calls
+    partner."""
+    from agents.simulator_agent.conversation import trim_messages_for_context
+
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": "system prompt"},
+        _block_msg(),
+    ]
+    for i in range(10):
+        messages.append({"role": "user", "content": f"old frame {i} " + "x" * 300})
+        messages.append({"role": "assistant", "content": f"old reply {i}"})
+    messages.append({"role": "user", "content": [{"type": "text", "text": "Frame 0"}]})
+
+    trimmed = trim_messages_for_context(messages, budget_tokens=400)
+
+    assert trimmed[0]["role"] == "system"
+    assert is_sim_state_block(trimmed[1]), (
+        "block must survive at index 1 under budget pressure"
+    )
+    assert len(trimmed) < len(messages), "trim must actually have dropped history"
+    assert _tool_pairing_ok(trimmed)
+
+
+@pytest.mark.unit
+def test_block_counts_toward_budget() -> None:
+    """The block is exempt from SELECTION only — estimate_tokens must still
+    count it (real budget cost)."""
+    from agents.simulator_agent.conversation import estimate_tokens
+
+    with_block = [
+        {"role": "system", "content": "system"},
+        _block_msg(),
+        {"role": "user", "content": "frame"},
+    ]
+    without_block = [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "frame"},
+    ]
+    assert estimate_tokens(with_block) > estimate_tokens(without_block)
+
+
+@pytest.mark.unit
+def test_persistent_history_strips_block() -> None:
+    """persistent_history_messages output contains zero sim-state blocks;
+    the [Current notes] strip still works (existing behavior unchanged)."""
+    from agents.simulator_agent.conversation import persistent_history_messages
+
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": "system"},
+        _block_msg(),
+        {"role": "user", "content": "[Current notes]\nold notes"},
+        {"role": "user", "content": "user 0"},
+        {"role": "assistant", "content": "assistant 0"},
+        {"role": "user", "content": "user 1"},
+        {"role": "assistant", "content": "assistant 1"},
+        {"role": "user", "content": "user 2"},
+        {"role": "assistant", "content": "assistant 2"},
+    ]
+    history = persistent_history_messages(messages, budget_tokens=50_000)
+
+    assert history, "pipeline must keep history"
+    assert all(not is_sim_state_block(m) for m in history), (
+        "no stale sim-state block may survive the save path"
+    )
+    assert all(
+        not (m.get("role") == "user" and m.get("content", "").startswith("[Current notes]"))
+        for m in history
+    ), "notes strip must still work"
+
+
+@pytest.mark.unit
+def test_trim_old_non_tool_messages_leaves_block() -> None:
+    """trim_old_non_tool_messages must never rewrite the block: its nudge
+    patterns ('discovered something new', 'Please use the python tool') and
+    list-content frame targeting structurally cannot match a str user
+    message with the sim-state header — pinned here with a defensive-skip
+    guard in the selector."""
+    from agents.simulator_agent.conversation import trim_old_non_tool_messages
+
+    block = _block_msg()
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": "system"},
+        block,
+        {"role": "user", "content": "discovered something new: nudge 1"},
+        {"role": "assistant", "content": "a1"},
+        {"role": "user", "content": "Please use the python tool: nudge 2"},
+        {"role": "assistant", "content": "a2"},
+    ]
+    trim_old_non_tool_messages(messages)
+
+    assert messages[1] is block
+    assert messages[1]["content"] == block["content"], (
+        "block content must be byte-identical after the trimmer runs"
+    )
+    # nudge_indices[:-1] keeps the LAST nudge (existing behavior) — the
+    # earlier nudge is rewritten.
+    assert messages[2]["content"] == "[nudge]"
+    assert messages[4]["content"] == "Please use the python tool: nudge 2"
+
+
+@pytest.mark.unit
+def test_drop_oldest_skips_block_pairing_intact() -> None:
+    """History [block, assistant(tool_calls), tool, user, ...] under budget
+    pressure: the block is skipped for selection, the assistant+tool pair
+    drops TOGETHER (tool never orphaned), and the block survives."""
+    from agents.simulator_agent.conversation import drop_oldest_history_block
+
+    history: list[dict[str, Any]] = [
+        _block_msg(),
+        {
+            "role": "assistant",
+            "content": "old reply",
+            "tool_calls": [{"id": "tc1", "type": "function", "function": {"name": "python", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "tc1", "content": "old result"},
+        {"role": "user", "content": "new user"},
+        {"role": "assistant", "content": "new assistant"},
+    ]
+    changed = drop_oldest_history_block(history, preserve_recent=1)
+
+    assert changed is True
+    assert is_sim_state_block(history[0]), "block must survive at head"
+    assert history == [
+        _block_msg(),
+        {"role": "user", "content": "new user"},
+        {"role": "assistant", "content": "new assistant"},
+    ]
+    assert _tool_pairing_ok(history)
+
+
+@pytest.mark.unit
+def test_drop_oldest_all_blocks_returns_false() -> None:
+    """When the only removable messages are sim-state blocks, nothing is
+    droppable — return False and leave the history untouched."""
+    from agents.simulator_agent.conversation import drop_oldest_history_block
+
+    history: list[dict[str, Any]] = [_block_msg(), _block_msg()]
+    original = [dict(m) for m in history]
+    changed = drop_oldest_history_block(history, preserve_recent=1)
+
+    assert changed is False
+    assert history == original
+
+
+@pytest.mark.unit
+def test_drop_oldest_block_becomes_head_survives_cleanup_scans() -> None:
+    """After popping the selected non-block message, if the block becomes
+    the new head, the leading tool/non-user cleanup scans must NOT consume
+    it (it is a user message, but the scans pop non-user heads — the
+    explicit is_sim_state_block guard keeps it)."""
+    from agents.simulator_agent.conversation import drop_oldest_history_block
+
+    history: list[dict[str, Any]] = [
+        _block_msg(),
+        {"role": "assistant", "content": "orphan assistant"},
+        {"role": "user", "content": "real user"},
+        {"role": "assistant", "content": "recent"},
+    ]
+    changed = drop_oldest_history_block(history, preserve_recent=1)
+
+    assert changed is True
+    assert is_sim_state_block(history[0]), "block must survive as new head"
+    assert history == [
+        _block_msg(),
+        {"role": "user", "content": "real user"},
+        {"role": "assistant", "content": "recent"},
+    ]

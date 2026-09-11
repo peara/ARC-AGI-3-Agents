@@ -26,19 +26,43 @@ from typing import Any
 
 __all__ = [
     "IMAGE_TOKEN_COST",
+    "SIM_STATE_HEADER",
     "drop_oldest_history_block",
     "drop_until_first_user_message",
     "estimate_tokens",
+    "is_sim_state_block",
     "keep_recent_assistant_turns",
     "persistent_history_messages",
     "strip_notes_messages",
     "strip_old_images",
+    "strip_sim_state_blocks",
     "trim_messages_for_context",
     "trim_old_non_tool_messages",
     "trim_old_tool_results",
 ]
 
 IMAGE_TOKEN_COST = 1024
+
+# Header of the injected [Simulator state] block. Lives here (not agent.py)
+# because agent.py imports this module — defining it here keeps the shared
+# predicate single-sourced without an import cycle. agent.py re-imports the
+# name so it stays importable from agent.py (hook + tests).
+SIM_STATE_HEADER = "[Simulator state]"
+
+
+def is_sim_state_block(msg: dict[str, Any]) -> bool:
+    """True for the injected [Simulator state] block message.
+
+    Identification is by role + str content + header prefix — never by
+    position alone, never inside tool/assistant messages. Single shared
+    definition used by the trim exemption, the persistent-history strip,
+    and agent.py's injection hook (via re-import).
+    """
+    return (
+        msg.get("role") == "user"
+        and isinstance(msg.get("content"), str)
+        and msg["content"].startswith(SIM_STATE_HEADER)
+    )
 
 
 def estimate_tokens(messages: list[dict[str, Any]]) -> int:
@@ -67,19 +91,34 @@ def drop_oldest_history_block(
     removable = len(history) - preserve_recent
     if removable <= 0:
         return False
-    history.pop(0)
+    # The [Simulator state] block counts toward estimate_tokens (real budget
+    # cost) but is never SELECTED for dropping: skip leading blocks when
+    # choosing the oldest removable message.
+    drop_idx = 0
+    while drop_idx < removable and is_sim_state_block(history[drop_idx]):
+        drop_idx += 1
+    if drop_idx >= removable:
+        return False
+    history.pop(drop_idx)
+    # Cleanup scans continue from the pop site (not index 0): the messages
+    # that followed the popped one shift into drop_idx, so an assistant's
+    # trailing tool results still get cleaned up even when block(s) now sit
+    # at the head. The is_sim_state_block guards keep the block alive if it
+    # is at the scan position (drop_idx == 0 case).
     while (
-        history
-        and history[0].get("role") == "tool"
+        len(history) > drop_idx
+        and history[drop_idx].get("role") == "tool"
         and len(history) > preserve_recent
+        and not is_sim_state_block(history[drop_idx])
     ):
-        history.pop(0)
+        history.pop(drop_idx)
     while (
-        history
-        and history[0].get("role") != "user"
+        len(history) > drop_idx
+        and history[drop_idx].get("role") != "user"
         and len(history) > preserve_recent
+        and not is_sim_state_block(history[drop_idx])
     ):
-        history.pop(0)
+        history.pop(drop_idx)
     return True
 
 
@@ -135,7 +174,10 @@ def persistent_history_messages(
     *,
     budget_tokens: int,
 ) -> list[dict[str, Any]]:
-    stripped = strip_notes_messages(messages)
+    # Strip the injected [Simulator state] block FIRST (before the budget
+    # trim): it is refreshed every call, so a stale copy must never be saved
+    # into persistent history — and it must not consume budget during save.
+    stripped = strip_sim_state_blocks(strip_notes_messages(messages))
     trimmed = trim_messages_for_context(stripped, budget_tokens=budget_tokens)
     if not trimmed:
         return []
@@ -155,6 +197,15 @@ def persistent_history_messages(
     history = drop_until_first_user_message(history)
     strip_old_images(history, keep_last_n_user=2)
     return history
+
+
+def strip_sim_state_blocks(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return a new list with all [Simulator state] block messages removed.
+
+    The block is injected fresh before every LLM call; carrying a stale copy
+    in persistent history would duplicate it and show outdated sandbox state.
+    """
+    return [msg for msg in messages if not is_sim_state_block(msg)]
 
 
 def strip_notes_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -262,6 +313,7 @@ def trim_old_non_tool_messages(messages: list[dict[str, Any]]) -> None:
         for i, m in enumerate(messages)
         if m.get("role") == "user"
         and isinstance(m.get("content"), str)
+        and not is_sim_state_block(m)
         and (
             "discovered something new" in m.get("content", "")
             or "Please use the python tool" in m.get("content", "")
