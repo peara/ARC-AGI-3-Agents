@@ -76,6 +76,14 @@ MIDGAME_RESET_PROVENANCE = (
     "mid-game RESET (action 0): env re-observe — not a world transition"
 )
 
+# Header of the injected [Simulator state] block (see _build_sim_state_block).
+# Identification is by this prefix, never by position alone.
+SIM_STATE_HEADER = "[Simulator state]"
+
+# Magic-string sentinel written by sandbox.set_simulate when getsource fails
+# (sandbox.py:364). The builder treats it as "no source captured".
+_SOURCE_UNAVAILABLE = "(source unavailable)"
+
 
 class SimulatorFirstAgent(LoopAgent):
     """Agent that uses a single ``python()`` tool with in-process sandboxed execution."""
@@ -1048,6 +1056,85 @@ class SimulatorFirstAgent(LoopAgent):
         else:
             lines.append("No check() run yet. Call check() to test it.")
         return " ".join(lines)
+
+    @staticmethod
+    def _render_ignore_mask(mask: set[tuple[int, int]]) -> str:
+        """Render an ignore mask as deterministic, sorted range groups.
+
+        Groups contiguous rows; within a row group, contiguous columns.
+        Capped at 6 groups with the remainder summarized, so the rendering
+        is byte-stable for identical masks (LM Studio prefix-cache stability).
+        """
+        if not mask:
+            return "none"
+        cells = sorted(mask)
+        groups: list[tuple[list[int], list[list[int]]]] = []
+        current_rows: list[int] = []
+        current_cols: list[list[int]] = []
+        for row, col in cells:
+            if current_rows and row == current_rows[-1] and current_cols[-1][-1] == col - 1:
+                current_cols[-1].append(col)
+            elif current_rows and row == current_rows[-1]:
+                current_rows.append(row)
+                current_cols.append([col])
+            else:
+                if current_rows:
+                    groups.append((current_rows, current_cols))
+                current_rows = [row]
+                current_cols = [[col]]
+        if current_rows:
+            groups.append((current_rows, current_cols))
+
+        def _fmt_group(rows: list[int], cols: list[list[int]]) -> str:
+            row_part = (
+                f"row {rows[0]}" if rows[0] == rows[-1] else f"rows {rows[0]}-{rows[-1]}"
+            )
+            col_parts = [f"col {c[0]}" if len(c) == 1 else f"cols {c[0]}-{c[-1]}" for c in cols]
+            return f"{row_part}, {', '.join(col_parts)}"
+
+        rendered = [_fmt_group(rows, cols) for rows, cols in groups]
+        n_cells = len(cells)
+        if len(rendered) > 6:
+            hidden_groups = len(groups) - 6
+            hidden_cells = sum(len(run) for _, cols in groups[6:] for run in cols)
+            rendered = rendered[:6]
+            rendered.append(f"+{hidden_cells} cells in {hidden_groups} more groups")
+        return f"{n_cells} cells — " + "; ".join(rendered)
+
+    def _build_sim_state_block(self) -> str | None:
+        """Build the [Simulator state] block, or None when there is nothing to show.
+
+        Pure function of sandbox state. All sandbox reads are isinstance-guarded
+        so MagicMock test fixtures degrade to "absent" instead of raising (B1).
+        """
+        sandbox = self._sandbox
+        simulate = sandbox._simulate if hasattr(sandbox, "_simulate") else None
+        source = (
+            sandbox._simulate_source
+            if isinstance(getattr(sandbox, "_simulate_source", None), str)
+            else ""
+        )
+        mask = (
+            sandbox._ignore_mask
+            if isinstance(getattr(sandbox, "_ignore_mask", None), set)
+            else set()
+        )
+
+        has_simulate = simulate is not None
+        if not has_simulate and not mask:
+            return None
+
+        lines = [f"{SIM_STATE_HEADER} (authoritative; refreshed every call)"]
+        if has_simulate:
+            if source and source != _SOURCE_UNAVAILABLE:
+                lines.append("simulate: registered (frozen copy — helpers fixed at registration)")
+                lines.append(source)
+            else:
+                lines.append("simulate: registered (source not captured this session)")
+        else:
+            lines.append("simulate: not registered")
+        lines.append(f"ignore: {self._render_ignore_mask(mask)}")
+        return "\n".join(lines)
 
     # ── Recording ──────────────────────────────────────────────────────────
 
