@@ -793,7 +793,6 @@ Key differences:
 
 - **Grid image cost**: Each multimodal turn includes a base64-encoded PNG. At 512×512 pixels this is ~1000 tokens per image. With many turns, image costs dominate.
 
----
 
 ## 13. Evolution & Lessons Learned
 
@@ -844,6 +843,72 @@ The key insight is that ARC-AGI-3 games are deterministic grid transitions. Once
   `replay/harness.py` hardcodes `OperationMode.NORMAL`, burning a real scorecard
   per replay run (the offline `experiment_level_transition.py` uses
   `OperationMode.OFFLINE` instead).
+
+---
+
+## 14. Simulator state block (context visibility)
+
+> Incident 5681a14a (ls20, 2026-09-10): the model spent 29 LLM calls / ~25 min in one
+> turn — 4 simulate rewrites, an accidental self-inflicted `set_ignore` mask shrink
+> (128 → 98 cells), and a degenerate final `python("# previous code omitted")` call.
+> Root cause: the model could never see its own sandbox state. This section documents
+> the fix: a `[Simulator state]` block injected into the LLM context. Tests:
+> `tests/unit/simulator_agent/test_sim_state_block.py`.
+
+### What the model sees
+
+Before every LLM call, `_inject_sim_state_block` (agent.py) ensures a user message at
+**message index 1** (right after the system prompt):
+
+```
+[Simulator state] (authoritative; refreshed every call)
+simulate: registered (frozen copy — helpers fixed at registration)
+<full captured _simulate_source, untruncated>
+ignore: 128 cells — row 61, cols 0-63; row 62, cols 0-63
+```
+
+- **Skip-when-empty**: no simulate registered AND empty mask → no block; prompts are
+  byte-identical to the pre-change behavior until first registration.
+- **Fallback**: offline corpora may carry the `"(source unavailable)"` sentinel — the
+  block then shows `simulate: registered (source not captured this session)`.
+- **Refresh**: rebuilt from live sandbox state before every call; replacement is
+  in-place with a content-identity check (unchanged state → dict identity preserved,
+  LM Studio prefix cache not churned). Deliberately redundant with
+  `_build_simulate_status` (the frame-prompt status line) — salience redundancy is
+  intended.
+
+### Lifecycle mechanics
+
+- **Injection point**: after the `_trim_messages_for_context` rebind, before
+  `_llm_chat`. Inject-before-trim would place the block at `history[0]`, where
+  `drop_oldest_history_block` pops FIRST under budget pressure — re-creating the
+  incident.
+- **Trim exemption**: `drop_oldest_history_block` (conversation.py) never selects the
+  block for dropping; the block still counts toward `estimate_tokens`.
+- **Persistent history**: `persistent_history_messages` strips the block before the
+  budget trim — it is re-injected fresh each turn; the sandbox is the single source
+  of truth.
+- **Identification**: shared predicate `is_sim_state_block(msg)` in conversation.py
+  (role + str content + `SIM_STATE_HEADER` prefix). Never position alone; never
+  matched inside tool/assistant messages.
+- **Level transitions**: `reset_for_level_transition` clears the ignore mask but
+  preserves simulate + captured source; the block reflects exactly that.
+
+### What it intentionally does NOT change
+
+- `set_ignore` semantics (still REPLACE, not merge)
+- `check()` output, SpiralGuard, and the check-failure escape counters
+- The `set_simulate`/`set_ignore` acks
+- `_build_simulate_status` (the frame-prompt status line — redundancy is intended)
+
+### Known limitation (documented): cross-call source capture
+
+`run_code` seeds `linecache.cache["<sandbox>"]` with the latest snippet, so
+`inspect.getsource` on a function defined in an *earlier* call resolves
+`co_firstlineno` against the **latest** snippet — capturing the WRONG source. Pinned
+by `test_cross_call_registration_documents_linecache_limit`; the ack's first line
+shares the flaw. A per-snippet cache-key fix is future work if live runs show it
+matters.
 
 ---
 
