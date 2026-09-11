@@ -442,6 +442,7 @@ class SimulatorFirstAgent(LoopAgent):
                 self._trim_old_tool_results(messages, keep_last_n=3)
                 self._trim_old_non_tool_messages(messages)
                 messages = self._trim_messages_for_context(messages)
+                self._inject_sim_state_block(messages)
                 response = self._llm_chat(
                     messages=messages,
                     tools=[AGENT_PYTHON_TOOL_SCHEMA, UPDATE_NOTES_TOOL_SCHEMA, SET_PHASE_TOOL_SCHEMA],
@@ -1135,6 +1136,38 @@ class SimulatorFirstAgent(LoopAgent):
             lines.append("simulate: not registered")
         lines.append(f"ignore: {self._render_ignore_mask(mask)}")
         return "\n".join(lines)
+
+    def _inject_sim_state_block(self, messages: list[dict[str, Any]]) -> None:
+        """Ensure the [Simulator state] block is present before each LLM call.
+
+        Scans ``messages`` for an existing block (role user + str content +
+        ``SIM_STATE_HEADER`` prefix — never by position alone, never inside
+        tool/assistant messages). When found, the content is replaced
+        in-place ONLY when it differs (preserves dict identity + LM Studio
+        prefix cache); otherwise the block is inserted at index 1 (messages[0]
+        is the system message). No-op when the builder returns None
+        (skip-when-empty: no simulate + empty mask).
+
+        Called after the ``_trim_messages_for_context`` rebind and before
+        ``_llm_chat``: inject-before-trim would place the block at
+        history[0], where ``drop_oldest_history_block`` pops FIRST under
+        budget pressure (incident 5681a14a). The overflow-retry ``continue``
+        re-enters the loop top, so the hook re-runs naturally — no injection
+        inside the except path.
+        """
+        block = self._build_sim_state_block()
+        if block is None:
+            return
+        for i, msg in enumerate(messages):
+            if (
+                msg.get("role") == "user"
+                and isinstance(msg.get("content"), str)
+                and msg["content"].startswith(SIM_STATE_HEADER)
+            ):
+                if msg["content"] != block:
+                    msg["content"] = block
+                return
+        messages.insert(1, {"role": "user", "content": block})
 
     # ── Recording ──────────────────────────────────────────────────────────
 
