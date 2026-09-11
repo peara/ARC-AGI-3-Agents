@@ -847,6 +847,7 @@ def _make_recording_sandbox_v2() -> Any:
     return s
 
 
+@pytest.mark.unit
 def test_incident_shape_5681a14a() -> None:
     """Incident 5681a14a replay — the block the model never had.
 
@@ -906,6 +907,7 @@ def test_incident_shape_5681a14a() -> None:
     assert len(blocks4[0][1]) < 4096
 
 
+@pytest.mark.unit
 def test_two_turn_e2e_no_stale_duplicate() -> None:
     """S4: block stripped on save, re-injected fresh exactly once next turn.
 
@@ -984,6 +986,7 @@ def test_two_turn_e2e_no_stale_duplicate() -> None:
     ), "no stale block deeper in the turn-2 history"
 
 
+@pytest.mark.unit
 def test_level_transition_block_semantics(seeded_live_sandbox, win_callback) -> None:
     """S5b: reset_for_level_transition clears the ignore mask but preserves
     the simulate function + captured source (sandbox.py:1030-1044). The
