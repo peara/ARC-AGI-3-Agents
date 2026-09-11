@@ -13,10 +13,19 @@ Covers:
 - full source verbatim rendering + "(source unavailable)" fallback
 - deterministic, sorted ignore-mask rendering (LM Studio prefix-cache
   stability) with the 6-group cap and hidden-cell remainder
+- cross-call registration linecache limitation (S3): getsource resolves
+  against the CURRENT run_code snippet — documented, never crashes
+- two-turn e2e (S4): block stripped from persistent history, re-injected
+  fresh exactly once on the next turn's first LLM call
+- level-transition pin (S5b): reset_for_level_transition clears the mask,
+  preserves _simulate/_simulate_source — the block mirrors exactly that
+- incident-shape replay (5681a14a): every sandbox state change (simulate
+  rewrite, mask shrink) is visible on the NEXT LLM call's snapshot
 """
 
 from __future__ import annotations
 
+import ast
 import itertools
 import json
 from typing import Any
@@ -277,6 +286,16 @@ def _python_response(code: str, content: str = "running") -> Any:
 
 _tc_counter = itertools.count(1)
 
+def _eval_setcomp(expr: str) -> set:
+    """Evaluate a set-comprehension literal (e.g. '{(r, c) for r in ...}').
+
+    ast.literal_eval cannot handle comprehensions; eval the expression
+    instead (test fixture over agent-authored code, not arbitrary input).
+    """
+    return set(eval(expr))  # noqa: S307 - fixture-controlled expression
+
+
+
 def _bind_budget_end(sandbox: Any, agent: Any) -> None:
     """Wire the fake sandbox so the FIRST action() call ends the turn via the
     mid-turn budget guard: bump agent.action_counter to MAX_ACTIONS when
@@ -332,12 +351,29 @@ def _make_recording_sandbox() -> Any:
             if "action(" in code:
                 self._action_taken = 1
                 return ("ok", None, 1)
-            for name, cells in (
-                ("set_ignore({(61, 19), (62, 19)})", {(61, 19), (62, 19)}),
-                ("set_ignore({(61, 19)})", {(61, 19)}),
-            ):
-                if name in code:
-                    self._ignore_mask = set(cells)
+            # Generic set_ignore matcher: brace-depth scan from the
+            # set_ignore( call to its closing paren, then evaluate the
+            # literal (set literals AND set-comprehensions — comprehensions
+            # are evaluated directly by exec since ast.literal_eval cannot).
+            idx = code.find("set_ignore(")
+            if idx != -1:
+                depth = 0
+                start = idx + len("set_ignore(")
+                end = None
+                for i in range(start, len(code)):
+                    ch = code[i]
+                    if ch in "{([":
+                        depth += 1
+                    elif ch in "})]":
+                        depth -= 1
+                        if depth == 0:
+                            end = i + 1
+                            break
+                expr = code[start:end]
+                try:
+                    self._ignore_mask = ast.literal_eval(expr)
+                except (ValueError, SyntaxError):
+                    self._ignore_mask = set(_eval_setcomp(expr))
             return ("ok", None, None)
 
     return _RecordingSandbox()
@@ -702,3 +738,277 @@ def test_drop_oldest_block_becomes_head_survives_cleanup_scans() -> None:
         {"role": "user", "content": "real user"},
         {"role": "assistant", "content": "recent"},
     ]
+
+# ── S3: cross-call registration linecache limitation (Task 4) ────────────
+#
+# run_code() seeds linecache.cache["<sandbox>"] with the CURRENT call's
+# snippet before exec (sandbox.py:1094-1103). When the def happens in one
+# call and set_simulate() in a LATER call, inspect.getsource(func) resolves
+# func's co_firstlineno against the LATER snippet — capturing the WRONG
+# lines. This is a documented limitation, pinned here so it can never
+# surprise anyone again.
+
+
+@pytest.mark.unit
+def test_cross_call_registration_documents_linecache_limit(
+    seeded_live_sandbox, mock_step_env
+) -> None:
+    """S3 (incident 5681a14a): def in run_code call A, set_simulate in call B.
+
+    DOCUMENTED LIMITATION: linecache.cache["<sandbox>"] is overwritten by
+    every run_code() call, so at call B getsource(my_sim) resolves
+    my_sim's co_firstlineno against call B's snippet lines. Observed
+    behavior (probed empirically): the capture returns call B's snippet
+    lines starting at my_sim's co_firstlineno — here the single line
+    "set_simulate(my_sim)" — i.e. the WRONG source (it is not my_sim's
+    body). The builder must not crash on it; the block shows whatever was
+    captured verbatim. This test pins that behavior as a known limitation,
+    not a hidden surprise.
+    """
+    sandbox = seeded_live_sandbox(mock_step_env)
+
+    # Call A: define the function only (no registration).
+    out_a, err_a, _ = sandbox.run_code(
+        "def my_sim(grid, action):\n    return copy_grid(grid)\n"
+    )
+    assert err_a is None
+    assert sandbox._simulate is None, "call A must not register anything"
+    assert sandbox._simulate_source == ""
+
+    # Call B: register the function defined in call A (cross-call).
+    out_b, err_b, _ = sandbox.run_code("set_simulate(my_sim)\n")
+    assert err_b is None
+    assert sandbox._simulate is not None
+    captured = sandbox._simulate_source
+
+    # Whatever was captured, the builder must not raise on it.
+    agent = _make_agent(sandbox)
+    block = agent._build_sim_state_block()
+    assert block is not None, "registered simulate must produce a block"
+    assert block.startswith(_HEADER)
+    assert "simulate: registered" in block
+    assert "ignore: none" in block
+
+    # Document precisely what was captured: the linecache-"<sandbox>"
+    # overwrite means getsource resolved my_sim's co_firstlineno (line 1
+    # of call A's snippet) against call B's snippet — so the capture is
+    # call B's line 1, NOT my_sim's body. Record it with a clear message;
+    # if the capture mechanism ever changes, this assertion documents the
+    # new behavior and the docstring must be updated.
+    assert captured == "set_simulate(my_sim)\n", (
+        "DOCUMENTED LIMITATION (S3): cross-call capture resolved my_sim's "
+        f"co_firstlineno against call B's linecache-seeded snippet and got "
+        f"{captured!r} — the WRONG source (call B's snippet line, not "
+        "my_sim's body). If this assertion fails, the capture behavior "
+        "changed: update this pin + the module docstring accordingly."
+    )
+    # The block renders the captured (wrong) source verbatim — the model
+    # at least sees SOMETHING deterministic rather than crashing.
+    assert captured in block
+
+
+# ── S4: two-turn e2e — no stale duplicate across turns (Task 4) ──────────
+#
+# Turn 1 registers simulate + sets a mask via the real tool loop; the
+# block must be STRIPPED from the saved persistent history. Turn 2
+# re-assembles [system, *saved_history, frame_user] and runs the hook:
+# exactly ONE block, reflecting LIVE sandbox state, no stale copy deeper
+# in the history.
+
+
+def _make_recording_sandbox_v2() -> Any:
+    """_RecordingSandbox extended for the Task-4 arcs: run_code() also
+    executes set_simulate(...) registrations against plain-attribute state
+    (mirrors sandbox.set_simulate capture semantics: the def-to-set_simulate
+    span of the CURRENT run_code snippet becomes _simulate_source)."""
+    base = _make_recording_sandbox()
+
+    class _RecordingSandboxV2(type(base)):
+        pass
+
+    s = _RecordingSandboxV2()
+    s.__dict__.update(base.__dict__)
+
+    original_run_code = s.run_code
+
+    def run_code_with_simulate(code: str) -> tuple[str, str | None, int | None]:
+        result = original_run_code(code)
+        marker = "set_simulate("
+        if marker in code and "def " in code:
+            # Mirror sandbox.set_simulate source capture: the def-to-
+            # set_simulate span of the current snippet (same-call case).
+            lines = code.splitlines(True)
+            stop = next(i for i, ln in enumerate(lines) if marker in ln)
+            s._simulate = lambda g, a: g  # frozen-copy stand-in
+            s._simulate_source = "".join(lines[: stop + 1])
+        return result
+
+    s.run_code = run_code_with_simulate  # type: ignore[method-assign]
+    return s
+
+
+def test_incident_shape_5681a14a() -> None:
+    """Incident 5681a14a replay — the block the model never had.
+
+    Arc (recording .llm.jsonl): v1 simulate registered at seq 11 (~857
+    chars); 128-cell timer mask set at seq 36; v4 rewrite at seq 44 with
+    the mask SHRUNK to 98 cells (set_ignore REPLACE); the model never saw
+    any of it. Here the fake-LLM arc drives the real loop and asserts
+    every state change is visible in the NEXT call's snapshot.
+    """
+    v1_source = "def simulate(grid, action):\n" + "    # v1 timer model\n" * 38 + "    return grid\n"
+    v2_source = "def simulate(grid, action):\n" + "    # v4 5x5 origin model\n" * 50 + "    return grid\n"
+    assert len(v1_source) > 500 and len(v2_source) > 500
+
+    sandbox = _make_recording_sandbox_v2()
+    agent, snapshots = _make_tool_loop_agent(sandbox)
+    _bind_budget_end(sandbox, agent)
+    _wire_fake_llm(
+        agent,
+        snapshots,
+        [
+            _python_response("set_ignore({(r, c) for r in (61, 62) for c in range(64)})"),
+            _python_response(
+                v2_source + "set_simulate(simulate)\n"
+            ),
+            _python_response("set_ignore({(r, c) for r in (61, 62) for c in range(15, 64)})"),
+            _python_response("action(1)"),
+        ],
+    )
+
+    messages = [
+        {"role": "system", "content": "system prompt"},
+        {"role": "user", "content": [{"type": "text", "text": "Frame 0"}]},
+    ]
+    returned, _ = agent._run_tool_loop(messages, grid_b64="")
+
+    assert len(snapshots) == 4, f"expected 4 calls, got {len(snapshots)}"
+    # call 1: stateless -> no block (skip-when-empty).
+    assert _blocks_in(snapshots[0]) == []
+    # call 2: mask set in call 1 -> visible (band).
+    blocks2 = _blocks_in(snapshots[1])
+    assert len(blocks2) == 1
+    assert "ignore: 128 cells" in blocks2[0][1]
+    # call 3: simulate registered in call 2 -> v2 source visible; mask still 128.
+    blocks3 = _blocks_in(snapshots[2])
+    assert len(blocks3) == 1
+    assert "# v4 5x5 origin model" in blocks3[0][1], (
+        "call 3 shows the v2 source registered in call 2 (no re-derivation needed)"
+    )
+    assert "ignore: 128 cells" in blocks3[0][1]
+    # call 4: mask shrunk in call 3 (REPLACE semantics) -> visible shrink.
+    blocks4 = _blocks_in(snapshots[3])
+    assert len(blocks4) == 1
+    assert "ignore: 98 cells" in blocks4[0][1], (
+        "the shrink the incident model never saw is now visible"
+    )
+    # Largest realistic block stays under 4 KB.
+    assert len(blocks4[0][1]) < 4096
+
+
+def test_two_turn_e2e_no_stale_duplicate() -> None:
+    """S4: block stripped on save, re-injected fresh exactly once next turn.
+
+    Turn 1 (real _run_tool_loop): call1 registers simulate via
+    set_simulate, call2 sets a 2-cell mask, call3 acts (budget-end). The
+    saved history must contain ZERO sim-state blocks. Turn 2: assemble
+    [system, *saved_history, frame_user], run the hook — EXACTLY ONE
+    block at index 1 reflecting LIVE sandbox state, none stale deeper.
+
+    NOTE: _run_tool_loop REBINDS messages at the trim step (agent.py:448);
+    the returned list is the live one (production uses the return value
+    too, agent.py:357)."""
+    sandbox = _make_recording_sandbox_v2()
+    agent, snapshots = _make_tool_loop_agent(sandbox)
+    _bind_budget_end(sandbox, agent)
+    _wire_fake_llm(
+        agent,
+        snapshots,
+        [
+            _python_response(
+                "def my_sim(grid, action):\n"
+                "    return copy_grid(grid)\n"
+                "set_simulate(my_sim)\n"
+            ),
+            _python_response("set_ignore({(61, 19), (62, 19)})"),
+            _python_response("action(1)"),
+        ],
+    )
+
+    messages = [
+        {"role": "system", "content": "system prompt"},
+        {"role": "user", "content": [{"type": "text", "text": "Frame 0"}]},
+    ]
+    returned_messages, _terminated = agent._run_tool_loop(messages, grid_b64="")
+    assert len(snapshots) == 3, f"expected 3 LLM calls, got {len(snapshots)}"
+
+    # Turn-1 snapshots: call1 stateless (no block), call2 shows source,
+    # call3 shows the mask — state visible on the NEXT call.
+    assert _blocks_in(snapshots[0]) == [], "call 1 is stateless: no block"
+    assert "def my_sim(grid, action):" in snapshots[1][1]["content"], (
+        "call 2 must show the source registered in call 1"
+    )
+    assert "ignore: 2 cells" in snapshots[2][1]["content"], (
+        "call 3 must show the mask set in call 2"
+    )
+
+    # Save history exactly as the agent does at turn end.
+    saved_history = agent._persistent_history_messages(returned_messages)
+    assert saved_history, "save path must keep history"
+    assert _blocks_in(saved_history) == [], (
+        "ZERO sim-state blocks may survive the persistent-history save"
+    )
+    assert any(
+        m.get("role") == "assistant" and m.get("tool_calls") for m in saved_history
+    ), "the substantive turn-1 tool exchange survives the strip"
+
+    # Turn 2: fresh agent over the same LIVE sandbox.
+    agent2, _snapshots2 = _make_tool_loop_agent(sandbox)
+    turn2_messages = [
+        {"role": "system", "content": "system prompt"},
+        *saved_history,
+        {"role": "user", "content": [{"type": "text", "text": "Frame 1"}]},
+    ]
+    agent2._inject_sim_state_block(turn2_messages)
+
+    blocks = _blocks_in(turn2_messages)
+    assert len(blocks) == 1, f"turn 2 must carry EXACTLY ONE block, got {len(blocks)}"
+    idx, content = blocks[0]
+    assert idx == 1, f"turn-2 block at index {idx}, expected 1"
+    assert "def my_sim(grid, action):" in content, (
+        "turn-2 block reflects the LIVE sandbox's registered source"
+    )
+    assert "ignore: 2 cells" in content, "turn-2 block reflects the LIVE mask"
+    assert all(
+        not is_sim_state_block(m) for m in turn2_messages[2:]
+    ), "no stale block deeper in the turn-2 history"
+
+
+def test_level_transition_block_semantics(seeded_live_sandbox, win_callback) -> None:
+    """S5b: reset_for_level_transition clears the ignore mask but preserves
+    the simulate function + captured source (sandbox.py:1030-1044). The
+    block must reflect exactly that: preserved source, 'ignore: none'."""
+    s = seeded_live_sandbox(win_callback, current_frame=[[0] * 8 for _ in range(8)])
+    code = (
+        "def my_sim(grid, action):\n"
+        "    return copy_grid(grid)\n"
+        "set_simulate(my_sim)\n"
+        "set_ignore({(61, 19), (62, 19)})\n"
+    )
+    output, error, _ = s.run_code(code)
+    assert error is None
+    assert s._simulate is not None
+    assert s._ignore_mask == {(61, 19), (62, 19)}
+
+    s.reset_for_level_transition()
+    assert s._ignore_mask == set(), "mask must clear on level transition"
+    assert s._simulate is not None, "simulate must survive level transition"
+    assert "def my_sim" in (s._simulate_source or ""), (
+        "captured source must survive level transition"
+    )
+
+    agent = _make_agent(s)
+    block = agent._build_sim_state_block()
+    assert block is not None
+    assert "def my_sim(grid, action):" in block
+    assert "ignore: none" in block
