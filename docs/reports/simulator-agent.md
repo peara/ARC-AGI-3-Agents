@@ -901,6 +901,8 @@ ignore: 128 cells — row 61, cols 0-63; row 62, cols 0-63
 - The `set_simulate`/`set_ignore` acks
 - `_build_simulate_status` (the frame-prompt status line — redundancy is intended)
 
+(Design-note observations beyond these are in the ledger below.)
+
 ### Known limitation (documented): cross-call source capture
 
 `run_code` seeds `linecache.cache["<sandbox>"]` with the latest snippet, so
@@ -909,6 +911,36 @@ ignore: 128 cells — row 61, cols 0-63; row 62, cols 0-63
 by `test_cross_call_registration_documents_linecache_limit`; the ack's first line
 shares the flaw. A per-snippet cache-key fix is future work if live runs show it
 matters.
+
+### Design-notes ledger (bad-design observations, deliberately not fixed here)
+
+Observed while planning/implementing this change; each is its own future decision,
+recorded so they are not rediscovered:
+
+1. **`set_ignore` replace-vs-merge ambiguity** — the docstring ("Declare cells to
+   skip") reads additive; the code REPLACES the mask (sandbox.py:541). The 5681a14a
+   mask shrink (128 → 98 cells) was self-inflicted by this ambiguity. If a future
+   live run shows another unnoticed shrink, merge semantics + `clear_ignore()` is
+   the fix — with the caveat that additive masks can hide real simulate errors
+   from `check()` (accuracy inflation, escape never fires).
+2. **Sentinel-string smell** — `"(source unavailable)"` is a magic string compared
+   by value (builder guard, agent.py:88/1133; written by sandbox.py:364). A
+   `None`-or-exception contract would be cleaner; not touched because 8c87349
+   (the linecache capture fix) was fresh at planning time.
+3. **Cross-call `getsource` wrongness** — see the limitation above; the ack's
+   first line shares the flaw. Any fix belongs in sandbox capture (per-registration
+   capture context), not the block.
+4. **Trimmer content-pattern contracts** — three trimmers target messages by
+   implicit string patterns (nudge strings, notes prefix, now the sim-state
+   header). The shared `is_sim_state_block` predicate is the local cleanup; a
+   unified "immutable message" registry would collapse the pattern-spread if more
+   block types appear. Future refactor, not started.
+5. **MagicMock fixture norm vs production typing** — house fixtures construct
+   agents/sandboxes via `MagicMock()` (test_agent.py:1017 pattern); every new
+   agent→sandbox read must isinstance-guard (the B1 pattern in the builder) or a
+   fixture crash becomes a silent turn-kill inside the tool loop's `try:`.
+   Production invariants enforced only by convention — noted, not refactorable
+   here.
 
 ---
 
