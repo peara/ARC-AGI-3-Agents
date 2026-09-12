@@ -15,7 +15,9 @@ class ReplayHarness:
     stores converted FrameData frames. No perception, entity, or agent state.
     """
 
-    def __init__(self, env: EnvironmentWrapper, action_inputs: list[dict[str, Any]]) -> None:
+    def __init__(
+        self, env: EnvironmentWrapper, action_inputs: list[dict[str, Any]]
+    ) -> None:
         self.env = env
         self.action_inputs = action_inputs
         self.frames: list[FrameData] = []
@@ -24,8 +26,10 @@ class ReplayHarness:
     def from_recording(cls, path: str | Path, *, seed: int = 0) -> ReplayHarness:
         """Load a recording, create a fresh offline environment, and return a harness.
 
-        The reset frame is NOT in the recording; callers must replay_to(0) to
-        capture the initial state.
+        Every recording line stores the action that produced its frame, so the
+        replay contract is frames[i+1] == recording line i. The reset frame is
+        NOT in the recording; callers must replay_to(0) to capture the initial
+        state.
         """
         recording_path = Path(path)
         if not recording_path.is_file():
@@ -53,7 +57,9 @@ class ReplayHarness:
         arc = Arcade(operation_mode=OperationMode.NORMAL)
         env = arc.make(game_id, seed=seed)
         if env is None:
-            raise RuntimeError(f"Arcade.make returned None for game_id={game_id} seed={seed}")
+            raise RuntimeError(
+                f"Arcade.make returned None for game_id={game_id} seed={seed}"
+            )
 
         return cls(env, action_inputs)
 
@@ -78,7 +84,7 @@ class ReplayHarness:
             ai = self.action_inputs[action_index]
 
             action_id = ai["id"]
-            if action_id == 0 or action_id == "RESET":
+            if action_id in (0, "RESET", "reset"):
                 raw = self.env.reset()
             else:
                 action_data = ai.get("data", {}).copy()
@@ -87,7 +93,10 @@ class ReplayHarness:
                 if reasoning is not None and not isinstance(reasoning, dict):
                     reasoning = {"text": str(reasoning)}
 
-                action = GameAction.from_id(action_id)
+                if isinstance(action_id, str):
+                    action = GameAction.from_name(action_id)
+                else:
+                    action = GameAction.from_id(action_id)
                 action.set_data(action_data)
 
                 raw = self.env.step(action, data=action_data, reasoning=reasoning)
