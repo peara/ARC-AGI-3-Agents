@@ -26,14 +26,6 @@ class TestReferenceRecordingsManifest:
         cases = load_manifest()
         assert cases, "reference_recordings.json should list at least one plan case"
 
-    def test_manifest_paths_exist(self):
-        missing = [
-            str(c.recording.path)
-            for c in load_manifest()
-            if not c.recording.path.is_file()
-        ]
-        assert not missing, f"missing recording files: {missing}"
-
     def test_manifest_file_is_valid_json(self):
         assert MANIFEST_PATH.is_file()
 

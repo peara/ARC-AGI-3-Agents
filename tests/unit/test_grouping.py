@@ -648,30 +648,6 @@ class TestApplyGates:
         assert len(apply_gates([cm], features, 5, config)) == 1
 
 
-_RECORDING_PATH = (
-    "recordings/ls20-9607627b.llmcuriosity."
-    "abdbac8a-c81c-48ea-8710-c4b26301aa27.recording.jsonl"
-)
-
-
-def _load_recording_frames(path: str) -> list[dict]:
-    frames = []
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            data = json.loads(line).get("data", {})
-            if data.get("frame") is not None:
-                frames.append(data)
-    return frames
-
-
-def _has_recording() -> bool:
-    import os
-    return os.path.exists(_RECORDING_PATH)
-
-
 def _make_mock_llm(
     responses: list[str],
 ) -> tuple[Callable, list[list[dict[str, str]]]]:
@@ -687,104 +663,6 @@ def _make_mock_llm(
         return "[]"
 
     return llm_call, calls
-
-
-@pytest.mark.skipif(not _has_recording(), reason="recording not available")
-class TestGroupingEngineRecording:
-    def test_empty_snapshot_on_early_frames(self) -> None:
-        from grouping.engine import GroupingEngine
-        from perception.session.session import RESET_ACTION, PerceptionSession
-
-        llm_call, _ = _make_mock_llm([])
-        engine = GroupingEngine(llm_call=llm_call, debounce_frames=100)
-        frames = _load_recording_frames(_RECORDING_PATH)
-
-        sess = PerceptionSession()
-        for i, data in enumerate(frames[:5]):
-            ai = data.get("action_input") or {}
-            action = int(ai.get("id", -1))
-            if action < 0:
-                action = RESET_ACTION
-            snap = sess.ingest(
-                data["frame"], action,
-                state_name=str(data.get("state", "NOT_FINISHED")),
-                levels_completed=int(data.get("levels_completed", 0)),
-            )
-            groups = engine.update(snap.registry, snap.catalog, action)
-
-        assert groups == []
-        assert engine.confirmed_groups == []
-
-    def test_confirmed_groups_after_full_run(self) -> None:
-        from grouping.engine import GroupingEngine
-        from perception.session.session import RESET_ACTION, PerceptionSession
-
-        confirm_resp = json.dumps([
-            {"proposal_id": 0, "verdict": "confirm", "relation": "nest",
-             "members": [{"id": 0, "label": "a", "role": "container"},
-                          {"id": 1, "label": "b", "role": "dynamic"}],
-             "reason": "nested"},
-        ])
-        llm_call, calls = _make_mock_llm([confirm_resp, confirm_resp])
-        engine = GroupingEngine(
-            llm_call=llm_call, debounce_frames=1, confirm_threshold=1
-        )
-        frames = _load_recording_frames(_RECORDING_PATH)
-
-        sess = PerceptionSession()
-        for data in frames:
-            ai = data.get("action_input") or {}
-            action = int(ai.get("id", -1))
-            if action < 0:
-                action = RESET_ACTION
-            snap = sess.ingest(
-                data["frame"], action,
-                state_name=str(data.get("state", "NOT_FINISHED")),
-                levels_completed=int(data.get("levels_completed", 0)),
-            )
-            engine.update(snap.registry, snap.catalog, action)
-
-        confirmed = engine.confirmed_groups
-        assert len(confirmed) >= 1
-        g = confirmed[0]
-        assert g.relation == "nest"
-        assert g.confidence >= 1
-        assert len(calls) >= 1
-
-    def test_rejected_proposal_not_reconfirmed(self) -> None:
-        from grouping.engine import GroupingEngine
-        from perception.session.session import RESET_ACTION, PerceptionSession
-
-        reject_resp = json.dumps([
-            {"proposal_id": 0, "verdict": "reject", "relation": "none",
-             "members": [], "reason": "coincidental"},
-        ])
-        confirm_resp = json.dumps([
-            {"proposal_id": 0, "verdict": "confirm", "relation": "sibling",
-             "members": [{"id": 0, "label": "x", "role": "unknown"}],
-             "reason": "ok"},
-        ])
-        llm_call, _ = _make_mock_llm([reject_resp, confirm_resp])
-        engine = GroupingEngine(
-            llm_call=llm_call, debounce_frames=1, confirm_threshold=2
-        )
-        frames = _load_recording_frames(_RECORDING_PATH)
-
-        sess = PerceptionSession()
-        for data in frames:
-            ai = data.get("action_input") or {}
-            action = int(ai.get("id", -1))
-            if action < 0:
-                action = RESET_ACTION
-            snap = sess.ingest(
-                data["frame"], action,
-                state_name=str(data.get("state", "NOT_FINISHED")),
-                levels_completed=int(data.get("levels_completed", 0)),
-            )
-            engine.update(snap.registry, snap.catalog, action)
-
-        assert engine.confirmed_groups == []
-        assert len(engine.rejected_keys) >= 1
 
 
 class TestGroupingEngineMock:

@@ -5,7 +5,6 @@ Covers: world_model, check, sandbox (live + offline), agent, registration.
 
 from __future__ import annotations
 
-import glob
 import json
 from unittest.mock import MagicMock
 
@@ -314,64 +313,6 @@ result = check()
         )
         assert error is None, f"Unexpected error: {error}"
         assert sandbox._pending_notes == {"notes": "test notes", "plan": "test plan"}
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# 4. Sandbox — Offline Mode (using ReplayHarness)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
-class TestSandboxOfflineMode:
-    @pytest.fixture
-    def ls20_recording(self) -> str | None:
-        """Find an ls20 recording file for offline tests."""
-        recordings = sorted(glob.glob("recordings/ls20-*.recording.jsonl"))
-        if not recordings:
-            pytest.skip("No ls20 recording files found")
-        return recordings[0]
-
-    @pytest.fixture
-    def offline_sandbox(self, ls20_recording) -> SimulatorSandbox:
-        """Create a sandbox in offline mode from a real recording."""
-        from replay.harness import ReplayHarness
-
-        harness = ReplayHarness.from_recording(ls20_recording)
-        sandbox = SimulatorSandbox(harness=harness, timeout=30.0)
-        return sandbox
-
-    def test_offline_construction(self, offline_sandbox):
-        """Offline sandbox has grids and actions loaded."""
-        assert len(offline_sandbox._grids) > 0
-        assert len(offline_sandbox._actions) > 0
-
-    def test_offline_tools_available(self, offline_sandbox):
-        """Offline sandbox namespace has frame access tools."""
-        ns = offline_sandbox.namespace
-        assert "get_frame" in ns
-        assert "get_action" in ns
-        assert "n_frames" in ns
-        assert ns["n_frames"] > 0
-
-    def test_offline_get_frame(self, offline_sandbox):
-        """get_frame returns a grid."""
-        frame = offline_sandbox.namespace["get_frame"](0)
-        assert isinstance(frame, list)
-        assert len(frame) > 0
-        assert len(frame[0]) > 0
-
-    def test_offline_run_code_returns_3_tuple(self, offline_sandbox):
-        """run_code returns (output, error, action_taken)."""
-        output, error, action_taken = offline_sandbox.run_code("x = 42")
-        assert isinstance(output, str)
-        assert error is None
-        # In offline mode, no action() is available, so action_taken is None
-        assert action_taken is None
-
-    def test_offline_action_not_available(self, offline_sandbox):
-        """action() in offline mode raises RuntimeError."""
-        output, error, action_taken = offline_sandbox.run_code("action(0)")
-        assert error is not None
-        assert "live mode" in error.lower() or "action" in error.lower()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

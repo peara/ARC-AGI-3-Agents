@@ -20,8 +20,10 @@ from agents.simulator_agent.sandbox import SimulatorSandbox
 # ``agents`` resolve correctly from this sub-directory (mirrors
 # ``tests/unit/entity/conftest.py``).
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-if _PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, _PROJECT_ROOT)
+_TEST_DIR = os.path.dirname(__file__)
+for _p in (_PROJECT_ROOT, _TEST_DIR):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 
 def make_mock_step_env_callback(action_id: int, action_data: dict[str, Any] | None = None) -> dict[str, Any]:

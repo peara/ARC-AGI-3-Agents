@@ -220,12 +220,9 @@ in the module docstring and is mirrored in `AGENTS.md`.
 ### Live-vs-offline parity
 
 Offline corpus content is UNCHANGED. Offline loading replays all harness
-frames including the synthetic env.reset() frame at index 0, so both pinned
-recordings already show `grids[0] == grids[1]` and `actions[0] == 0` — the
-pair shape. Snapshot-pinning tests
-(`tests/unit/simulator_agent/test_corpus_pinning.py`, hashes in
-`tests/unit/simulator_agent/data/corpus_snapshots.json`) prove corpus content
-identical pre/post rework. Live corpora now match that shape via
+frames including the synthetic env.reset() frame at index 0, so both
+reference recordings already show `grids[0] == grids[1]` and
+`actions[0] == 0` — the pair shape. Live corpora now match that shape via
 `update_state(reset_seeded=True)`: one-time per level 1, seeded as
 `grids=[B0, B0]`, `actions=[0]`; the first real action appends `(B1, a1)` as
 transition 1. Naive `grids=[B0]`/`actions=[0]` seeding is the corruption trap

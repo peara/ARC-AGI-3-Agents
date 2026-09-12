@@ -24,11 +24,13 @@ def perception_case_id(expect) -> str:
 class TestSettledSubframeExtraction:
     def test_last_subframe_is_settled_state(self):
         """g50t: last sub-frame continues into the next step's first sub-frame."""
-        path = next(
-            e.recording.path
-            for e in load_perception_expectations()
+        g50t = [
+            e for e in load_perception_expectations()
             if e.recording.name == "g50t-curiosity"
-        )
+        ]
+        if not g50t or not g50t[0].recording.path.is_file():
+            pytest.skip("g50t recording not on disk")
+        path = g50t[0].recording.path
         import json
 
         raw_frames = []

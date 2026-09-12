@@ -14,15 +14,28 @@ import sys
 from typing import Any
 
 import pytest
-from conftest import make_seeded_live_sandbox
 
 from agents.simulator_agent.experiment import frame_caption
 from agents.simulator_agent.reset_policy import producing_action_caption
 from agents.simulator_agent.sandbox import SimulatorSandbox
 
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+_TEST_DIR = os.path.dirname(os.path.abspath(__file__))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
+if _TEST_DIR not in sys.path or sys.path.index(_PROJECT_ROOT) < sys.path.index(_TEST_DIR):
+    try:
+        sys.path.remove(_TEST_DIR)
+    except ValueError:
+        pass
+    sys.path.insert(0, _TEST_DIR)
+
+
+@pytest.fixture
+def seeded_live_sandbox_factory():
+    from conftest import make_seeded_live_sandbox
+
+    return make_seeded_live_sandbox
 
 
 def _step_result(grid: list[list[int]]) -> dict[str, Any]:
@@ -67,7 +80,7 @@ def test_experiment_captions_match_producing_action_caption():
 
 
 @pytest.mark.unit
-def test_show_frame_caption_uses_producing_action():
+def test_show_frame_caption_uses_producing_action(seeded_live_sandbox_factory):
     """show_frame caption must be state-keyed. Pair-seeded corpus shape:
     _grids == [B0, B0, B1], _actions == [0, a1]. Frame 1 is the RESET
     duplicate (== B0, produced by actions[0]=0); frame 2 is B1 (produced
@@ -79,7 +92,7 @@ def test_show_frame_caption_uses_producing_action():
     def callback(action_id: int, action_data: Any = None) -> dict[str, Any]:
         return _step_result(b1)
 
-    sandbox = make_seeded_live_sandbox(callback, current_frame=base)
+    sandbox = seeded_live_sandbox_factory(callback, current_frame=base)
     sandbox.update_state(
         objects=(),
         adjacency=frozenset(),
@@ -105,7 +118,7 @@ def test_show_frame_caption_uses_producing_action():
 
 
 @pytest.mark.unit
-def test_show_frame_empty_actions_frame0_reset_caption():
+def test_show_frame_empty_actions_frame0_reset_caption(seeded_live_sandbox_factory):
     """Edge: frame 0 on a pair-seeded live sandbox before any real action
     (actions == [0] after seeding; grids == [B0, B0]) → RESET caption,
     never raises."""
@@ -114,7 +127,7 @@ def test_show_frame_empty_actions_frame0_reset_caption():
     def callback(action_id: int, action_data: Any = None) -> dict[str, Any]:
         return _step_result(base)
 
-    sandbox = make_seeded_live_sandbox(callback, current_frame=base)
+    sandbox = seeded_live_sandbox_factory(callback, current_frame=base)
     sandbox.update_state(
         objects=(),
         adjacency=frozenset(),
@@ -134,7 +147,7 @@ def test_show_frame_empty_actions_frame0_reset_caption():
 
 
 @pytest.mark.unit
-def test_show_frame_out_of_range_returns_error_string():
+def test_show_frame_out_of_range_returns_error_string(seeded_live_sandbox_factory):
     """Return VALUES unchanged: out-of-range still returns the error
     string, no caption, no raise."""
     base = [[0] * 64 for _ in range(64)]
@@ -142,7 +155,7 @@ def test_show_frame_out_of_range_returns_error_string():
     def callback(action_id: int, action_data: Any = None) -> dict[str, Any]:
         return _step_result(base)
 
-    sandbox = make_seeded_live_sandbox(callback, current_frame=base)
+    sandbox = seeded_live_sandbox_factory(callback, current_frame=base)
     show_frame = sandbox.namespace["show_frame"]
     result = show_frame(99)
     assert result == "Frame 99 out of range (0--1)"
