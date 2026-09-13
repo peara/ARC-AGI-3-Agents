@@ -36,10 +36,8 @@ import pytest
 
 from agents.simulator_agent.agent import SimulatorFirstAgent
 from agents.simulator_agent.prompts import AGENT_SYSTEM_PROMPT
-from agents.simulator_agent.reconstruction import (
-    ReplayMarker,
-    reconstruct,
-)
+from agents.simulator_agent.reconstruction import ReplayMarker
+from agents.simulator_agent.replay_timeline import reconstruct
 
 _RECORDING = Path(
     "recordings/ls20-9607627b.simulatorfirstagent.simulatorfirst."

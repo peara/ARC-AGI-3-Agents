@@ -646,7 +646,8 @@ to the static F glyph. Root cause: the message's remedy menu
 (*model the animation* / *set_ignore*) omits the actual mechanism
 (*the move was blocked*), funneling the model into re-identifying the object.
 
-Replay methodology: `reconstruction.py` is a **timeline walker** — it walks
+Replay methodology: the reconstruction pair — `replay_timeline.py` (walker)
++ `reconstruction.py` (contract + verify) — is a **timeline walker** — it walks
 the recording line by line, re-executing every recorded python tool call at
 its recorded frame against the corpus as it stood then (the corpus grows via
 the sandbox's own `action()` machinery, exactly as the live agent grew it).
@@ -694,7 +695,8 @@ Findings:
 
 Variant machinery: `--variant {base,A,B,B2}` patches
 `build_exception_flow_message` at runtime (experiment-only; production
-`EXCEPTION_FLOW_TEXT` untouched). Reconstruction: `reconstruction.py` with
+`EXCEPTION_FLOW_TEXT` untouched). Reconstruction: `replay_timeline.py` +
+`reconstruction.py` with
 `tests/unit/simulator_agent/test_reconstruction.py` — machinery tests on
 committed synthetic fixtures + fidelity tests on the recording (skip with an
 explicit reason when absent) + a driver test that runs a fake LLM through the

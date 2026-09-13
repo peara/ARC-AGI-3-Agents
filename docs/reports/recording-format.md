@@ -118,10 +118,10 @@ with `frame[N-1]`, not `frame[N]`).
 | `simulate_source` | str | Registered simulate source, verbatim (empty string when unregistered) |
 | `n_collected_frames` | int | `len()` of the sandbox corpus grids — live-verbatim; includes the virtual RESET pair (see `agents/simulator_agent/reset_policy.py` for index conventions) |
 
-`agents/simulator_agent/reconstruction.py` (the timeline walker) verifies
+`agents/simulator_agent/replay_timeline.py` (the timeline walker) verifies
 its reconstructed state against this block at every recording line that
-carries it (collect-then-raise); `verify_reconstruction()` reads the
-marked line's block as its ground truth.
+carries it (collect-then-raise); `verify_reconstruction()`
+(`reconstruction.py`) reads the marked line's block as its ground truth.
 
 ---
 

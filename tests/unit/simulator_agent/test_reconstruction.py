@@ -261,9 +261,9 @@ def _region(
 import logging  # noqa: E402
 
 from agents.simulator_agent.reconstruction import (  # noqa: E402
-    reconstruct,
     verify_reconstruction,
 )
+from agents.simulator_agent.replay_timeline import reconstruct  # noqa: E402
 from agents.simulator_agent.reset_policy import RESET_ACTION  # noqa: E402
 from agents.simulator_agent.workflow import Phase  # noqa: E402
 
