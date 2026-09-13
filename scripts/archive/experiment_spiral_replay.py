@@ -1,4 +1,10 @@
-"""Recreate the ls20 spiral from the reconstructed incident state.
+"""[ARCHIVED 2026-09-13] Concluded: findings shipped in the EXCEPTION_FLOW_TEXT
+blocked-move fix (commit 9822205); see docs/reports/simulator-agent.md
+§exception-flow. Anchor recording 1786060d deleted; superseded by the
+timeline-walker reconstruction (agents/simulator_agent/reconstruction.py) +
+in-test driver (tests/unit/simulator_agent/test_reconstruction_driver.py).
+
+Recreate the ls20 spiral from the reconstructed incident state.
 
 Resumes the simulatorfirst agent at the exact spiral-turn state of run
 1786060d (frame 11: registered simulate, stale 100% check, pending
@@ -19,7 +25,8 @@ Modes:
   default     live LLMClient (local LM Studio). ONE variant per process;
               never run two experiments in parallel.
 
-Usage:
+Usage (historical — imports reference the pre-reconstruction API and are
+left as-is for historical accuracy; this apparatus no longer runs):
     uv run python scripts/experiment_spiral_replay.py RECORDING.jsonl \
         [--llm-cap 25] [--fake-llm] [--max-actions 8] [--out trace.json]
 """
