@@ -1,0 +1,11 @@
+{"seq": 1, "frame_index": 0, "ok": true, "kind": "simulator", "tool_calls": [{"function": {"name": "python", "arguments": "{\"code\": \"def simulate(grid, action):\\n    return [row[:] for row in grid]\\nset_simulate(simulate)\\n\"}"}}], "messages": []}
+{"seq": 2, "frame_index": 0, "ok": true, "kind": "simulator", "tool_calls": [{"function": {"name": "python", "arguments": "{\"code\": \"def simulate(grid, action):\\n    g = [row[:] for row in grid]\\n    if action == 1:\\n        g[0][0] = (g[0][0] + 1) % 16\\n    return g\\nset_simulate(simulate)\\n\"}"}}], "messages": []}
+{"seq": 3, "frame_index": 0, "ok": true, "kind": "simulator", "tool_calls": [{"function": {"name": "python", "arguments": "{\"code\": \"action(1)\\naction(1)\\n\"}"}}], "messages": []}
+{"seq": 4, "frame_index": 2, "ok": true, "kind": "simulator", "tool_calls": [{"function": {"name": "update_notes", "arguments": "{\"notes\": \"mini notes\", \"plan\": \"mini plan\"}"}}], "messages": []}
+{"seq": 5, "frame_index": 2, "ok": true, "kind": "simulator", "tool_calls": [{"function": {"name": "set_phase", "arguments": "{\"phase\": \"MODEL\"}"}}], "messages": []}
+{"seq": 6, "frame_index": 2, "ok": true, "kind": "simulator", "tool_calls": [{"function": {"name": "python", "arguments": "{\"code\": \"action(2)\\n\"}"}}], "messages": []}
+{"seq": 7, "frame_index": 3, "ok": true, "kind": "simulator", "tool_calls": null, "messages": [{"role": "user", "content": "no tools here"}]}
+{"seq": 8, "frame_index": 3, "ok": false, "kind": "simulator", "tool_calls": [{"function": {"name": "python", "arguments": "{\"code\": \"print('should not run')\\n\"}"}}], "messages": []}
+{"seq": 9, "frame_index": 3, "ok": true, "kind": "simulator", "tool_calls": [{"function": {"name": "python", "arguments": "{\"code\": \"action(1)\\n\"}"}}], "messages": []}
+{"seq": 10, "frame_index": 4, "ok": true, "kind": "simulator", "tool_calls": [{"function": {"name": "python", "arguments": "{\"code\": \"action(1)\\n\"}"}}], "messages": []}
+{"seq": 11, "frame_index": 5, "ok": true, "kind": "simulator", "tool_calls": [], "messages": [{"role": "user", "content": "mini marked turn"}]}
