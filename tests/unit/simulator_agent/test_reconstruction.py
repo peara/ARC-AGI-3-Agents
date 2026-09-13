@@ -5,7 +5,7 @@ simulatorfirst). The recording is a gitignored dev artifact — tests over its
 real data skip with an explicit reason when absent. Pure-logic tests
 (marker construction, parser on synthetic messages) run unconditionally.
 
-Replaces the dead 1786060d incident tests (recording deleted).
+Replaces the dead first-generation incident tests (that recording was deleted).
 """
 
 from __future__ import annotations
@@ -375,3 +375,147 @@ class TestMachinery:
         assert err is None
         assert len(mini_state.sandbox._grids) == 8  # noqa: SLF001
         assert mini_state.sandbox._actions[-1] == 1  # noqa: SLF001
+
+
+# ── Fidelity tests (eba2a894 recording) ───────────────────────────────────
+#
+# Data-driven: expected values are parsed FROM the recording (embedded
+# simulator_state at the marked line, flow facts from the marked turn's
+# messages). Pinned literals {49, 2, 5, 724, 53, MODEL} are tripwires
+# guarding against reader/parser bugs — everything else derives.
+
+_MARKER = ReplayMarker(turn_frame=12, turn_seq=18)
+
+
+@pytest.fixture(scope="module")
+def fidelity_state():
+    if not _RECORDING.exists():
+        pytest.skip(
+            "gitignored dev artifact: eba2a894 recording not present; "
+            "machinery tests in fixtures/ run without it"
+        )
+    return reconstruct(_RECORDING, marker=_MARKER, seed=0)
+
+
+@pytest.fixture(scope="module")
+def emb12(recording_lines):
+    emb = _embedded_state(recording_lines[_MARKER.turn_frame])
+    assert emb is not None, "marked line must carry embedded simulator_state"
+    return emb
+
+
+@pytest.fixture(scope="module")
+def marked_messages(llm_rows):
+    by_seq = {r["seq"]: r for r in llm_rows}
+    return by_seq[_MARKER.turn_seq]["messages"]
+
+
+class TestFidelity:
+    def test_corpus_shape_matches_pinned_mapping(self, fidelity_state, emb12):
+        """POST-append offsets: the marked line's own transition appends
+        AFTER the embedded capture (PRE-action timing), so grids = n+1,
+        actions = n, history = h+1."""
+        assert len(fidelity_state.sandbox._grids) == emb12.n_collected_frames + 1  # noqa: SLF001
+        assert len(fidelity_state.sandbox._actions) == emb12.n_collected_frames  # noqa: SLF001
+        assert len(fidelity_state.history_turns) == emb12.history_turns + 1
+        assert verify_reconstruction(fidelity_state)["corpus_shape"]["ok"] is True
+
+    def test_simulate_source_byte_identical(self, fidelity_state, emb12):
+        """Walker-registered simulate == embedded source, byte-equal."""
+        assert fidelity_state.sandbox._simulate_source == emb12.simulate_source  # noqa: SLF001
+        assert len(fidelity_state.sandbox._simulate_source) == 724  # noqa: SLF001
+
+    def test_stale_check_is_cached_not_recomputed(self, fidelity_state, emb12):
+        """The LLM sees the CACHED check, not a re-check — the cached
+        _last_check_result must equal the embedded result (the stale
+        5/5@100.0 snapshot, not a fresh 8/8 recomputation)."""
+        cached = fidelity_state.sandbox._last_check_result  # noqa: SLF001
+        assert cached is not None
+        for key in ("overall_accuracy", "frames_correct", "frames_total"):
+            assert cached[key] == emb12.last_check_result[key]
+        assert (
+            cached["frames_correct"],
+            cached["frames_total"],
+            cached["overall_accuracy"],
+        ) == (5, 5, 100.0)
+
+    def test_no_ignore_mask_before_incident(self, fidelity_state):
+        """No set_ignore ran before the marked turn → source None, mask empty."""
+        assert fidelity_state.set_ignore_source is None
+        assert len(fidelity_state.sandbox._ignore_mask) == 0  # noqa: SLF001
+
+    def test_conversation_prefix_verbatim(self, fidelity_state, marked_messages):
+        """Conversation prefix is byte-equal to the recorded seq-18 messages."""
+        assert fidelity_state.messages == marked_messages
+        assert len(fidelity_state.messages) == 53
+        assert parse_flow_message(fidelity_state.messages) is not None
+
+    def test_pending_flow_matches_recorded_message(self, fidelity_state):
+        """Re-fire predict_and_compare on the final transition: the pending
+        flow (n_diff, n_regions) equals the parsed recorded flow facts."""
+        from agents.simulator_agent.frame_layers import settled_board
+
+        sandbox = fidelity_state.sandbox
+        parsed = parse_flow_message(fidelity_state.messages)
+        assert parsed is not None
+        sandbox._pending_exception_flow = None  # noqa: SLF001
+        sandbox.predict_and_compare(
+            settled_board(fidelity_state.harness.frames[-2].frame),
+            settled_board(fidelity_state.harness.frames[-1].frame),
+            sandbox._actions[-1],  # noqa: SLF001
+        )
+        pending = sandbox._pending_exception_flow  # noqa: SLF001
+        assert pending is not None
+        assert (pending["n_diff"], pending["n_regions"]) == (
+            parsed.n_cells,
+            parsed.n_regions,
+        )
+        assert (pending["n_diff"], pending["n_regions"]) == (49, 2)
+
+    def test_phase_derived_from_set_phase_calls(self, fidelity_state):
+        """Phase comes from the walk's set_phase calls, cross-checked
+        (advisory) against the recorded PHASE directive."""
+        assert fidelity_state.workflow._phase == Phase.MODEL  # noqa: SLF001
+        assert verify_reconstruction(fidelity_state)["phase_crosscheck"] == {
+            "found": "MODEL",
+            "matches": True,
+        }
+
+    def test_verify_dict_green_on_incident(self, fidelity_state):
+        """Every verify_reconstruction check green on the real incident."""
+        checks = verify_reconstruction(fidelity_state)
+        assert checks["simulate_source_match"] is True
+        assert checks["stale_check_match"] is True
+        assert checks["has_simulate"] is True
+        assert checks["flow_match"]["ok"] is True
+        assert checks["corpus_shape"]["ok"] is True
+        assert checks["phase"] == "MODEL"
+        assert checks["n_messages"] == 53
+        assert checks["last_user_has_exception"] is True
+
+    def test_reconstruction_is_deterministic(self):
+        """Two fresh reconstruct() runs produce identical state cores and
+        identical verify dicts."""
+        if not _RECORDING.exists():
+            pytest.skip(
+                "gitignored dev artifact: eba2a894 recording not present; "
+                "machinery tests in fixtures/ run without it"
+            )
+        s1 = reconstruct(_RECORDING, marker=_MARKER, seed=0)
+        s2 = reconstruct(_RECORDING, marker=_MARKER, seed=0)
+        assert s1.sandbox._grids == s2.sandbox._grids  # noqa: SLF001
+        assert s1.sandbox._actions == s2.sandbox._actions  # noqa: SLF001
+        assert s1.messages == s2.messages
+        assert s1.history_turns == s2.history_turns
+        assert s1.notes == s2.notes
+        assert s1.workflow._phase == s2.workflow._phase  # noqa: SLF001
+        assert s1.sandbox._simulate_source == s2.sandbox._simulate_source  # noqa: SLF001
+        assert verify_reconstruction(s1) == verify_reconstruction(s2)
+
+    def test_per_frame_verification_all_lines(self, recording_lines, fidelity_state):
+        """Ground truth existed at EVERY line 0..12, so the walker's
+        per-line verification actually compared against real data;
+        fidelity_state existing proves the walk raised zero mismatches
+        (collect-then-raise)."""
+        for i in range(_MARKER.turn_frame + 1):
+            assert _embedded_state(recording_lines[i]) is not None, f"line {i}"
