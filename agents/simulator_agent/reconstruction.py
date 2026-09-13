@@ -32,6 +32,9 @@ Not reconstructed (deliberately):
     the sandbox does not consume them)
   - trimmed-message internals beyond what the log preserved
   - image re-rendering (``[image omitted]`` placeholders stay)
+  - phase crosscheck beyond the walk-derived phase (``phase_crosscheck``
+    in ``verify_reconstruction`` is best-effort advisory, never a hard
+    gate)
 """
 
 from __future__ import annotations

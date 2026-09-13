@@ -633,10 +633,10 @@ Result vs the same transition in production (which consumed 23 LLM calls /
     transition call captures strictly more transferable knowledge; the
     "do not take any actions" line is load-bearing.
 
-### Exception-flow prompt-variant experiment (`scripts/experiment_spiral_replay.py`)
+### Exception-flow prompt-variant experiment (`scripts/archive/experiment_spiral_replay.py`)
 
-Investigated the ls20 simulate-spiral incident (`1786060d`, 21 LLM calls with
-zero actions): a 4×`action(1)` batch where moves 1-3 matched reality to within
+Investigated the ls20 simulate-spiral incident (21 LLM calls with zero
+actions): a 4×`action(1)` batch where moves 1-3 matched reality to within
 2 timer cells but move 4 failed (player already parked against the goal box,
 no blocked-move transition in simulate). The exception-flow message framed the
 resulting 47-cell diff as a prediction error over rows 10-19 — which includes
@@ -646,14 +646,23 @@ to the static F glyph. Root cause: the message's remedy menu
 (*model the animation* / *set_ignore*) omits the actual mechanism
 (*the move was blocked*), funneling the model into re-identifying the object.
 
-Replay methodology: `reconstruction.py` rebuilds the exact spiral-turn state
-from the recording + LLM log (replayed harness frames, live-mode sandbox with
-`set_simulate`/`set_ignore` re-executed, pending exception flow, verbatim
-conversation prefix) and `experiment_spiral_replay.py` drives the unmodified
-production `_run_tool_loop` from it with the LLM seam capped (`--llm-cap`)
-via a counting wrapper raising a BaseException past budget. Trace records
-full assistant text, complete tool-call args, pre-trim tool results, and
-injected messages.
+Replay methodology: `reconstruction.py` is a **timeline walker** — it walks
+the recording line by line, re-executing every recorded python tool call at
+its recorded frame against the corpus as it stood then (the corpus grows via
+the sandbox's own `action()` machinery, exactly as the live agent grew it).
+At each line carrying an embedded `scene_state.simulator_state` block, the
+walker verifies its own state against the recording's claim (corpus length,
+history length, simulate registration, cached check result), collecting
+mismatches and raising them together at the end of the walk. Verification is
+data-driven: every expected value is read from the recording at runtime —
+`verify_reconstruction()` returns a dict and never raises. The incident
+recording itself is a gitignored dev artifact (`eba2a894`); machinery tests
+run on committed synthetic fixtures unconditionally, fidelity tests on the
+recording skip with an explicit reason when it is absent, and a driver test
+runs a fake LLM through the production tool loop from the reconstructed
+state. Index conventions (frames ↔ grids ↔ actions, transition pairing, the
+virtual RESET pair) are owned by `agents/simulator_agent/reset_policy.py` —
+cite its mapping table, never restate it.
 
 Four arms (10-15 calls each, qwen3.8-27b, one at a time):
 
@@ -686,8 +695,10 @@ Findings:
 Variant machinery: `--variant {base,A,B,B2}` patches
 `build_exception_flow_message` at runtime (experiment-only; production
 `EXCEPTION_FLOW_TEXT` untouched). Reconstruction: `reconstruction.py` with
-`tests/unit/simulator_agent/test_reconstruction.py` (9 incident-anchored
-fidelity tests).
+`tests/unit/simulator_agent/test_reconstruction.py` — machinery tests on
+committed synthetic fixtures + fidelity tests on the recording (skip with an
+explicit reason when absent) + a driver test that runs a fake LLM through the
+production tool loop from the reconstructed state.
 
 A B3 arm (B2 + "immediately implement → set_simulate → check" directive)
 mapped the vertical corridor via 6 action batches / 9 env steps but still

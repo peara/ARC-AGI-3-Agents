@@ -102,6 +102,27 @@ Each line in `*.recording.jsonl` is a JSON object with a `data` key:
 | `relational_rules` | list | Confirmed relational rules |
 | `confirm_threshold` | int | Support count needed to promote proposed → confirmed |
 
+### 2.5 `scene_state.simulator_state` (simulatorfirst agents only)
+
+Written by `agents/simulator_agent/agent.py` (`_extra_record_data`) at
+observation time — **pre-action** per §3 (Frame timing semantics): the block
+in line N describes the state *before* line N's action executed (pair it
+with `frame[N-1]`, not `frame[N]`).
+
+| Field | Type | Meaning |
+|---|---|---|
+| `world_model` | `{notes, plan}` | World-model notes at observation time |
+| `history_turns` | int | **Count** (`len()` of the agent's history list), not the list; includes the iter-0 RESET provenance entry |
+| `last_check_result` | dict \| null | **Cached** result of the last `check()` call — stale by design (the LLM sees the cache, not a re-check); null before any check ran |
+| `has_simulate` | bool | Whether a simulate function is currently registered |
+| `simulate_source` | str | Registered simulate source, verbatim (empty string when unregistered) |
+| `n_collected_frames` | int | `len()` of the sandbox corpus grids — live-verbatim; includes the virtual RESET pair (see `agents/simulator_agent/reset_policy.py` for index conventions) |
+
+`agents/simulator_agent/reconstruction.py` (the timeline walker) verifies
+its reconstructed state against this block at every recording line that
+carries it (collect-then-raise); `verify_reconstruction()` reads the
+marked line's block as its ground truth.
+
 ---
 
 ## 3. Frame timing semantics ⚠️
