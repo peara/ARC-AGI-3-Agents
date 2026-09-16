@@ -64,6 +64,9 @@ def run_check(
     total_abstained_changed = 0
     total_abstained_stable = 0
     frames_correct = 0
+    abstained_changed_by_transition: dict[int, set[tuple[int, int]]] = {}
+    abstained_stable_cells: set[tuple[int, int]] = set()
+    frame_lines: list[str] = []
     skip = skip_transitions or set()
     all_transitions = max(len(grids) - 1, 0)
     scored_transitions = [i for i in range(all_transitions) if i not in skip]
@@ -123,6 +126,15 @@ def run_check(
         committed = correct + n_wrong
         accuracy = correct / committed * 100 if committed else 100.0
 
+        if abstained_changed_set:
+            abstained_changed_by_transition[i] = abstained_changed_set
+        abstained_stable_cells.update(
+            (r, c)
+            for r in range(len(predicted))
+            for c in range(len(predicted[r]))
+            if predicted[r][c] == UNKNOWN and (r, c) not in abstained_changed_set
+        )
+
         total_wrong += n_wrong
         total_changed += n_changed
         total_correct += correct
@@ -138,13 +150,16 @@ def run_check(
             degenerate_reset_frames += 1
 
         if verbose:
-            print(
-                f"Frame {i}: {n_wrong} wrong, {n_changed} changed, "
-                f"{correct} correct ({accuracy:.0f}%), {n_spurious} spurious"
-            )
+            if n_wrong == 0 and n_abstained_changed == 0:
+                frame_lines.append(f"Frame {i}: OK")
+            else:
+                frame_lines.append(
+                    f"Frame {i}: {n_wrong} wrong — "
+                    f"{n_abstained_changed} abstained-changed"
+                )
             if 0 < n_wrong <= 20:
                 for r, c, pv, av in wrong:
-                    print(f"  ({r},{c}): predicted={pv}, actual={av}")
+                    frame_lines.append(f"  ({r},{c}): predicted={pv}, actual={av}")
 
         results.append(
             {
@@ -168,6 +183,10 @@ def run_check(
         else None
     )
 
+    abstained_clusters = _build_abstained_clusters(
+        abstained_changed_by_transition, actions
+    )
+
     if verbose:
         print()
         print(
@@ -179,6 +198,45 @@ def run_check(
         if degenerate_reset_frames:
             summary += f" ({degenerate_reset_frames} degenerate RESET)"
         print(summary)
+        coverage_str = f"{coverage:.1f}" if coverage is not None else "n/a"
+        print(
+            f"Modeled: {total_correct} correct, {total_wrong} wrong, "
+            f"{total_abstained_changed} abstained-changed "
+            f"({total_abstained_stable} abstained-stable), "
+            f"coverage {coverage_str}%"
+        )
+        if abstained_clusters or abstained_stable_cells:
+            print("Abstained regions (you did not predict these):")
+            for cluster in sorted(
+                abstained_clusters,
+                key=lambda cl: len(cl["changed_on_transitions"]),
+                reverse=True,
+            )[:5]:
+                changed_on = cluster["changed_on_transitions"]
+                actions_hist = cluster["actions"]
+                actions_str = ", ".join(
+                    f"{action_id}: {count}"
+                    for action_id, count in sorted(actions_hist.items())
+                )
+                print(
+                    f"  rows {cluster['bbox'][0]}-{cluster['bbox'][2]}, "
+                    f"cols {cluster['bbox'][1]}-{cluster['bbox'][3]}: "
+                    f"{cluster['cells_per_frame_max']} cells/frame-max — "
+                    f"changed on {len(changed_on)}/{frames_total} transitions "
+                    f"— actions {{{actions_str}}}"
+                )
+            if abstained_stable_cells:
+                stable_cluster_count = len(
+                    cluster_cells(sorted(abstained_stable_cells))
+                )
+                print(
+                    f"  +{stable_cluster_count} regions abstained-stable "
+                    f"(no changes observed)"
+                )
+        # Per-frame detail goes LAST so sandbox print truncation eats it
+        # first; the summary and abstained log always survive intact.
+        for line in frame_lines:
+            print(line)
 
     return {
         "schema": 2,
@@ -195,9 +253,53 @@ def run_check(
         "degenerate_reset_frames": degenerate_reset_frames,
         "skipped_transitions": skipped_transitions,
         "wrong_cells": total_wrong,
-        "abstained_clusters": [],
+        "abstained_clusters": abstained_clusters,
         "per_frame": results,
     }
+
+
+def _build_abstained_clusters(
+    abstained_changed_by_transition: dict[int, set[tuple[int, int]]],
+    actions: list[int],
+) -> list[dict[str, Any]]:
+    """Cluster abstained-changed cells and measure their change/action history.
+
+    Pure measurement over recorded history: for each spatial cluster (union
+    of abstained-changed cells across all scored transitions, grouped by
+    ``cluster_cells``), report where it is, how many of its cells changed in
+    the busiest transition, which transitions changed it, and which actions
+    produced those transitions (an action counts once per transition, not
+    once per cell).
+    """
+    union_cells = sorted(
+        cell for cells in abstained_changed_by_transition.values() for cell in cells
+    )
+    clusters = cluster_cells(union_cells)
+    tables: list[dict[str, Any]] = []
+    for cluster in clusters:
+        changed_on: list[int] = []
+        actions_hist: dict[int, int] = {}
+        cells_per_frame_max = 0
+        for transition, cells in abstained_changed_by_transition.items():
+            overlap = cluster & cells
+            if not overlap:
+                continue
+            changed_on.append(transition)
+            actions_hist[actions[transition]] = (
+                actions_hist.get(actions[transition], 0) + 1
+            )
+            cells_per_frame_max = max(cells_per_frame_max, len(overlap))
+        rows = [r for r, _ in cluster]
+        cols = [c for _, c in cluster]
+        tables.append(
+            {
+                "bbox": (min(rows), min(cols), max(rows), max(cols)),
+                "cells_per_frame_max": cells_per_frame_max,
+                "changed_on_transitions": sorted(changed_on),
+                "actions": dict(sorted(actions_hist.items())),
+            }
+        )
+    return tables
 
 
 def diagnose(

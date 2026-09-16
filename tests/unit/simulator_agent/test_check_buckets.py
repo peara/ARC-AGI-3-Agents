@@ -430,3 +430,328 @@ def test_diagnose_runs_without_mask() -> None:
 
     assert result["frames_total"] == 1
     assert result["total_wrong"] == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Task 2: abstained-cluster log + compact verbose + print-cap bound
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _corpus_from_changes(
+    cell_changes: list[set[tuple[int, int]]],
+    actions: list[int],
+    size: int = 8,
+) -> tuple[list[list[list[int]]], list[int]]:
+    """Build an accumulating corpus: transition i applies cell_changes[i].
+
+    Grids accumulate (task-1 lesson): grid k+1 = grid k + changes[k].
+    """
+    grid = [[0] * size for _ in range(size)]
+    grids = [[row[:] for row in grid]]
+    for changes in cell_changes:
+        for r, c in changes:
+            grid[r][c] = 3 - grid[r][c]  # toggle 0<->3 so repeated changes work
+        grids.append([row[:] for row in grid])
+    return grids, list(actions)
+
+
+def _abstain_sim(
+    abstained: set[tuple[int, int]],
+    size: int = 8,
+) -> Callable[[list[list[int]], int], list[list[int]]]:
+    """Sim that copies the grid and abstains on *abstained* every transition."""
+
+    def simulate(grid: list[list[int]], action: int) -> list[list[int]]:
+        out = [row[:] for row in grid]
+        for r, c in abstained:
+            out[r][c] = check.UNKNOWN
+        return out
+
+    return simulate
+
+
+@pytest.mark.unit
+def test_two_disjoint_regions_two_clusters_with_tables() -> None:
+    """Given two abstained regions (>3 apart) with disjoint change-sets,
+
+    When check runs,
+
+    Then abstained_clusters holds two clusters with correct bboxes and
+    per-cluster action histograms — action counted once per transition.
+    """
+    region_a = {(0, 0), (0, 1), (1, 0)}  # top-left
+    region_b = {(7, 7), (7, 6), (6, 7)}  # bottom-right, >3 away
+    abstained = region_a | region_b
+    # Transition 0 (action 1): region A changes.  Transition 1 (action 2):
+    # region B changes.  Transition 2 (action 1): region A changes again.
+    grids, actions = _corpus_from_changes([region_a, region_b, region_a], [1, 2, 1])
+
+    result = run_check(_abstain_sim(abstained), grids, actions, verbose=False)
+
+    clusters = result["abstained_clusters"]
+    assert len(clusters) == 2
+    by_bbox = {cl["bbox"]: cl for cl in clusters}
+    assert (0, 0, 1, 1) in by_bbox, f"missing region-A bbox, got {by_bbox}"
+    assert (6, 6, 7, 7) in by_bbox, f"missing region-B bbox, got {by_bbox}"
+
+    a = by_bbox[(0, 0, 1, 1)]
+    assert a["changed_on_transitions"] == [0, 2]
+    assert a["actions"] == {1: 2}
+    assert a["cells_per_frame_max"] == 3
+
+    b = by_bbox[(6, 6, 7, 7)]
+    assert b["changed_on_transitions"] == [1]
+    assert b["actions"] == {2: 1}
+    assert b["cells_per_frame_max"] == 3
+
+
+@pytest.mark.unit
+def test_single_region_three_changes_one_action_histogram() -> None:
+    """Given one region changing on transitions {11, 21, 35}, all action-1,
+
+    Then its cluster table shows actions {1: 3} and the sorted transition
+    list — the correlation the masked-out key-box signal needed.
+    """
+    region = {(5, 5), (5, 6)}
+    abstained = set(region)
+    n = 36
+    changes: list[set[tuple[int, int]]] = [
+        region if i in (11, 21, 35) else set() for i in range(n)
+    ]
+    actions = [1] * n
+
+    grids, acts = _corpus_from_changes(changes, actions)
+    result = run_check(_abstain_sim(abstained), grids, acts, verbose=False)
+
+    clusters = result["abstained_clusters"]
+    assert len(clusters) == 1
+    cl = clusters[0]
+    assert cl["bbox"] == (5, 5, 5, 6)
+    assert cl["changed_on_transitions"] == [11, 21, 35]
+    assert cl["actions"] == {1: 3}
+    assert cl["cells_per_frame_max"] == 2
+
+
+@pytest.mark.unit
+def test_cluster_table_uncapped_in_dict_capped_in_print(capsys) -> None:
+    """Given 7 distinct abstained-changing regions,
+
+    Then the dict holds all 7 clusters (uncapped) while the verbose print
+    shows at most 5 rows, ranked by changed-count desc.
+    """
+    regions = [{(row, 0), (row, 1)} for row in (0, 4, 8, 12, 16, 20, 24)]
+    abstained = set().union(*regions)
+    # Transition n changes regions 0..n -> strictly decreasing change counts.
+    changes = [
+        {cell for region in regions[: n + 1] for cell in region} for n in range(7)
+    ]
+    actions = [1] * 7
+
+    grids, acts = _corpus_from_changes(changes, actions, size=32)
+    result = run_check(_abstain_sim(abstained, size=32), grids, acts, verbose=True)
+    out = capsys.readouterr().out
+
+    assert len(result["abstained_clusters"]) == 7
+    rows = [line for line in out.splitlines() if line.startswith("  rows ")]
+    assert len(rows) == 5, f"print cap must show 5 rows, got {len(rows)}"
+    # Ranked by changed-count desc: region 0 (7 changes) first.
+    assert "rows 0-0" in rows[0]
+    assert "changed on 7/7" in rows[0]
+    assert "changed on 3/7" in rows[4]
+
+
+@pytest.mark.unit
+def test_print_cap_clean_corpus_under_4096(capsys) -> None:
+    """Given a 100-transition all-clean corpus (perfect sim, no abstention),
+
+    Then the full verbose report fits the 4096-char sandbox print cap.
+    """
+    grid = [[0] * 8 for _ in range(8)]
+    grids = [[row[:] for row in grid] for _ in range(101)]
+    actions = [1] * 100
+
+    run_check(_abstain_sim(set()), grids, actions, verbose=True)
+    out = capsys.readouterr().out
+
+    assert len(out) < 4096, f"clean corpus report is {len(out)} chars"
+    frame_line_count = sum(1 for line in out.splitlines() if line.startswith("Frame "))
+    assert frame_line_count == 100
+
+
+@pytest.mark.unit
+def test_print_cap_dirty_corpus_order_log_before_detail(capsys) -> None:
+    """Given 100 transitions ALL with wrong + abstained-changed cells (the
+    true worst case, may exceed the cap),
+
+    Then the print ORDER is summary → abstained log → per-frame detail, so
+    truncation eats per-frame lines first and the abstained log survives.
+    """
+    unknown = check.UNKNOWN
+    region = {(0, 0), (0, 1)}
+    n = 100
+    # Every transition: region toggles (abstained-changed) AND a committed
+    # cell is wrong (sim paints 5, reality keeps 0).
+    changes = [set(region) for _ in range(n)]
+    actions = [1] * n
+    grids, acts = _corpus_from_changes(changes, actions)
+
+    def dirty_sim(grid: list[list[int]], action: int) -> list[list[int]]:
+        out = [row[:] for row in grid]
+        for r, c in region:
+            out[r][c] = unknown
+        out[7][7] = 5  # committed wrong every transition
+        return out
+
+    run_check(dirty_sim, grids, acts, verbose=True)
+    out = capsys.readouterr().out
+
+    header_pos = out.find("Abstained regions (you did not predict these):")
+    overall_pos = out.find("Overall:")
+    first_frame_pos = out.find("Frame 0:")
+    assert overall_pos != -1
+    assert header_pos != -1, "abstained log missing entirely"
+    assert overall_pos < header_pos, "summary must precede abstained log"
+    assert header_pos < first_frame_pos, (
+        "abstained log must precede per-frame detail (it must survive "
+        "sandbox print truncation)"
+    )
+    # The log row itself is present and complete.
+    assert "changed on 100/100 transitions" in out
+
+
+@pytest.mark.unit
+def test_zero_abstained_no_header_no_clusters(capsys) -> None:
+    """Given a fully-modeled corpus with zero abstained cells,
+
+    Then no abstained header prints, abstained_clusters == [], and the
+    verbose output is byte-identical to the pre-change format for a
+    fully-modeled corpus (pinned exactly).
+    """
+    g0 = _grid4()
+    g1 = _grid4()
+    g1[0][0] = 3  # one real change, correctly predicted
+
+    result = run_check(_sim_painting({(0, 0): 3}), [g0, g1], [1], verbose=True)
+    out = capsys.readouterr().out
+
+    assert result["abstained_clusters"] == []
+    assert "Abstained regions" not in out
+    assert "abstained-stable (no changes observed)" not in out
+    # Byte-identical pin of the full report for this fully-modeled corpus
+    # (summary block first, per-frame detail last — the truncation order).
+    assert out == (
+        "\n"
+        "Overall: 0 wrong, 1 changed, 1 correct (100.0%), 0 spurious\n"
+        "Frames correct: 1/1\n"
+        "Modeled: 1 correct, 0 wrong, 0 abstained-changed "
+        "(0 abstained-stable), coverage 100.0%\n"
+        "Frame 0: OK\n"
+    )
+
+
+@pytest.mark.unit
+def test_verbose_compact_frame_lines_and_modeled_line(capsys) -> None:
+    """Given a mixed corpus (clean frame, wrong frame, abstained frame),
+
+    Then clean frames compress to 'Frame i: OK', non-clean frames carry
+    wrong + abstained-changed counts, and the Modeled summary line reports
+    coverage (n/a when nothing changed).
+    """
+    unknown = check.UNKNOWN
+    g0 = _grid4()
+    g1 = _grid4()
+    g1[0][0] = 3  # transition 0: correct prediction -> OK
+    g2 = [row[:] for row in g1]
+    g2[1][1] = 3  # transition 1: identity copy misses it -> 1 wrong
+    g3 = [row[:] for row in g2]
+    g3[2][2] = 3  # transition 2: abstained-over-changed
+
+    def staged_sim(grid: list[list[int]], action: int) -> list[list[int]]:
+        out = [row[:] for row in grid]
+        if action == 1:
+            out[0][0] = 3
+        elif action == 3:
+            out[2][2] = unknown
+        return out
+
+    run_check(staged_sim, [g0, g1, g2, g3], [1, 2, 3], verbose=True)
+    out = capsys.readouterr().out
+
+    lines = out.splitlines()
+    assert "Frame 0: OK" in lines
+    assert "Frame 1: 1 wrong — 0 abstained-changed" in lines
+    assert "Frame 2: 0 wrong — 1 abstained-changed" in lines
+    assert (
+        "Modeled: 1 correct, 1 wrong, 1 abstained-changed "
+        "(0 abstained-stable), coverage 66.7%" in lines
+    )
+    # Wrong-cell detail still prints for 0 < wrong <= 20.
+    assert "  (1,1): predicted=0, actual=3" in lines
+
+
+@pytest.mark.unit
+def test_modeled_line_coverage_na_when_nothing_changed(capsys) -> None:
+    """Given a corpus where reality never changes a cell,
+
+    Then the Modeled line prints 'coverage n/a' instead of a percentage.
+    """
+    g0 = _grid4()
+    g1 = _grid4()
+
+    run_check(_sim_painting({}), [g0, g1], [1], verbose=True)
+    out = capsys.readouterr().out
+
+    assert "coverage n/a" in out
+
+
+@pytest.mark.unit
+def test_abstained_stable_aggregate_line_counts_regions(capsys) -> None:
+    """Given abstained-stable cells in two regions plus one abstained-changing
+    region,
+
+    Then the print shows ONE aggregate line counting the abstained-stable
+    CLUSTERS (+K), and the dict's abstained_clusters covers only the
+    changed clusters.
+    """
+    stable_regions = [{(0, 0), (0, 1)}, {(7, 7), (7, 6)}]  # >3 apart
+    changing_region = {(3, 3), (3, 4)}
+    abstained = set().union(*stable_regions) | changing_region
+
+    grids, acts = _corpus_from_changes([changing_region, set(), set()], [1, 1, 1])
+
+    result = run_check(_abstain_sim(abstained), grids, acts, verbose=True)
+    out = capsys.readouterr().out
+
+    # Dict: only the changing region is a cluster.
+    assert len(result["abstained_clusters"]) == 1
+    assert result["abstained_clusters"][0]["bbox"] == (3, 3, 3, 4)
+    # Print: header + 1 changed row + ONE aggregate stable line with K=2.
+    assert "Abstained regions (you did not predict these):" in out
+    assert (
+        "  rows 3-3, cols 3-4: 2 cells/frame-max — changed on 1/3 transitions — actions {1: 1}"
+        in out
+    )
+    assert "  +2 regions abstained-stable (no changes observed)" in out
+
+
+@pytest.mark.unit
+def test_no_abstained_stable_line_when_none(capsys) -> None:
+    """Given abstained-changing cells but zero abstained-stable cells,
+
+    Then the aggregate stable line is omitted entirely.
+    """
+    unknown = check.UNKNOWN
+    region = {(0, 0)}
+    grids, acts = _corpus_from_changes([region], [1])
+
+    def changing_only_sim(grid: list[list[int]], action: int) -> list[list[int]]:
+        out = [row[:] for row in grid]
+        out[0][0] = unknown  # abstain ONLY the changing cell
+        return out
+
+    result = run_check(changing_only_sim, grids, acts, verbose=True)
+    out = capsys.readouterr().out
+
+    assert result["abstained_stable"] == 0
+    assert "abstained-stable (no changes observed)" not in out
+    assert "Abstained regions (you did not predict these):" in out
