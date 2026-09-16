@@ -166,6 +166,77 @@ class TestClusterCells:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+class TestSimulateStatus:
+    """_build_simulate_status abstention contracts (UNKNOWN era, task 4).
+
+    Real-path: a real SimulatorSandbox via __new__ + attribute seeding
+    (conftest make_plain_sandbox pattern), real _build_simulate_status.
+    """
+
+    @staticmethod
+    def _make_status_agent(last_check_result, suppressed=0):
+        agent = SimulatorFirstAgent.__new__(SimulatorFirstAgent)
+        agent._sandbox = SimulatorSandbox.__new__(SimulatorSandbox)
+        agent._sandbox._simulate = lambda g, a: g
+        agent._sandbox._last_check_result = last_check_result
+        agent._sandbox._suppressed_abstained_diffs = suppressed
+        return agent
+
+    @pytest.mark.unit
+    def test_schema2_check_renders_abstention_summary(self):
+        """Cached schema-2 check with abstention → coverage line +
+        abstains-regions line in the status (the abstained log's standing
+        surface in the turn prompt)."""
+        agent = self._make_status_agent(
+            {
+                "schema": 2,
+                "overall_accuracy": 100.0,
+                "wrong_cells": 0,
+                "frames_correct": 5,
+                "frames_total": 5,
+                "total_correct": 5,
+                "total_wrong": 0,
+                "abstained_changed": 4,
+                "abstained_stable": 120,
+                "coverage": 42.9,
+                "abstained_clusters": [{"bbox": (61, 0, 62, 63)}],
+            }
+        )
+        status = agent._build_simulate_status()
+        assert "covered 42.9% of changed cells" in status
+        assert "abstains: 1 regions (4 changed, 120 stable)" in status
+
+    @pytest.mark.unit
+    def test_legacy_check_dict_degrades_without_abstention_lines(self):
+        """Legacy cached dict (no schema key, no abstention fields): the
+        accuracy line renders, the abstention lines are ABSENT, and no
+        KeyError — the degrade contract (task 4 QA failure path)."""
+        agent = self._make_status_agent(
+            {
+                "overall_accuracy": 66.7,
+                "wrong_cells": 5,
+                "frames_correct": 3,
+                "frames_total": 5,
+            }
+        )
+        status = agent._build_simulate_status()
+        assert "66.7% accuracy" in status
+        assert "covered" not in status
+        assert "abstains:" not in status
+
+    @pytest.mark.unit
+    def test_suppressed_abstained_diffs_note_line(self):
+        """_suppressed_abstained_diffs > 0 → NOTE line present; 0 → absent
+        (byte-stable status for clean state)."""
+        agent = self._make_status_agent(None, suppressed=7)
+        assert (
+            "NOTE: 7 diffs on abstained cells were suppressed" in
+            agent._build_simulate_status()
+        )
+        agent_clean = self._make_status_agent(None, suppressed=0)
+        assert "NOTE:" not in agent_clean._build_simulate_status()
+
+
 class TestSandboxLiveMode:
     def test_construction(self, live_sandbox):
         sandbox = live_sandbox()
@@ -3217,10 +3288,19 @@ class TestMidTurnEscapeGuardrail:
 
         # Every python call runs check() and fails (new result dict each
         # call — _handle_python_call detects a fresh check by identity).
+        # Schema-2 shape: the abstention fields ride along; wrong_cells=500
+        # keeps the 5-strike failure counter climbing.
         def fake_run_code(code):
             sandbox._last_check_result = {
+                "schema": 2,
                 "wrong_cells": 500,
                 "overall_accuracy": 1.4,
+                "frames_correct": 0,
+                "frames_total": 5,
+                "abstained_changed": 3,
+                "abstained_stable": 40,
+                "coverage": 12.5,
+                "abstained_clusters": [{"bbox": (61, 0, 62, 63)}],
             }
             return ("Overall: 500 wrong, 0 correct (1.4%)", None, None)
 

@@ -96,48 +96,120 @@ def test_region_cap_at_4(plain_sandbox) -> None:
 
 
 @pytest.mark.unit
-def test_ignore_mask_hides_hud_tick_diff(plain_sandbox) -> None:
+def test_unknown_abstention_hides_unmodeled_tick_diff(plain_sandbox) -> None:
+    """UNKNOWN-era replacement for the mask-era HUD-tick test: a sim that
+    writes UNKNOWN over a changing cell excludes that cell from the
+    mismatch comparison (n_diff counts modeled cells only), while a
+    modeled-cell miss still fires with its own region."""
+    from agents.simulator_agent.check import UNKNOWN
+
     s = plain_sandbox()
 
-    def static_simulate(g: list[list[int]], a: int) -> list[list[int]]:
-        return [row[:] for row in g]
+    def abstaining_simulate(g: list[list[int]], a: int) -> list[list[int]]:
+        out = [row[:] for row in g]
+        out[61][27] = UNKNOWN  # abstain on the cell reality is about to tick
+        return out
 
-    s._simulate = static_simulate
+    s._simulate = abstaining_simulate
     prev = [[0] * 64 for _ in range(64)]
     curr = [[0] * 64 for _ in range(64)]
-    curr[61][27] = 3  # HUD timer tick, same shape as ls20's 11->3
-    curr[5][5] = 7  # real sprite movement the LLM failed to model
+    curr[61][27] = 3  # unmodeled tick, same shape as ls20's 11->3
+    curr[5][5] = 7  # real sprite movement the sim failed to model
 
-    s._ignore_mask = {(61, 27)}
     s.predict_and_compare(prev, curr, action_id=4)
 
     pending = s._pending_exception_flow
     assert pending is not None
-    assert pending["n_diff"] == 1, "ignored HUD cell must not count into n_diff"
+    assert pending["n_diff"] == 1, "abstained cell must not count into n_diff"
     assert pending["n_regions"] == 1
     assert pending["regions"][0]["bbox"] == (5, 5, 5, 5)
 
 
 @pytest.mark.unit
-def test_ignore_mask_full_cover_produces_no_exception_flow(plain_sandbox) -> None:
+def test_unknown_full_abstain_produces_no_exception_flow(plain_sandbox) -> None:
+    """UNKNOWN-era replacement for the mask-era full-cover test: a diff
+    confined entirely to abstained (UNKNOWN) cells produces NO exception
+    flow (the quieting property) BUT increments _suppressed_abstained_diffs
+    so the next check()/status line can surface it."""
+    from agents.simulator_agent.check import UNKNOWN
+
     s = plain_sandbox()
 
-    def static_simulate(g: list[list[int]], a: int) -> list[list[int]]:
-        return [row[:] for row in g]
+    def abstaining_simulate(g: list[list[int]], a: int) -> list[list[int]]:
+        out = [row[:] for row in g]
+        out[61][27] = UNKNOWN
+        out[62][27] = UNKNOWN
+        return out
 
-    s._simulate = static_simulate
+    s._simulate = abstaining_simulate
     prev = [[0] * 64 for _ in range(64)]
     curr = [[0] * 64 for _ in range(64)]
     curr[61][27] = 3
     curr[62][27] = 3
 
-    s._ignore_mask = {(61, 27), (62, 27)}
+    assert s._suppressed_abstained_diffs == 0
     s.predict_and_compare(prev, curr, action_id=4)
 
     assert s._pending_exception_flow is None, (
-        "diff entirely inside ignore mask must not fire exception flow"
+        "diff entirely inside abstained cells must not fire exception flow"
     )
     assert s.pending_images == []
+    assert s._suppressed_abstained_diffs == 2, (
+        "both abstained cells actually changed — the counter must record "
+        "them (the world moved where the model abstained)"
+    )
+
+
+@pytest.mark.unit
+def test_unknown_abstained_stable_cell_does_not_bump_counter(plain_sandbox) -> None:
+    """An abstained cell reality left alone is abstained-STABLE — it must
+    NOT bump _suppressed_abstained_diffs (mirrors check.py's
+    abstained_changed bucket: only cells that actually changed count)."""
+    from agents.simulator_agent.check import UNKNOWN
+
+    s = plain_sandbox()
+
+    def abstaining_simulate(g: list[list[int]], a: int) -> list[list[int]]:
+        out = [row[:] for row in g]
+        out[61][27] = UNKNOWN
+        return out
+
+    s._simulate = abstaining_simulate
+    prev = [[0] * 64 for _ in range(64)]
+    curr = [[0] * 64 for _ in range(64)]
+    # (61, 27) stays 0 — abstained but unchanged.
+
+    s.predict_and_compare(prev, curr, action_id=4)
+
+    assert s._pending_exception_flow is None
+    assert s._suppressed_abstained_diffs == 0, (
+        "abstained-stable cell must not count as a suppressed diff"
+    )
+
+
+@pytest.mark.unit
+def test_modeled_cell_wrong_value_still_fires(plain_sandbox) -> None:
+    """A sim wrong on a MODELED cell (predicted a concrete value, reality
+    differs) fires exception flow exactly as before — abstention never
+    swallows modeled-cell diffs."""
+    s = plain_sandbox()
+
+    def wrong_simulate(g: list[list[int]], a: int) -> list[list[int]]:
+        out = [row[:] for row in g]
+        out[5][5] = 9  # modeled, but wrong (reality says 7)
+        return out
+
+    s._simulate = wrong_simulate
+    prev = [[0] * 64 for _ in range(64)]
+    curr = [[0] * 64 for _ in range(64)]
+    curr[5][5] = 7
+
+    s.predict_and_compare(prev, curr, action_id=4)
+
+    pending = s._pending_exception_flow
+    assert pending is not None, "modeled-cell diff must fire exception flow"
+    assert pending["n_diff"] == 1
+    assert s._suppressed_abstained_diffs == 0
 
 
 @pytest.mark.unit
@@ -287,14 +359,12 @@ def test_transition_clears_grids_and_check_state(seeded_live_sandbox, win_callba
     s._grids = [initial, initial, initial, initial]
     s._actions = [4, 4, 1]
     s._last_check_result = {"total_wrong": 5}
-    s._ignore_mask = {(0, 0), (1, 1)}
 
     s.reset_for_level_transition()
 
     assert s._grids == []
     assert s._actions == []
     assert s._last_check_result is None
-    assert s._ignore_mask == set()
     assert s._pending_exception_flow is None
     assert s._current_frame is None
     assert s._previous_grid is None

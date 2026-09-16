@@ -6,9 +6,13 @@ without modifying prompts.py.
 
 from __future__ import annotations
 
+import inspect
+
 import pytest
 
+from agents.simulator_agent import prompts
 from agents.simulator_agent.prompts import (
+    AGENT_ABSTENTION_ADDENDUM,
     AGENT_GAME_OVERVIEW_ADDENDUM,
     AGENT_PHASES_OVERVIEW,
     AGENT_PYTHON_TOOL_ADDENDUM,
@@ -231,3 +235,54 @@ def test_level_transition_text_regression_pin_unchanged():
     assert "Do NOT take any actions" in text
     assert "Do NOT re-verify the win" in text
     assert "{levels_completed}" in text and "{action_id}" in text
+
+
+# ── Abstention contract (UNKNOWN era, plan task 5) ─────────────────────────
+
+
+@pytest.mark.unit
+def test_abstention_addendum_assembled_into_system_prompt():
+    """AGENT_ABSTENTION_ADDENDUM is part of AGENT_SYSTEM_PROMPT, and the
+    epistemic prior it installs ('Everything on the board might have
+    meaning') is the ONLY prior — nothing is pre-dismissed as ignorable."""
+    assert "Everything on the board might have meaning." in AGENT_ABSTENTION_ADDENDUM
+    assert "Everything on the board might have meaning." in AGENT_SYSTEM_PROMPT
+
+
+@pytest.mark.unit
+def test_abstention_addendum_investigate_precedes_abstain():
+    """Procedure order is load-bearing: the model must be told to
+    investigate BEFORE it is told it may abstain — 'Investigate' must
+    appear before 'abstain' in the addendum text."""
+    investigate_at = AGENT_ABSTENTION_ADDENDUM.find("Investigate")
+    abstain_at = AGENT_ABSTENTION_ADDENDUM.find("abstain")
+    assert investigate_at != -1, "addendum must name the Investigate step"
+    assert abstain_at != -1, "addendum must name abstention"
+    assert investigate_at < abstain_at, (
+        "'Investigate' must precede 'abstain' — investigate-before-abstain "
+        "is the load-bearing procedure order"
+    )
+
+
+@pytest.mark.unit
+def test_abstention_addendum_region_example_is_digit_free():
+    """The Region A/B notes example must be game-agnostic: no digits in
+    the example lines (no coordinates, no action ids, no colors — the
+    model must not copy game-specific numbers from the prompt)."""
+    for line in AGENT_SYSTEM_PROMPT.splitlines():
+        if "Region A" in line or "Region B" in line:
+            assert not any(ch.isdigit() for ch in line), (
+                f"Region example line carries a digit: {line!r}"
+            )
+
+
+@pytest.mark.unit
+def test_prompts_source_contains_no_set_ignore():
+    """Contract pin (house style: inspect.getsource): the removed
+    set_ignore tool must not reappear anywhere in prompts.py — no
+    coaching, no examples, no tool-table rows."""
+    source = inspect.getsource(prompts)
+    assert "set_ignore" not in source, (
+        "set_ignore must not appear in prompts.py source — the abstention "
+        "contract replaced it"
+    )

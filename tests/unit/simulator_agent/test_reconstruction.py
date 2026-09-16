@@ -314,9 +314,13 @@ class TestMachinery:
         assert checks["corpus_shape"]["ok"] is True
         assert checks["corpus_shape"]["embedded_n_collected_frames"] is None
 
-    def test_machinery_no_set_ignore_source_is_none(self, mini_state):
-        """No set_ignore python call in the fixture → set_ignore_source None."""
-        assert mini_state.set_ignore_source is None
+    def test_machinery_no_legacy_mask_era(self, mini_state):
+        """No set_ignore( call in the fixture's recorded python snippets →
+        legacy_mask_era False, no skipped seqs (the mini fixture is
+        post-removal era; legacy detection keys on the recorded tool calls
+        the walker actually walks)."""
+        assert mini_state.legacy_mask_era is False
+        assert mini_state.legacy_skipped_seqs == ()
 
     def test_machinery_second_set_simulate_replaces_first(self, mini_state):
         """set_simulate #2 replaces #1: _simulate_source == source #2."""
@@ -439,10 +443,12 @@ class TestFidelity:
             cached["overall_accuracy"],
         ) == (5, 5, 100.0)
 
-    def test_no_ignore_mask_before_incident(self, fidelity_state):
-        """No set_ignore ran before the marked turn → source None, mask empty."""
-        assert fidelity_state.set_ignore_source is None
-        assert len(fidelity_state.sandbox._ignore_mask) == 0  # noqa: SLF001
+    def test_no_legacy_mask_era_before_incident(self, fidelity_state):
+        """No set_ignore( call recorded before the marked turn →
+        legacy_mask_era False, no skipped seqs (the eba2a894 walk is fully
+        re-executable; the mask-era machinery never ran in this window)."""
+        assert fidelity_state.legacy_mask_era is False
+        assert fidelity_state.legacy_skipped_seqs == ()
 
     def test_conversation_prefix_verbatim(self, fidelity_state, marked_messages):
         """Conversation prefix is byte-equal to the recorded seq-18 messages."""
