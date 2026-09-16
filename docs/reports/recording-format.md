@@ -113,7 +113,10 @@ with `frame[N-1]`, not `frame[N]`).
 |---|---|---|
 | `world_model` | `{notes, plan}` | World-model notes at observation time |
 | `history_turns` | int | **Count** (`len()` of the agent's history list), not the list; includes the iter-0 RESET provenance entry |
-| `last_check_result` | dict \| null | **Cached** result of the last `check()` call — stale by design (the LLM sees the cache, not a re-check); null before any check ran |
+| `last_check_result` | dict \| null | **Cached** result of the last `check()` call — stale by design (the LLM sees the cache, not a re-check); null before any check ran. Schema-2 dicts carry `schema: 2` plus the abstention fields `abstained_changed`, `abstained_stable`, `coverage` (modeled-changed / total-actually-changed, `null` when nothing changed), and `abstained_clusters` (per-cluster `{bbox, cells_per_frame_max, changed_on_transitions, actions}`, uncapped in the dict). ⚠️ **Old recordings are legacy-mask-era**: their embedded check results predate schema 2 (no `schema` key); the replay walker marks such runs `legacy_mask_era` and skips re-execution of their recorded `set_ignore(...)` calls (the tool no longer exists). |
+| `abstained_changed` | int \| null | Schema-2 sibling of `last_check_result` — abstained cells that actually changed; `null` before any check ran |
+| `abstained_stable` | int \| null | Schema-2 sibling — abstained cells reality left unchanged; `null` before any check ran |
+| `coverage` | float \| null | Schema-2 sibling — % of actually-changed cells the simulate committed to; `null` before any check ran or when nothing changed |
 | `has_simulate` | bool | Whether a simulate function is currently registered |
 | `simulate_source` | str | Registered simulate source, verbatim (empty string when unregistered) |
 | `n_collected_frames` | int | `len()` of the sandbox corpus grids — live-verbatim; includes the virtual RESET pair (see `agents/simulator_agent/reset_policy.py` for index conventions) |

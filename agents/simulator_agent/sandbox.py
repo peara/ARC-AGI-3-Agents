@@ -1086,8 +1086,8 @@ class SimulatorSandbox:
     def reset_for_level_transition(self) -> None:
         """Clear per-level state after a ``LevelTransition`` hard-abort.
 
-        Clears the 12 per-level structures (grids, actions, check state,
-        ignore mask, correct-frame cache, pending exception flow,
+        Clears the 11 per-level structures (grids, actions, check state,
+        correct-frame cache, pending exception flow,
         engine-event transition set, pending images, current frame,
         previous grid, last action result, and the matching namespace
         vars). PRESERVES ``_simulate``, ``_simulate_source``

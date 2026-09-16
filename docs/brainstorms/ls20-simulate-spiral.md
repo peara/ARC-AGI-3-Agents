@@ -101,3 +101,29 @@ regressions from self-inflicted rewrites, not from new information.
 - [ ] Decide: `transitions()` helper vs history-semantics doc line (or both)
 - [ ] Decide: preload frame 0 into live sandbox
 - [ ] Later: diagnose() mandate; verified-facts pinning
+
+## Implemented status (2026-09-16)
+
+Two of the deferred candidates and the masking failure mode are addressed by
+the UNKNOWN-abstention redesign (`.omo/plans/simulator-unknown-abstention.md`,
+all product code landed):
+
+- **Masking failure mode** — the later `set_ignore` tool (added after this
+  brainstorm, since removed; see simulator-agent.md §14) let the agent mask the
+  key box as "noise" and score 100% while blind to it. Removed entirely: the
+  model now writes `UNKNOWN` (-1) into cells it cannot predict, `check()`
+  scores committed cells only, and every abstained region gets a standing
+  correlation report (which transitions it changed on, which actions
+  coincided). The f9e3e301 run that masked the box is the anchor for the
+  golden test `tests/unit/simulator_agent/test_golden_f9e3e301.py` — the
+  abstained log surfaces the key-box signal the mask-era run threw away.
+- **Diagnose-mandate** — the abstention contract's investigate-before-abstain
+  procedure (print_region + diff across frames before writing UNKNOWN) and the
+  per-check abstained log give the model a standing, always-on diagnosis
+  surface; the deferred hard mandate was not needed.
+- **Verified-facts pinning** — not implemented; the abstention contract's
+  "model if you can, abstain with recorded reasons" procedure partially
+  covers the oscillation trap, but append-only verified-facts notes remain
+  open.
+
+`transitions()` and frame-0 preload remain open decisions.

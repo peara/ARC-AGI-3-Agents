@@ -397,8 +397,6 @@ From the triage diary (conservative):
 
 ### Known deferred items
 
-- **Frame-scoped `set_ignore`** — the ignore mask is global; per-frame
-  scoping is deferred.
 - **Other agents' exposure** — `duck_harness_agent` and
   `langgraph_vision_agent`'s `observe.py` read raw layer 0 on multi-layer
   frames; documented in `recording-format.md` §7, not fixed here.
@@ -426,7 +424,7 @@ The `SimulatorSandbox` namespace persists across LLM turns. `set_simulate(func)`
 |---|---|
 | `set_simulate(func)` | register `simulate(grid, action) -> next_grid`. Source is captured via `inspect.getsource` for recording. |
 | `simulate(grid, action)` | run the registered simulate function (for self-testing) |
-| `set_ignore(cells, colors)` | declare cells/colors to skip in `check()` and `diagnose()` |
+| `UNKNOWN` | constant `-1`. Write it into cells your simulate cannot predict; `check()` scores committed cells only, and the abstained log reports per-region change/action history. |
 
 ### Live mode
 
@@ -461,7 +459,7 @@ The `SimulatorSandbox` namespace persists across LLM turns. `set_simulate(func)`
 
 | Tool | Purpose |
 |---|---|
-| `check(simulate_fn)` | test simulate on all recorded frames. Returns accuracy, wrong_cells, frames_correct. RESET transitions are scored as trained data; degenerate RESET frames (identity transitions) are surfaced in the summary, not excluded. |
+| `check(simulate_fn)` | test simulate on all recorded frames. Returns accuracy, wrong_cells, frames_correct, plus schema-2 abstention fields (`abstained_changed`, `abstained_stable`, `coverage`, `abstained_clusters`); UNKNOWN cells are abstained, never scored wrong. RESET transitions are scored as trained data; degenerate RESET frames (identity transitions) are surfaced in the summary, not excluded. |
 | `diagnose(simulate_fn)` | semantic error analysis: MISSED, SPURIOUS, WRONG_VALUE, grouped by spatial cluster |
 
 ### Planning
@@ -583,7 +581,7 @@ LLM calls are logged to a `.llm.jsonl` sidecar via `LlmCallLogger` + `wrap_llm_c
 Tested on `ls20` with local gemma-4-31b via LM Studio:
 
 - **Win**: Agent won level 1 in one run (`dab1058e`). The winning run used `set_simulate` + `check()` + `bfs()` — the full simulator-first workflow.
-- **Second win run** (`a5df227a`, qwen3.8-27b): won level 1 again after the budget-guardrail and set_ignore fixes. Level 2 then died to the step-timer mechanic (~20-action budget, full-board yellow flash on expiry) while one move short of the win pose.
+- **Second win run** (`a5df227a`, qwen3.8-27b): won level 1 again after the budget-guardrail and set_ignore fixes (mask-era history — the tool has since been removed in favor of in-model UNKNOWN abstention). Level 2 then died to the step-timer mechanic (~20-action budget, full-board yellow flash on expiry) while one move short of the win pose.
 - **Pattern**: The agent explores (takes 1 of each action), writes `simulate(grid, action)`, tests with `check()`, then uses `bfs(current_frame, goal_fn)` to find a path and executes it.
 - **Context management**: The 3-layer trimming pipeline keeps context under 32k tokens even with 100 tool calls per turn.
 - **Known issues**: The LLM sometimes skips building `simulate()` and goes straight to acting. The prompt includes a checklist to encourage the simulator-first workflow. `find_color` can return hundreds of cells for common colors (walls) — the prompt warns against printing these.
@@ -606,8 +604,8 @@ Result vs the same transition in production (which consumed 23 LLM calls /
   - **Hard-abort** — the sandbox's `action()` raises `LevelTransition` the moment
     a callback returns `level_completed=True`, so the remaining actions in the
     batch never step on the new level's fresh board (`sandbox.py`).
-  - **Clear** — `reset_for_level_transition()` clears 11 per-level structures
-    (`_grids`, `_actions`, `_last_check_result`, `_ignore_mask`,
+  - **Clear** — `reset_for_level_transition()` clears 10 per-level structures
+    (`_grids`, `_actions`, `_last_check_result`,
     `_prev_correct_frames`, `_pending_exception_flow`, `pending_images`,
     `_current_frame`, `_previous_grid`, `_last_action_result`, and the matching
     namespace vars) while **preserving** `_simulate`, `_simulate_source`
@@ -643,7 +641,8 @@ resulting 47-cell diff as a prediction error over rows 10-19 — which includes
 the static F glyph inside the goal box — and both the incident AND the control
 replay inverted the player identity from the correct 5×5 orange/blue assembly
 to the static F glyph. Root cause: the message's remedy menu
-(*model the animation* / *set_ignore*) omits the actual mechanism
+(*model the animation* / *set_ignore* — mask-era history; the tool has since
+been removed) omits the actual mechanism
 (*the move was blocked*), funneling the model into re-identifying the object.
 
 Replay methodology: the reconstruction pair — `replay_timeline.py` (walker)
@@ -820,7 +819,7 @@ Key differences:
 
 6. **3-layer context trimming**: Ported duck harness trimming and extended with `_trim_old_tool_results` and `_trim_old_non_tool_messages` to handle 100 tool calls per turn.
 
-7. **`set_ignore` for walls**: Added `set_ignore(cells, colors)` so the LLM can declare background/wall cells to skip in `check()` and `diagnose()`, improving accuracy metrics for games with large static backgrounds.
+7. **UNKNOWN abstention** (replaced the mask-era `set_ignore` tool): the LLM writes `UNKNOWN` (-1) into cells its simulate cannot predict; `check()` scores committed cells only and prints an abstained log with per-region change/action history. Guidance: investigate before abstaining (print_region + diff across frames), read the abstained log every check, never abstain on goal-critical cells.
 
 8. **`show_frame` / `show_grid`**: Visual inspection tools that append rendered grid images to the next tool result, letting the LLM "see" intermediate states.
 
@@ -858,9 +857,10 @@ The key insight is that ARC-AGI-3 games are deterministic grid transitions. Once
 
 ## 14. Simulator state block (context visibility)
 
-> Incident 5681a14a (ls20, 2026-09-10): the model spent 29 LLM calls / ~25 min in one
-> turn — 4 simulate rewrites, an accidental self-inflicted `set_ignore` mask shrink
-> (128 → 98 cells), and a degenerate final `python("# previous code omitted")` call.
+> Incident 5681a14a (ls20, 2026-09-10, mask era): the model spent 29 LLM calls / ~25 min in one
+> turn — 4 simulate rewrites, an accidental self-inflicted `set_ignore` mask
+> shrink (128 → 98 cells; the `set_ignore` tool has since been removed), and a
+> degenerate final `python("# previous code omitted")` call.
 > Root cause: the model could never see its own sandbox state. This section documents
 > the fix: a `[Simulator state]` block injected into the LLM context. Tests:
 > `tests/unit/simulator_agent/test_sim_state_block.py`.
@@ -874,10 +874,17 @@ Before every LLM call, `_inject_sim_state_block` (agent.py) ensures a user messa
 [Simulator state] (authoritative; refreshed every call)
 simulate: registered (frozen copy — helpers fixed at registration)
 <full captured _simulate_source, untruncated>
-ignore: 128 cells — row 61, cols 0-63; row 62, cols 0-63
 ```
 
-- **Skip-when-empty**: no simulate registered AND empty mask → no block; prompts are
+The frame-prompt status line (`_build_simulate_status`) carries the abstention
+summary: `Last check(): covered NN% of changed cells — modeled M cells/frame,
+abstained A (K changed)`, `abstains: N regions (K changed, M stable) — see
+check() abstained log`, and — when `predict_and_compare` suppressed diffs on
+abstained cells since the last check — a `NOTE: D diffs on abstained cells
+were suppressed ... run check()` line. Coverage 0 renders the
+`you predicted NOTHING of what changed; this is not a pass` variant.
+
+- **Skip-when-empty**: no simulate registered → no block; prompts are
   byte-identical to the pre-change behavior until first registration.
 - **Fallback**: offline corpora may carry the `"(source unavailable)"` sentinel — the
   block then shows `simulate: registered (source not captured this session)`.
@@ -901,14 +908,14 @@ ignore: 128 cells — row 61, cols 0-63; row 62, cols 0-63
 - **Identification**: shared predicate `is_sim_state_block(msg)` in conversation.py
   (role + str content + `SIM_STATE_HEADER` prefix). Never position alone; never
   matched inside tool/assistant messages.
-- **Level transitions**: `reset_for_level_transition` clears the ignore mask but
-  preserves simulate + captured source; the block reflects exactly that.
+- **Level transitions**: `reset_for_level_transition` clears the cached check
+  result (and with it the abstention summary) but preserves simulate +
+  captured source; the block reflects exactly that.
 
 ### What it intentionally does NOT change
 
-- `set_ignore` semantics (still REPLACE, not merge)
 - `check()` output, SpiralGuard, and the check-failure escape counters
-- The `set_simulate`/`set_ignore` acks
+- The `set_simulate` ack
 - `_build_simulate_status` (the frame-prompt status line — redundancy is intended)
 
 (Design-note observations beyond these are in the ledger below.)
@@ -925,14 +932,17 @@ matters.
 ### Design-notes ledger (bad-design observations, deliberately not fixed here)
 
 Observed while planning/implementing this change; each is its own future decision,
-recorded so they are not rediscovered:
+recorded so they are not rediscovered. Historical entries stay with a resolution
+pointer when they were later resolved elsewhere:
 
-1. **`set_ignore` replace-vs-merge ambiguity** — the docstring ("Declare cells to
-   skip") reads additive; the code REPLACES the mask (sandbox.py:541). The 5681a14a
-   mask shrink (128 → 98 cells) was self-inflicted by this ambiguity. If a future
-   live run shows another unnoticed shrink, merge semantics + `clear_ignore()` is
-   the fix — with the caveat that additive masks can hide real simulate errors
-   from `check()` (accuracy inflation, escape never fires).
+1. **RESOLVED BY REMOVAL (mask-era history): `set_ignore` replace-vs-merge
+   ambiguity** — the docstring ("Declare cells to skip") read additive; the code
+   REPLACED the mask (sandbox.py:541). The 5681a14a mask shrink (128 → 98 cells)
+   was self-inflicted by this ambiguity. The tool was removed entirely by the
+   UNKNOWN-abstention redesign (`.omo/plans/simulator-unknown-abstention.md`):
+   ignorance now lives inside the model as `UNKNOWN` (-1) writes, scored as
+   abstention by `check()` — no mask, no replace-vs-merge question, no
+   accuracy-inflation lever. Entry kept as history.
 2. **Sentinel-string smell** — `"(source unavailable)"` is a magic string compared
    by value (builder guard, agent.py:88/1133; written by sandbox.py:364). A
    `None`-or-exception contract would be cleaner; not touched because 8c87349
