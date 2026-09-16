@@ -1,33 +1,46 @@
-"""L3 probe: does the model follow the UNKNOWN-abstention procedure at the
-f9e3e301 recorded fork?
+"""L3/L3b harness: UNKNOWN-abstention probe + offline full-level replay.
 
-Seeds a real SimulatorSandbox at the recorded f20 state of run f9e3e301
-(the corpus is pair-seeded [B0copy, B0, ...], so seeding "to recording
-transition 20" means 22 corpus entries [0..21] — the seeding mirrors
-replay_timeline.reconstruct's corpus construction), registers the task-9
-fixture sim (the run's REAL movement sim + counterfactual UNKNOWN
-abstention on rows 61-62 all cols + rows 53-62 cols 1-10, on every return
-path), then runs N turns of the NEW prompt against the real local LLM.
+Two modes (--mode):
 
-The probe question: at the recorded fork the real run masked the key box
-as "noise" (set_ignore at f22-24, right after its own blocked entries made
-the box flash). With abstention inside the model instead, does the model
-(a) investigate before abstaining (print_region/diff), (b) write UNKNOWN,
-(c) read the abstained log (call check()), (d) record region correlation
-data in notes? Verdicts are RECORDED, never asserted — they are data for
-human review of the transcript.
+- ``probe`` (default, task 11): seed a real SimulatorSandbox at the
+  recorded f20 state of run f9e3e301 (the corpus is pair-seeded
+  [B0copy, B0, ...], so seeding "to recording transition 20" means 22
+  corpus entries [0..21] — the seeding mirrors replay_timeline's corpus
+  construction), register the task-9 fixture sim (the run's REAL movement
+  sim + counterfactual UNKNOWN abstention on rows 61-62 all cols + rows
+  53-62 cols 1-10, on every return path), then run N turns of the NEW
+  prompt against the real local LLM. The probe question: at the recorded
+  fork the real run masked the key box as "noise" (set_ignore at f22-24,
+  right after its own blocked entries made the box flash). With
+  abstention inside the model instead, does the model (a) investigate
+  before abstaining, (b) write UNKNOWN, (c) read the abstained log
+  (check()), (d) record region correlation data in notes?
 
-Offline: no live game server, no scorecard burn. ONE LLM call at a time,
-strictly sequential — local LM Studio constraint (AGENTS.md "Local LLM
-constraint"). LLM config is env-driven (LLM_BASE_URL / LLM_MODEL /
-LLM_API_KEY), same client construction as scripts/experiment_level_transition.py.
+- ``full-replay`` (task 12, L3b): seed at frame 0 with NO simulate
+  registered — the model starts cold and must write its own simulate
+  from scratch — then run the full level-1 window offline. The
+  ReplayHarness steps the REAL game engine (the class loaded from
+  environment_files), so the model's chosen actions get genuine next
+  states, not recorded ones; divergence from the recording is expected
+  and correct. The run ends on win (levels_completed bump), GAME_OVER
+  (step-budget exhaustion — measured: board-reset flash at step 43,
+  again at 86, GAME_OVER at 129), or the --turns cap. Per-turn
+  measure() metrics land in metrics.csv.
+
+Verdicts are RECORDED, never asserted — they are data for human review
+of the transcript. Success bars (plus-touch, abstention ≤ ~30% of
+changed cells after turn 15, notes accumulate region hypotheses) are
+judgment calls on the recorded data, not assertions.
+
+Offline: no live game server, no scorecard burn. ONE LLM call at a
+time, strictly sequential — local LM Studio constraint (AGENTS.md
+"Local LLM constraint"). LLM config is env-driven (LLM_BASE_URL /
+LLM_MODEL / LLM_API_KEY), same client construction as
+scripts/experiment_level_transition.py.
 
 Dry-run mode (--dry-run) exercises the FULL seeding path plus one
 scripted turn (no LLM) and writes the same output files, proving the
-plumbing end-to-end.
-
-Task 12 (--full-replay) extends this script: seed_sandbox() and run_probe()
-are the stable seams; new modes branch in main() only.
+plumbing end-to-end — in both modes.
 """
 
 from __future__ import annotations
@@ -53,6 +66,7 @@ from agents.simulator_agent.frame_layers import settled_board
 from agents.simulator_agent.prompts import (
     AGENT_PYTHON_TOOL_SCHEMA,
     AGENT_SYSTEM_PROMPT,
+    BOARD_RESET_TEXT,
     UPDATE_NOTES_TOOL_SCHEMA,
     build_agent_user_prompt,
 )
@@ -145,6 +159,18 @@ def _recording_lines(recording: Path, upto: int) -> list[dict[str, Any]]:
     return lines
 
 
+def _frame_layers(frame: Any) -> list[list[list[int]]]:
+    """Plain-int layer stack from a raw env FrameData.
+
+    The env returns numpy arrays; ``[list(layer) for layer in ...]`` keeps
+    ``np.int8`` cells, which ``frame_layers._is_board`` rejects — flash
+    stacks then classify UNKNOWN and ``settled_board`` wrongly picks the
+    uniform animation layer. ``.tolist()`` yields plain ints (same
+    conversion ReplayHarness._convert_raw_frame_data applies).
+    """
+    return [arr.tolist() for arr in frame.frame]
+
+
 def _last_action_result(
     prev: list[list[int]] | None, curr: list[list[int]], frame: Any
 ) -> dict[str, Any]:
@@ -211,7 +237,7 @@ def _make_step_callback(
         frame = harness.env.step(game_action)
         if frame is None:
             raise RuntimeError(f"env.step returned None for action {action_id}")
-        curr = [list(row) for row in settled_board(frame.frame)]
+        curr = [list(row) for row in settled_board(_frame_layers(frame))]
         prev = cursor["last_grid"]
         cursor["last_grid"] = curr
         cursor["next_line"] = m + 1
@@ -227,7 +253,7 @@ def _make_step_callback(
             "valid_actions": last["valid_actions"],
             "last_action_result": last,
             "history": cursor["history"],
-            "frame_layers": [list(layer) for layer in frame.frame],
+            "frame_layers": _frame_layers(frame),
         }
 
     return step
@@ -320,6 +346,111 @@ def seed_sandbox(
         raise RuntimeError(f"fixture sim registration failed: {error}\n{output}")
     if sandbox._simulate is None:  # noqa: SLF001
         raise RuntimeError("fixture sim did not register")
+
+    return sandbox, cursor
+
+
+def seed_full_replay(
+    recording: Path,
+    *,
+    timeout: float = 30.0,
+) -> tuple[SimulatorSandbox, dict[str, Any]]:
+    """Build a live-mode sandbox at frame 0 with NO simulate registered.
+
+    The cold-start seed for --mode full-replay: the virtual RESET pair
+    ([B0copy, B0], [RESET]) only — the model must write its own simulate
+    from scratch. The step callback drives the REAL offline env (the
+    ReplayHarness's game class), so every action the model takes gets a
+    genuine next state; divergence from the recording is expected.
+
+    Returns (sandbox, cursor) — same contract as seed_sandbox.
+    """
+    harness = ReplayHarness.from_recording(recording, seed=0)
+    harness.replay_to(1)
+
+    b0 = [list(row) for row in settled_board(harness.frames[1].frame)]
+    history: list[dict[str, Any]] = [
+        {
+            "action": RESET_ACTION,
+            "frame_index": 0,
+            "frame": [row[:] for row in b0],
+            "provenance": "iteration 0: env RESET — initial observation",
+        }
+    ]
+    cursor: dict[str, Any] = {
+        "next_line": 1,
+        "last_grid": [row[:] for row in b0],
+        "history": history,
+        "levels_completed": 0,
+        "game_over": False,
+    }
+
+    def step(action_id: int, action_data: dict[str, Any] | None) -> dict[str, Any]:
+        from arcengine import GameAction
+
+        frame = harness.env.step(GameAction.from_id(action_id))
+        if frame is None:
+            raise RuntimeError(f"env.step returned None for action {action_id}")
+        layers = _frame_layers(frame)
+        curr = [list(row) for row in settled_board(layers)]
+        prev = cursor["last_grid"]
+        cursor["last_grid"] = curr
+        cursor["next_line"] += 1
+        prev_levels = cursor["levels_completed"]
+        curr_levels = frame.levels_completed or 0
+        cursor["levels_completed"] = max(prev_levels, curr_levels)
+        cursor["game_over"] = frame.state.value in ("GAME_OVER", "WIN")
+        last = {
+            "board_changed": prev != curr,
+            "done": frame.state.value in ("GAME_OVER", "WIN"),
+            "level_completed": curr_levels > prev_levels,
+            "game_over": frame.state.value == "GAME_OVER",
+            "run_complete": frame.state.value == "WIN",
+            "reward": curr_levels - prev_levels,
+            "valid_actions": list(frame.available_actions)
+            if frame.available_actions
+            else [],
+        }
+        history.append(
+            {
+                "action": action_id,
+                "frame_index": cursor["next_line"],
+                "frame": [row[:] for row in curr],
+            }
+        )
+        if len(history) > 30:
+            del history[:-30]
+        return {
+            "objects": (),
+            "adjacency": frozenset(),
+            "grid": curr,
+            "valid_actions": last["valid_actions"],
+            "last_action_result": last,
+            "history": history,
+            "frame_layers": layers,
+        }
+
+    sandbox = SimulatorSandbox(step_env_callback=step, timeout=timeout)
+    # Virtual RESET pair — identical to seed_sandbox's seeding.
+    sandbox._grids = [[row[:] for row in b0], [row[:] for row in b0]]  # noqa: SLF001
+    sandbox._actions = [RESET_ACTION]  # noqa: SLF001
+    sandbox.namespace["n_frames"] = len(sandbox._grids)  # noqa: SLF001
+    sandbox.namespace["history"] = history  # noqa: SLF001
+    sandbox._current_frame = [row[:] for row in b0]  # noqa: SLF001
+    sandbox.namespace["current_frame"] = sandbox._current_frame  # noqa: SLF001
+    sandbox._previous_grid = None  # noqa: SLF001
+    sandbox.namespace["previous_frame"] = None  # noqa: SLF001
+    sandbox._last_action_result = {  # noqa: SLF001
+        "board_changed": False,
+        "done": False,
+        "level_completed": False,
+        "game_over": False,
+        "run_complete": False,
+        "reward": 0,
+        "valid_actions": [1, 2, 3, 4],
+    }
+    sandbox.namespace["last_action_result"] = sandbox._last_action_result  # noqa: SLF001
+    sandbox.namespace["valid_actions"] = [1, 2, 3, 4]  # noqa: SLF001
 
     return sandbox, cursor
 
@@ -562,6 +693,30 @@ def extract_verdicts(
         },
         "response_text_head": response_content[:200],
     }
+
+
+# One scripted turn for --dry-run in full-replay mode: registers a trivial
+# sim (identity + UNKNOWN on the timer rows — the abstention surface), takes
+# one real action, and calls check() — proving the cold-seed + live-env +
+# registration + scoring plumbing without an LLM.
+FULL_REPLAY_DRY_RUN_CODE = (
+    "def trivial_sim(g, a):\n"
+    "    out = [row[:] for row in g]\n"
+    "    for r in (61, 62):\n"
+    "        for c in range(64):\n"
+    "            out[r][c] = UNKNOWN\n"
+    "    return out\n"
+    "set_simulate(trivial_sim)\n"
+    "action(1)\n"
+    "r = check()\n"
+    "print('coverage', r.get('coverage'))\n"
+    "update_notes('dry-run: cold seed + trivial sim + one action', 'verify outputs')\n"
+)
+
+_METRICS_CSV_HEADER = (
+    "turn,frame,accuracy,wrong_cells,abstained_changed,abstained_stable,"
+    "coverage,latency_s\n"
+)
 
 
 # ── Probe runner ────────────────────────────────────────────────────────────
@@ -829,18 +984,351 @@ def run_probe(
     return result
 
 
+# ── Full-replay runner (L3b) ───────────────────────────────────────────────
+
+
+def run_full_replay(
+    recording: Path,
+    *,
+    turns: int,
+    out_dir: Path,
+    dry_run: bool = False,
+    timeout: float = 30.0,
+) -> dict[str, Any]:
+    """Cold-start at frame 0 (no simulate), play level 1 offline against the
+    real game engine until win / GAME_OVER / the *turns* cap; write
+    metrics.csv + verdicts.json + transcript.jsonl under *out_dir*.
+
+    End conditions (mirrors the live agent's outer-loop guards):
+    - win: the step callback saw levels_completed bump → LEVEL_TRANSITION
+      message next turn, run ends (level 1 is the window);
+    - GAME_OVER: the engine's step budget is exhausted (measured: reset
+      flash at step 43, GAME_OVER at 129);
+    - the --turns cap.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    sandbox, cursor = seed_full_replay(recording, timeout=timeout)
+    history: list[dict[str, Any]] = cursor["history"]
+
+    n_corpus = len(sandbox._grids)  # noqa: SLF001
+    sim_registered = sandbox._simulate is not None  # noqa: SLF001
+    unknown_in_ns = sandbox.namespace.get("UNKNOWN") == UNKNOWN
+    print(f"[seed] corpus entries: {n_corpus} (expected 2 — the virtual RESET pair)")
+    print(f"[seed] simulate registered: {sim_registered} (expected False — cold start)")
+    print(f"[seed] UNKNOWN in namespace: {unknown_in_ns}")
+    if n_corpus != 2:
+        raise RuntimeError(
+            f"full-replay seed corpus shape wrong: {n_corpus} != 2 "
+            "(pair-seeding contract violated)"
+        )
+    if sim_registered:
+        raise RuntimeError("simulate registered at cold seed — seeding bug")
+    if not unknown_in_ns:
+        raise RuntimeError("UNKNOWN missing from sandbox namespace")
+
+    workflow = WorkflowController(sandbox)
+    world_model: dict[str, str] = {"notes": "", "plan": ""}
+
+    client: LLMClient | None = None if dry_run else LLMClient()
+    verdicts: list[dict[str, Any]] = []
+    transcript_path = out_dir / "transcript.jsonl"
+    metrics_path = out_dir / "metrics.csv"
+    messages = build_initial_messages(
+        sandbox,
+        history,
+        world_model,
+        workflow,
+        frame_index=0,
+    )
+
+    def _metrics_row(
+        turn: int, frame: int, metrics: dict[str, Any], latency_s: float
+    ) -> str:
+        acc = metrics.get("accuracy")
+        cov = metrics.get("coverage")
+        return (
+            f"{turn},{frame},"
+            f"{'' if acc is None else round(acc, 1)},"
+            f"{metrics.get('wrong_cells', '')},"
+            f"{metrics.get('abstained_changed', '')},"
+            f"{metrics.get('abstained_stable', '')},"
+            f"{'' if cov is None else round(cov, 1)},"
+            f"{round(latency_s, 1)}\n"
+        )
+
+    end_reason = "turns-cap"
+    with (
+        open(transcript_path, "w", encoding="utf-8") as transcript,
+        open(metrics_path, "w", encoding="utf-8") as metrics_csv,
+    ):
+        metrics_csv.write(_METRICS_CSV_HEADER)
+        for turn in range(1, turns + 1):
+            if cursor["game_over"]:
+                end_reason = "game-over"
+                break
+            if cursor["levels_completed"] > 0:
+                end_reason = "level-win"
+                break
+
+            # Turn-boundary board-reset consumption (live-agent parity,
+            # incident 6685d7d2): the flash hard-aborted the previous
+            # batch and left _board_reset_pending alive; without consuming
+            # it here, every subsequent action() raises BoardReset and the
+            # model is permanently stuck. The structured BOARD_RESET_TEXT
+            # rides at the head of the frame prompt, exactly like the live
+            # agent's turn boundary.
+            board_reset_msg = ""
+            if sandbox._board_reset_pending:  # noqa: SLF001
+                board_reset_msg = BOARD_RESET_TEXT.format(
+                    action_id=sandbox._action_taken  # noqa: SLF001
+                )
+                sandbox._board_reset_pending = False  # noqa: SLF001
+                print(f"[turn {turn}] board reset consumed — budget refreshed")
+
+            label = "(dry-run scripted)" if dry_run else ""
+            print(f"\n--- Turn {turn}/{turns} {label} ---")
+            refresh_state_messages(messages, sandbox, world_model)
+            if board_reset_msg:
+                messages.append({"role": "user", "content": board_reset_msg})
+            outbound = trim_messages_for_context(
+                messages, budget_tokens=_CONTEXT_BUDGET_TOKENS
+            )
+
+            if dry_run:
+                code = FULL_REPLAY_DRY_RUN_CODE
+                response_content = "(dry-run: scripted turn, no LLM call)"
+                latency_s = 0.0
+            else:
+                assert client is not None  # narrowed by the dry_run flag
+                t0 = time.time()
+                try:
+                    response = client.chat(
+                        messages=outbound,
+                        tools=[
+                            AGENT_PYTHON_TOOL_SCHEMA,
+                            UPDATE_NOTES_TOOL_SCHEMA,
+                            SET_PHASE_TOOL_SCHEMA,
+                        ],
+                        tool_choice="auto",
+                        max_tokens=4096,
+                    )
+                except Exception as exc:
+                    latency_s = time.time() - t0
+                    print(f"LLM call failed: {exc}")
+                    verdicts.append(
+                        {
+                            "turn": turn,
+                            "frame": len(sandbox._grids) - 1,  # noqa: SLF001
+                            "code": "",
+                            "output": "",
+                            "error": str(exc),
+                            "latency_s": round(latency_s, 1),
+                            "metrics": None,
+                            "verdicts": None,
+                        }
+                    )
+                    metrics_csv.write(
+                        _metrics_row(turn, len(sandbox._grids) - 1, {}, latency_s)  # noqa: SLF001
+                    )
+                    transcript.write(
+                        json.dumps({"turn": turn, "error": str(exc)}) + "\n"
+                    )
+                    continue
+                latency_s = time.time() - t0
+                response_content = response.content or ""
+                code = ""
+                for tc in response.tool_calls or []:
+                    if tc["function"]["name"] == "python":
+                        try:
+                            code = json.loads(tc["function"]["arguments"]).get(
+                                "code", ""
+                            )
+                        except Exception:
+                            code = ""
+                        break
+                print(f"LLM latency: {latency_s:.1f}s")
+                if not code and not response_content:
+                    print("no tool call and no text — recording empty turn")
+
+            grids_before = len(sandbox._grids)  # noqa: SLF001
+            output, error, _acted = sandbox.run_code(code)
+
+            pending = sandbox._pending_notes  # noqa: SLF001
+            for key in ("notes", "plan"):
+                if pending.get(key):
+                    world_model[key] = pending[key]
+            if not dry_run:
+                for tc in response.tool_calls or []:
+                    if tc["function"]["name"] == "update_notes":
+                        try:
+                            args = json.loads(tc["function"]["arguments"])
+                        except Exception:
+                            args = {}
+                        if args.get("notes"):
+                            world_model["notes"] = str(args["notes"])
+                        if args.get("plan"):
+                            world_model["plan"] = str(args["plan"])
+
+            tool_text = output if output else "(no output)"
+            if error:
+                tool_text = (
+                    f"{tool_text}\nError: {error}" if tool_text else f"Error: {error}"
+                )
+            remaining = turns - turn
+            tool_text = (
+                f"{tool_text}\nTurn {turn}/{turns} completed. "
+                f"{remaining} turns remaining."
+            )
+            if not dry_run:
+                python_calls = [
+                    tc
+                    for tc in response.tool_calls or []
+                    if tc["function"]["name"] == "python"
+                ]
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": response_content or None,
+                        "tool_calls": python_calls or None,
+                    }
+                )
+            content_parts: list[dict[str, Any]] = [{"type": "text", "text": tool_text}]
+            for img in sandbox.pending_images:
+                content_parts.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{img['b64']}"},
+                    }
+                )
+                content_parts.append({"type": "text", "text": img.get("caption", "")})
+            sandbox.pending_images.clear()
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": f"replay_{turn}",
+                    "content": content_parts if len(content_parts) > 1 else tool_text,
+                }
+            )
+            if len(sandbox._grids) != grids_before:  # noqa: SLF001
+                append_frame_prompt(
+                    messages,
+                    sandbox,
+                    history,
+                    workflow,
+                    frame_index=len(sandbox._grids) - 1,  # noqa: SLF001
+                )
+
+            verdict = extract_verdicts(
+                code, output, world_model.get("notes", ""), response_content
+            )
+            metrics = sandbox.measure()
+            verdicts.append(
+                {
+                    "turn": turn,
+                    "frame": len(sandbox._grids) - 1,  # noqa: SLF001
+                    "code": code,
+                    "output": output[:4000],
+                    "error": error,
+                    "latency_s": round(latency_s, 1),
+                    "metrics": {
+                        "accuracy": metrics.get("accuracy"),
+                        "wrong_cells": metrics.get("wrong_cells"),
+                        "abstained_changed": metrics.get("abstained_changed"),
+                        "abstained_stable": metrics.get("abstained_stable"),
+                        "coverage": metrics.get("coverage"),
+                        "frames_correct": metrics.get("frames_correct"),
+                        "frames_total": metrics.get("frames_total"),
+                    },
+                    "verdicts": verdict,
+                }
+            )
+            metrics_csv.write(
+                _metrics_row(
+                    turn,
+                    len(sandbox._grids) - 1,  # noqa: SLF001
+                    metrics,
+                    latency_s,
+                )
+            )
+            transcript.write(
+                json.dumps(
+                    {
+                        "turn": turn,
+                        "frame": len(sandbox._grids) - 1,  # noqa: SLF001
+                        "code": code,
+                        "output": output[:4000],
+                        "error": error,
+                        "latency_s": round(latency_s, 1),
+                        "response_content": response_content[:1000],
+                        "messages": outbound,
+                    },
+                    default=str,
+                )
+                + "\n"
+            )
+            print(
+                f"code chars: {len(code)} | output chars: {len(output)} | "
+                f"error: {error}"
+            )
+            print(
+                "verdicts: "
+                f"investigate={verdict['investigated_before_abstaining']['verdict']} "
+                f"unknown={verdict['wrote_unknown_in_code']['verdict']} "
+                f"check={verdict['called_check_read_abstained_log']['verdict']} "
+                f"notes={verdict['notes_carry_region_correlation']['verdict']}"
+            )
+            if dry_run:
+                break
+
+    result = {
+        "recording": str(recording),
+        "mode": "full-replay",
+        "turns": turns,
+        "dry_run": dry_run,
+        "end_reason": end_reason,
+        "levels_completed": cursor["levels_completed"],
+        "seed_state": {
+            "corpus_entries": n_corpus,
+            "simulate_registered": sim_registered,
+            "unknown_in_namespace": unknown_in_ns,
+        },
+        "verdicts": verdicts,
+    }
+    verdicts_path = out_dir / "verdicts.json"
+    with open(verdicts_path, "w", encoding="utf-8") as f:
+        json.dump(result, f, indent=2)
+    print(f"\n[out] end reason: {end_reason} | levels: {cursor['levels_completed']}")
+    print(f"[out] verdicts: {verdicts_path}")
+    print(f"[out] transcript: {transcript_path}")
+    print(f"[out] metrics: {metrics_path}")
+    return result
+
+
 # ── CLI ───────────────────────────────────────────────────────────────────
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "L3 probe: seed a SimulatorSandbox at the f9e3e301 recorded f20 "
-            "state with the UNKNOWN-abstention fixture sim, then run N turns "
-            "of the NEW prompt against the local LLM. Records per-turn "
-            "verdicts (investigate-before-abstain, UNKNOWN-in-code, "
-            "check()-readership, notes quality) for human review."
+            "L3/L3b harness for the UNKNOWN-abstention rework. Mode 'probe': "
+            "seed a SimulatorSandbox at the f9e3e301 recorded f20 state with "
+            "the UNKNOWN-abstention fixture sim, then run N turns of the NEW "
+            "prompt against the local LLM. Mode 'full-replay': cold-start at "
+            "frame 0 with NO simulate, play the full level-1 window offline "
+            "against the real game engine. Records per-turn verdicts "
+            "(investigate-before-abstain, UNKNOWN-in-code, check()-readership, "
+            "notes quality) for human review."
         )
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["probe", "full-replay"],
+        default="probe",
+        help=(
+            "probe: seed at --seed-frame with the fixture sim, N LLM turns "
+            "(task 11). full-replay: cold-start at frame 0, no simulate, play "
+            "level 1 offline to win/game-over/turns-cap (task 12, L3b)."
+        ),
     )
     parser.add_argument(
         "--recording",
@@ -852,20 +1340,21 @@ def main() -> None:
         "--seed-frame",
         type=int,
         default=20,
-        help="Recording transition to seed TO (default: 20 — the key-box "
-        "flash fork; corpus becomes 22 pair-seeded entries [0..21])",
+        help="Probe mode: recording transition to seed TO (default: 20 — the "
+        "key-box flash fork; corpus becomes 22 pair-seeded entries [0..21])",
     )
     parser.add_argument(
         "--turns",
         type=int,
-        default=10,
-        help="Number of LLM turns to run (default: 10)",
+        default=None,
+        help="Turn cap (default: 10 in probe mode, 100 in full-replay mode)",
     )
     parser.add_argument(
         "--out",
         type=Path,
         required=True,
-        help="Output directory for verdicts.json + transcript.jsonl",
+        help="Output directory for verdicts.json + transcript.jsonl (+ "
+        "metrics.csv in full-replay mode)",
     )
     parser.add_argument(
         "--dry-run",
@@ -885,14 +1374,29 @@ def main() -> None:
         print(f"Recording not found: {args.recording}")
         sys.exit(1)
 
-    run_probe(
-        args.recording,
-        seed_frame=args.seed_frame,
-        turns=args.turns,
-        out_dir=args.out,
-        dry_run=args.dry_run,
-        timeout=args.timeout,
+    turns = (
+        args.turns
+        if args.turns is not None
+        else (100 if args.mode == "full-replay" else 10)
     )
+
+    if args.mode == "full-replay":
+        run_full_replay(
+            args.recording,
+            turns=turns,
+            out_dir=args.out,
+            dry_run=args.dry_run,
+            timeout=args.timeout,
+        )
+    else:
+        run_probe(
+            args.recording,
+            seed_frame=args.seed_frame,
+            turns=turns,
+            out_dir=args.out,
+            dry_run=args.dry_run,
+            timeout=args.timeout,
+        )
 
 
 if __name__ == "__main__":
