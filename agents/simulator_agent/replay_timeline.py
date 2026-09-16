@@ -30,6 +30,7 @@ from agents.simulator_agent.reconstruction import (
     _count_llm_calls,
     _embedded_state,
     _row_tool_calls,
+    is_legacy_mask_code,
     load_llm_rows,
 )
 from agents.simulator_agent.reset_policy import RESET_ACTION, is_reset
@@ -92,7 +93,13 @@ def _make_timeline_step_callback(
             )
         if emb.last_check_result is not None:
             lcr = sandbox._last_check_result or {}  # noqa: SLF001
-            for key in ("frames_correct", "frames_total", "overall_accuracy"):
+            keys = ["frames_correct", "frames_total", "overall_accuracy"]
+            if (
+                "abstained_changed" in emb.last_check_result
+                and "abstained_changed" in lcr
+            ):
+                keys.append("abstained_changed")
+            for key in keys:
                 if emb.last_check_result.get(key) != lcr.get(key):
                     mismatches.append(
                         f"line {m}: last_check_result.{key} "
@@ -283,6 +290,7 @@ def reconstruct(
 
     workflow = WorkflowController(sandbox)
     world_model: dict[str, str] = {"notes": "", "plan": ""}
+    legacy_skipped: list[int] = []
 
     for n in range(0, marker.turn_frame + 1):
         for row in rows_by_frame.get(n, []):
@@ -294,6 +302,16 @@ def reconstruct(
             for name, args in _row_tool_calls(row):
                 if name == "python":
                     code = str(args.get("code", ""))
+                    if is_legacy_mask_code(code):
+                        seq = row.get("seq")
+                        legacy_skipped.append(seq if isinstance(seq, int) else -1)
+                        logger.warning(
+                            "reconstruct: seq %s legacy mask era — set_ignore call "
+                            "NOT re-executed (tool removed); fidelity for affected "
+                            "turns: unsupported (legacy mask era)",
+                            seq,
+                        )
+                        continue
                     output, error, _ = sandbox.run_code(code)
                     if error:
                         mismatches.append(
@@ -323,6 +341,15 @@ def reconstruct(
     messages = by_seq[marker.turn_seq]["messages"]
     diff_images = list(sandbox.pending_images)
 
+    if legacy_skipped:
+        print(
+            f"[reconstruct] LEGACY MASK ERA: {len(legacy_skipped)} recorded "
+            f"set_ignore call(s) at seq {legacy_skipped} were NOT re-executed "
+            "(tool removed from the sandbox). Fidelity verdict for affected "
+            "turns: unsupported (legacy mask era).",
+            flush=True,
+        )
+
     return ReconstructedState(
         harness=harness,
         sandbox=sandbox,
@@ -331,11 +358,12 @@ def reconstruct(
         frame_index=marker.turn_frame,
         llm_calls=_count_llm_calls(rows_all, marker.turn_seq - 1),
         simulate_source=sandbox._simulate_source or "",  # noqa: SLF001
-        set_ignore_source=None,
         notes=dict(world_model),
         history_turns=history_turns,
         diff_images=diff_images,
         marker=marker,
         recording_path=recording_path,
         verify={},
+        legacy_mask_era=bool(legacy_skipped),
+        legacy_skipped_seqs=tuple(legacy_skipped),
     )

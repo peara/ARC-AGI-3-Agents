@@ -1,9 +1,17 @@
 """Timeline-driven reconstruction of the agent/sandbox state at a marked turn.
 
 Given a recording and its sibling ``.llm.jsonl`` log, rebuild the world
-(via ``ReplayHarness``), the sandbox (registered simulate, corpus, ignore
-mask), the workflow phase, and the LLM conversation exactly as they stood
-at the start of the marked turn.
+(via ``ReplayHarness``), the sandbox (registered simulate, corpus), the
+workflow phase, and the LLM conversation exactly as they stood at the
+start of the marked turn.
+
+Legacy mask era: recordings made before the ``set_ignore`` removal may
+contain recorded python tool calls that invoke ``set_ignore(``. Those
+calls NameError in the current sandbox, so the walker (``replay_timeline.
+reconstruct``) SKIPS their re-execution, marks the run
+``legacy_mask_era`` on the returned state, and reports the affected
+turns' fidelity as ``unsupported (legacy mask era)`` — loudly, never as
+a crash.
 
 Design: **timeline walker** — walk recording lines 0..turn_frame in order,
 re-executing every recorded python tool call at its recorded frame against
@@ -83,13 +91,14 @@ class ReconstructedState:
     frame_index: int
     llm_calls: int  # LLM calls consumed before this turn
     simulate_source: str  # the simulate code registered during the walk
-    set_ignore_source: str | None  # the set_ignore code, None when never run
     notes: dict[str, str]  # world-model notes at turn start
     history_turns: list[dict[str, Any]]  # agent-owned history entries
     diff_images: list[dict[str, str]]  # batch predict-and-compare diffs
-    marker: ReplayMarker
-    recording_path: Path  # the recording this state was reconstructed from
+    marker: ReplayMarker  # the recording this state was reconstructed from
+    recording_path: Path
     verify: dict[str, Any] = field(default_factory=dict)
+    legacy_mask_era: bool = False  # recorded set_ignore( calls found (pre-removal era)
+    legacy_skipped_seqs: tuple[int, ...] = ()  # seqs whose re-execution was skipped
 
 
 # ── Artifact loading ──────────────────────────────────────────────────────
@@ -138,6 +147,17 @@ def _row_tool_calls(row: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
             args = {}
         calls.append((name, args if isinstance(args, dict) else {}))
     return calls
+
+
+def is_legacy_mask_code(code: str) -> bool:
+    """True when a recorded python snippet invokes the removed ``set_ignore``.
+
+    Substring match on ``set_ignore(`` — the tool is gone from the sandbox
+    (UNKNOWN abstention replaced it), so re-executing such a snippet would
+    NameError. The walker skips these calls and flags the run
+    ``legacy_mask_era`` instead.
+    """
+    return "set_ignore(" in code
 
 
 # ── Embedded state + flow-message readers ─────────────────────────────────
@@ -391,13 +411,17 @@ def verify_reconstruction(state: ReconstructedState) -> dict[str, Any]:
     )
 
     # 3. stale_check_match — CACHED check result vs embedded.
+    #    Key set: the schema-2 intersection — the three legacy keys always
+    #    compared; ``abstained_changed`` compared only when BOTH dicts carry
+    #    it (legacy embedded dicts predate schema 2 and simply lack the key;
+    #    ``.get`` on both sides means a missing key never raises).
     cached = sandbox._last_check_result or {}  # noqa: SLF001
     emb_lcr = emb.last_check_result if emb else None
     if emb_lcr is not None:
-        checks["stale_check_match"] = all(
-            cached.get(k) == emb_lcr.get(k)
-            for k in ("overall_accuracy", "frames_correct", "frames_total")
-        )
+        keys = ["overall_accuracy", "frames_correct", "frames_total"]
+        if "abstained_changed" in cached and "abstained_changed" in emb_lcr:
+            keys.append("abstained_changed")
+        checks["stale_check_match"] = all(cached.get(k) == emb_lcr.get(k) for k in keys)
     else:
         checks["stale_check_match"] = not cached
     checks["stale_check_pair"] = (
@@ -405,11 +429,13 @@ def verify_reconstruction(state: ReconstructedState) -> dict[str, Any]:
             cached.get("overall_accuracy"),
             cached.get("frames_correct"),
             cached.get("frames_total"),
+            cached.get("abstained_changed"),
         ),
         (
             emb_lcr.get("overall_accuracy") if emb_lcr else None,
             emb_lcr.get("frames_correct") if emb_lcr else None,
             emb_lcr.get("frames_total") if emb_lcr else None,
+            emb_lcr.get("abstained_changed") if emb_lcr else None,
         ),
     )
 
@@ -465,7 +491,9 @@ def verify_reconstruction(state: ReconstructedState) -> dict[str, Any]:
         return ""
 
     user_text = " ".join(
-        _msg_text(m) for m in state.messages if isinstance(m, dict) and m.get("role") == "user"
+        _msg_text(m)
+        for m in state.messages
+        if isinstance(m, dict) and m.get("role") == "user"
     )
     directive = re.search(r"PHASE[:\s]*([A-Z_]+)", user_text)
     checks["phase_crosscheck"] = {

@@ -54,7 +54,8 @@ def _strip_old_images(history: list[dict[str, Any]], *, keep_last_n: int) -> Non
         if i >= len(history) - keep_last_n:
             continue
         history[i]["content"] = [
-            p for p in content
+            p
+            for p in content
             if not (isinstance(p, dict) and p.get("type") == "image_url")
         ]
 
@@ -76,6 +77,8 @@ class TurnResult:
     frames_total: int
     regressions: int
     latency_s: float
+    abstained_changed: int = 0
+    coverage: float | None = None
 
 
 @dataclass
@@ -110,6 +113,8 @@ class ExperimentResult:
                     "frames_total": t.frames_total,
                     "regressions": t.regressions,
                     "latency_s": round(t.latency_s, 1),
+                    "abstained_changed": t.abstained_changed,
+                    "coverage": t.coverage,
                 }
                 for t in self.turns
             ],
@@ -159,22 +164,29 @@ def run_experiment(
 
     # Build first user message with initial frame images so the LLM can SEE the game
     initial_content: list[dict[str, Any]] = [
-        {"type": "text", "text": (
-            "Build a simulate function. Here are the first 3 frames of the recording. "
-            "Look at them to understand the game visually, then write code to simulate it."
-        )},
+        {
+            "type": "text",
+            "text": (
+                "Build a simulate function. Here are the first 3 frames of the recording. "
+                "Look at them to understand the game visually, then write code to simulate it."
+            ),
+        },
     ]
     for i in range(min(3, len(sandbox._grids))):  # noqa: SLF001
         img = grid_to_image(sandbox._grids[i], scale=8)  # noqa: SLF001
         b64 = image_to_base64(img)
-        initial_content.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:image/png;base64,{b64}"},
-        })
-        initial_content.append({
-            "type": "text",
-            "text": f"Frame {i} ({frame_caption(i, sandbox._actions)})",  # noqa: SLF001
-        })
+        initial_content.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{b64}"},
+            }
+        )
+        initial_content.append(
+            {
+                "type": "text",
+                "text": f"Frame {i} ({frame_caption(i, sandbox._actions)})",  # noqa: SLF001
+            }
+        )
 
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
@@ -219,15 +231,19 @@ def run_experiment(
                     print("LLM declared DONE")
                     break
 
-            messages.append({
-                "role": "assistant",
-                "content": response.content or "",
-            })
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": response.content or "",
+                }
+            )
             # Prompt again
-            messages.append({
-                "role": "user",
-                "content": "Continue. Call check() to test your simulate function, or say DONE if it's correct.",
-            })
+            messages.append(
+                {
+                    "role": "user",
+                    "content": "Continue. Call check() to test your simulate function, or say DONE if it's correct.",
+                }
+            )
             continue
 
         # Process tool calls (Expect single python() call per turn)
@@ -257,7 +273,8 @@ def run_experiment(
             # Measure accuracy after this turn
             metrics = sandbox.measure()
 
-            # Record turn result
+            # Record turn result (schema-2 fields via .get — legacy
+            # measure() dicts without them degrade to defaults)
             turn_result = TurnResult(
                 turn=turn + 1,
                 code=code,
@@ -269,15 +286,30 @@ def run_experiment(
                 frames_total=metrics["frames_total"],
                 regressions=metrics["regressions"],
                 latency_s=elapsed,
+                abstained_changed=metrics.get("abstained_changed", 0),
+                coverage=metrics.get("coverage"),
             )
             result.turns.append(turn_result)
             result.total_regressions += metrics["regressions"]
 
             # Print metrics
-            acc_str = f"{metrics['accuracy']:.1f}%" if metrics["accuracy"] is not None else "N/A"
-            print(f"Accuracy: {acc_str}  wrong: {metrics['wrong_cells']}  "
-                  f"frames correct: {metrics['frames_correct']}/{metrics['frames_total']}  "
-                  f"regressions: {metrics['regressions']}")
+            acc_str = (
+                f"{metrics['accuracy']:.1f}%"
+                if metrics["accuracy"] is not None
+                else "N/A"
+            )
+            cov_str = (
+                f"{metrics['coverage']:.1f}%"
+                if metrics.get("coverage") is not None
+                else "n/a"
+            )
+            print(
+                f"Accuracy: {acc_str}  wrong: {metrics['wrong_cells']}  "
+                f"frames correct: {metrics['frames_correct']}/{metrics['frames_total']}  "
+                f"abstained-changed: {metrics.get('abstained_changed', 0)}  "
+                f"coverage: {cov_str}  "
+                f"regressions: {metrics['regressions']}"
+            )
 
             if output:
                 print(f"Output:\n{output[:2000]}")
@@ -296,11 +328,13 @@ def run_experiment(
                 tool_parts.append(f"Error: {error}")
             tool_text = "\n".join(tool_parts) if tool_parts else "(no output)"
 
-            messages.append({
-                "role": "assistant",
-                "content": response.content or None,
-                "tool_calls": [tc],
-            })
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": response.content or None,
+                    "tool_calls": [tc],
+                }
+            )
 
             # Build tool response — multimodal if images are pending
             if sandbox.pending_images:
@@ -308,30 +342,38 @@ def run_experiment(
                     {"type": "text", "text": tool_text}
                 ]
                 for img_info in sandbox.pending_images:
-                    content_blocks.append({
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/png;base64,{img_info['b64']}",
-                        },
-                    })
-                    content_blocks.append({
-                        "type": "text",
-                        "text": img_info["caption"],
-                    })
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc["id"],
-                    "content": content_blocks,
-                })
+                    content_blocks.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{img_info['b64']}",
+                            },
+                        }
+                    )
+                    content_blocks.append(
+                        {
+                            "type": "text",
+                            "text": img_info["caption"],
+                        }
+                    )
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": content_blocks,
+                    }
+                )
                 n_imgs = len(sandbox.pending_images)
                 sandbox.pending_images.clear()
                 print(f"[images] {n_imgs} image(s) injected into tool response")
             else:
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc["id"],
-                    "content": tool_text,
-                })
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": tool_text,
+                    }
+                )
 
             # Check convergence
             if (
@@ -340,7 +382,9 @@ def run_experiment(
                 and result.convergence_turn is None
             ):
                 result.convergence_turn = turn + 1
-                print(f"*** Converged at turn {turn + 1} ({metrics['accuracy']:.1f}%) ***")
+                print(
+                    f"*** Converged at turn {turn + 1} ({metrics['accuracy']:.1f}%) ***"
+                )
 
             # Check if LLM said DONE in its text
             if response.content and "DONE" in response.content.upper():
@@ -408,10 +452,14 @@ def run_experiment(
     print("Learning curve:")
     for t in result.turns:
         acc_str = f"{t.accuracy:.1f}%" if t.accuracy is not None else "N/A"
+        cov_str = f"{t.coverage:.1f}%" if t.coverage is not None else "n/a"
         bar = "#" * int((t.accuracy or 0) / 5)
-        print(f"  Turn {t.turn:2d}: {acc_str:>6s}  wrong={t.wrong_cells:5d}  "
-              f"correct={t.frames_correct}/{t.frames_total}  "
-              f"regress={t.regressions}  {bar}")
+        print(
+            f"  Turn {t.turn:2d}: {acc_str:>6s}  wrong={t.wrong_cells:5d}  "
+            f"correct={t.frames_correct}/{t.frames_total}  "
+            f"abstained={t.abstained_changed}  cov={cov_str}  "
+            f"regress={t.regressions}  {bar}"
+        )
 
     # Save JSON if requested
     if output_path:
@@ -431,19 +479,27 @@ def main() -> None:
     )
     parser.add_argument("recording", type=Path, help="Recording .recording.jsonl file")
     parser.add_argument(
-        "--max-turns", type=int, default=20,
+        "--max-turns",
+        type=int,
+        default=20,
         help="Maximum LLM turns (default: 20)",
     )
     parser.add_argument(
-        "--timeout", type=float, default=30.0,
+        "--timeout",
+        type=float,
+        default=30.0,
         help="Sandbox execution timeout in seconds (default: 30)",
     )
     parser.add_argument(
-        "--output", type=Path, default=None,
+        "--output",
+        type=Path,
+        default=None,
         help="Save results JSON to this path",
     )
     parser.add_argument(
-        "--max-frames", type=int, default=None,
+        "--max-frames",
+        type=int,
+        default=None,
         help="Only use the first N frames of the recording",
     )
     args = parser.parse_args()
