@@ -8,6 +8,15 @@ from typing import Any
 from agents.simulator_agent.reset_policy import check_includes_reset, is_reset
 from agents.simulator_agent.tools import grid_diff
 
+UNKNOWN = -1
+"""Sentinel a simulate writes into a cell it cannot predict ("I don't know").
+
+check() scores committed cells only; abstained cells are counted per bucket
+(abstained-changed / abstained-stable) and never judged wrong or spurious.
+"""
+
+__all__ = ["UNKNOWN", "cluster_cells", "diagnose", "run_check"]
+
 
 def run_check(
     simulate_fn: Callable[[list[list[int]], int], list[list[int]]],
@@ -15,7 +24,6 @@ def run_check(
     actions: list[int],
     *,
     verbose: bool = True,
-    ignore_mask: set[tuple[int, int]] | None = None,
     skip_transitions: set[int] | None = None,
 ) -> dict[str, Any]:
     """Test *simulate_fn* against all recorded frame transitions.
@@ -23,15 +31,20 @@ def run_check(
     For each frame *i*, runs ``simulate_fn(grids[i], actions[i])`` and compares
     the result to ``grids[i + 1]`` (the actual next grid).
 
-    Metrics:
-      - **wrong**: cells where predicted != actual
+    Per-cell classification, UNKNOWN-first: a cell the model abstained on
+    (``predicted == UNKNOWN``) is never judged — it lands in
+    **abstained_changed** (reality changed it) or **abstained_stable**
+    (reality left it alone).  Committed cells keep the classic buckets:
+
+      - **wrong**: committed cells where predicted != actual
       - **changed**: cells where grid_before != grid_after (what the game changed)
       - **correct**: of changed cells, how many simulate predicted right
       - **spurious**: cells simulate changed that shouldn't have changed
 
-    If *ignore_mask* is provided, those cells are excluded from wrong/changed/
-    spurious counts — use ``set_ignore()`` to skip HUD cells that change every
-    frame regardless of the action.
+    ``accuracy = correct / (correct + wrong)`` over committed cells only;
+    a zero denominator (nothing committed) is defined as 100%.  ``coverage``
+    is the committed share of actually-changed cells (``None`` when nothing
+    changed).
 
     If *skip_transitions* is provided, those transition indices are excluded
     from scoring entirely: no per-frame entry, no simulate call, and no
@@ -48,12 +61,12 @@ def run_check(
     total_changed = 0
     total_correct = 0
     total_spurious = 0
+    total_abstained_changed = 0
+    total_abstained_stable = 0
     frames_correct = 0
     skip = skip_transitions or set()
     all_transitions = max(len(grids) - 1, 0)
-    scored_transitions = [
-        i for i in range(all_transitions) if i not in skip
-    ]
+    scored_transitions = [i for i in range(all_transitions) if i not in skip]
     frames_total = len(scored_transitions)
     skipped_transitions = sorted(i for i in skip if 0 <= i < all_transitions)
     degenerate_reset_frames = 0
@@ -80,42 +93,47 @@ def run_check(
             results.append({"frame": i, "error": "returned None", "wrong": 4096})
             continue
 
+        # grid_diff doubles as shape validation (raises on mismatch).
         wrong = grid_diff(predicted, grid_after)
         changed = grid_diff(grid_before, grid_after)
 
-        if ignore_mask:
-            wrong = [d for d in wrong if (d[0], d[1]) not in ignore_mask]
-            changed = [d for d in changed if (d[0], d[1]) not in ignore_mask]
-
+        # UNKNOWN-first: an abstained cell is never judged.  wrong/pred_changed
+        # carry (r, c, predicted_val, actual_val) / (r, c, before, predicted).
+        wrong = [d for d in wrong if d[2] != UNKNOWN]
         changed_set = {(r, c) for r, c, _, _ in changed}
         wrong_set = {(r, c) for r, c, _, _ in wrong}
-        correct = len(changed_set - wrong_set)
+        abstained_changed_set = {
+            (r, c) for r, c in changed_set if predicted[r][c] == UNKNOWN
+        }
+        n_abstained = sum(row.count(UNKNOWN) for row in predicted)
+        abstained_stable = n_abstained - len(abstained_changed_set)
 
-        # Spurious: simulate changed a cell that didn't actually change
+        correct = len(changed_set - wrong_set - abstained_changed_set)
+
+        # Spurious: simulate changed a committed cell that didn't actually change
         pred_changed = grid_diff(grid_before, predicted)
-        if ignore_mask:
-            pred_changed = [
-                d for d in pred_changed if (d[0], d[1]) not in ignore_mask
-            ]
+        pred_changed = [d for d in pred_changed if d[3] != UNKNOWN]
         pred_changed_set = {(r, c) for r, c, _, _ in pred_changed}
         spurious = len(pred_changed_set - changed_set)
 
         n_wrong = len(wrong)
         n_changed = len(changed)
         n_spurious = spurious
-        accuracy = correct / max(n_changed, 1) * 100
+        n_abstained_changed = len(abstained_changed_set)
+        committed = correct + n_wrong
+        accuracy = correct / committed * 100 if committed else 100.0
 
         total_wrong += n_wrong
         total_changed += n_changed
         total_correct += correct
         total_spurious += n_spurious
+        total_abstained_changed += n_abstained_changed
+        total_abstained_stable += abstained_stable
 
         if n_wrong == 0:
             frames_correct += 1
 
-        is_degenerate_reset = (
-            score_reset and is_reset(action) and n_changed == 0
-        )
+        is_degenerate_reset = score_reset and is_reset(action) and n_changed == 0
         if is_degenerate_reset:
             degenerate_reset_frames += 1
 
@@ -128,17 +146,27 @@ def run_check(
                 for r, c, pv, av in wrong:
                     print(f"  ({r},{c}): predicted={pv}, actual={av}")
 
-        results.append({
-            "frame": i,
-            "wrong": n_wrong,
-            "changed": n_changed,
-            "correct": correct,
-            "spurious": n_spurious,
-            "accuracy": round(accuracy, 1),
-            "degenerate_reset": is_degenerate_reset,
-        })
+        results.append(
+            {
+                "frame": i,
+                "wrong": n_wrong,
+                "changed": n_changed,
+                "correct": correct,
+                "spurious": n_spurious,
+                "abstained_changed": n_abstained_changed,
+                "abstained_stable": abstained_stable,
+                "accuracy": round(accuracy, 1),
+                "degenerate_reset": is_degenerate_reset,
+            }
+        )
 
-    overall_acc = total_correct / max(total_changed, 1) * 100
+    committed_total = total_correct + total_wrong
+    overall_acc = total_correct / committed_total * 100 if committed_total else 100.0
+    coverage = (
+        (total_changed - total_abstained_changed) / total_changed * 100
+        if total_changed
+        else None
+    )
 
     if verbose:
         print()
@@ -153,16 +181,21 @@ def run_check(
         print(summary)
 
     return {
+        "schema": 2,
         "total_wrong": total_wrong,
         "total_changed": total_changed,
         "total_correct": total_correct,
         "total_spurious": total_spurious,
+        "abstained_changed": total_abstained_changed,
+        "abstained_stable": total_abstained_stable,
+        "coverage": round(coverage, 1) if coverage is not None else None,
         "overall_accuracy": round(overall_acc, 1),
         "frames_correct": frames_correct,
         "frames_total": frames_total,
         "degenerate_reset_frames": degenerate_reset_frames,
         "skipped_transitions": skipped_transitions,
         "wrong_cells": total_wrong,
+        "abstained_clusters": [],
         "per_frame": results,
     }
 
@@ -171,7 +204,6 @@ def diagnose(
     simulate_fn: Callable[[list[list[int]], int], list[list[int]]],
     grids: list[list[list[int]]],
     actions: list[int],
-    ignore_mask: set[tuple[int, int]] | None = None,
     skip_transitions: set[int] | None = None,
 ) -> dict[str, Any]:
     """Run simulate on all frames and print semantic error analysis.
@@ -179,8 +211,6 @@ def diagnose(
     Classifies each wrong cell as MISSED, SPURIOUS, or WRONG_VALUE,
     then clusters errors spatially to identify which object region
     is causing problems.
-
-    If *ignore_mask* is provided, those cells are excluded from the analysis.
 
     If *skip_transitions* is provided, those transition indices are excluded
     from scoring and from every aggregate total (same semantics as
@@ -193,9 +223,7 @@ def diagnose(
     total_wrong_val = 0
     skip = skip_transitions or set()
     all_transitions = max(len(grids) - 1, 0)
-    scored_transitions = [
-        i for i in range(all_transitions) if i not in skip
-    ]
+    scored_transitions = [i for i in range(all_transitions) if i not in skip]
     frames_total = len(scored_transitions)
     skipped_transitions = sorted(i for i in skip if 0 <= i < all_transitions)
 
@@ -216,17 +244,14 @@ def diagnose(
         actual_diff = grid_diff(grid_before, grid_after)
         pred_diff = grid_diff(grid_before, predicted)
 
-        if ignore_mask:
-            actual_diff = [d for d in actual_diff if (d[0], d[1]) not in ignore_mask]
-            pred_diff = [d for d in pred_diff if (d[0], d[1]) not in ignore_mask]
-
         actual_set = {(r, c) for r, c, _, _ in actual_diff}
         pred_set = {(r, c) for r, c, _, _ in pred_diff}
 
         missed = actual_set - pred_set
         spurious = pred_set - actual_set
         wrong_val = {
-            (r, c) for r, c, _, _ in actual_diff
+            (r, c)
+            for r, c, _, _ in actual_diff
             if (r, c) in pred_set and predicted[r][c] != grid_after[r][c]
         }
 
@@ -244,14 +269,26 @@ def diagnose(
             continue
 
         print(f"\nFrame {i} Action {action}: {n_wrong} errors")
-        print(f"  MISSED ({n_missed}): cells that changed in reality but your simulate didn't change")
-        print(f"  SPURIOUS ({n_spurious}): cells your simulate changed but shouldn't have")
-        print(f"  WRONG_VALUE ({n_wrong_val}): cells your simulate changed but to the wrong color")
+        print(
+            f"  MISSED ({n_missed}): cells that changed in reality but your simulate didn't change"
+        )
+        print(
+            f"  SPURIOUS ({n_spurious}): cells your simulate changed but shouldn't have"
+        )
+        print(
+            f"  WRONG_VALUE ({n_wrong_val}): cells your simulate changed but to the wrong color"
+        )
 
         all_errors = (
             [(r, c, "MISSED", grid_after[r][c], grid_before[r][c]) for r, c in missed]
-            + [(r, c, "SPURIOUS", grid_before[r][c], predicted[r][c]) for r, c in spurious]
-            + [(r, c, "WRONG_VAL", grid_after[r][c], predicted[r][c]) for r, c in wrong_val]
+            + [
+                (r, c, "SPURIOUS", grid_before[r][c], predicted[r][c])
+                for r, c in spurious
+            ]
+            + [
+                (r, c, "WRONG_VAL", grid_after[r][c], predicted[r][c])
+                for r, c in wrong_val
+            ]
         )
 
         # Cluster errors by spatial proximity (group nearby cells)
@@ -267,17 +304,23 @@ def diagnose(
             before_colors = set(grid_before[r][c] for r, c in cluster)
             after_colors = set(grid_after[r][c] for r, c in cluster)
             pred_colors = set(predicted[r][c] for r, c in cluster)
-            print(f"  Cluster {ci+1}: rows {r_min}-{r_max}, cols {c_min}-{c_max} ({len(cluster)} cells)")
+            print(
+                f"  Cluster {ci + 1}: rows {r_min}-{r_max}, cols {c_min}-{c_max} ({len(cluster)} cells)"
+            )
             print(f"    Error types: {types}")
             print(f"    Grid before colors: {before_colors}")
             print(f"    Grid after colors:  {after_colors}")
             print(f"    Predicted colors:   {pred_colors}")
             if len(cluster) <= 10:
                 for r, c, etype, v1, v2 in cluster_errors:
-                    print(f"    ({r},{c}): {etype} before={grid_before[r][c]} after={grid_after[r][c]} pred={predicted[r][c]}")
+                    print(
+                        f"    ({r},{c}): {etype} before={grid_before[r][c]} after={grid_after[r][c]} pred={predicted[r][c]}"
+                    )
 
     print("\n=== Diagnosis Summary ===")
-    print(f"Total errors: {total_wrong} (missed={total_missed}, spurious={total_spurious}, wrong_val={total_wrong_val})")
+    print(
+        f"Total errors: {total_wrong} (missed={total_missed}, spurious={total_spurious}, wrong_val={total_wrong_val})"
+    )
     return {
         "total_wrong": total_wrong,
         "total_missed": total_missed,
