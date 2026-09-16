@@ -70,8 +70,8 @@ AGENT_GAME_OVERVIEW_ADDENDUM: str = (
     "is the left, column 63 is the right.\n"
     "- Objects are contiguous same-color regions. Identify them by color, shape, and "
     "position.\n"
-    "- If you identify cells that are unimportant (timers, HUD, decorative noise), "
-    "use set_ignore() to exclude them from check() and diagnose().\n"
+    "- You are not expected to predict every cell: cells your simulate cannot yet "
+    "predict are written as UNKNOWN (-1). See the Abstention contract below.\n"
 )
 
 AGENT_RUNTIME_STATE_ADDENDUM: str = """\
@@ -130,10 +130,6 @@ vectors — do NOT estimate positions or distances from the image alone.
 Some games have no explicit player avatar. The relevant state may be an object, \
 region, cursor, selector, or whole-board configuration.
 
-A long horizontal or vertical line near an edge is often a timer or progress bar. \
-It is usually not core gameplay; do not get distracted by it unless there is \
-concrete evidence it interacts with the puzzle mechanics.
-
 The image is for visual understanding of the scene layout and object \
 identification. For quantitative spatial reasoning, use the sandbox tools.
 """
@@ -178,7 +174,14 @@ DIFF:
 SIMULATOR:
   set_simulate(func)    -> register simulate(grid, action) -> next_grid
   simulate(grid, action) -> run the registered simulator
-  set_ignore(cells, colors) -> skip these in check()/diagnose()
+  UNKNOWN               -> the constant -1. Write it into any cell of your \
+returned grid your simulate cannot yet predict. A cell marked UNKNOWN means \
+"I don't know what this cell does" — nothing more. check() does not grade \
+UNKNOWN cells; instead its abstained log reports, per abstained region, \
+which transitions the region changed on and which actions produced those \
+changes. predict_and_compare does not flag UNKNOWN cells either — the \
+abstained log is the only automatic surface for what your abstained regions \
+do. Never write UNKNOWN into a cell your goal depends on.
 
 NEVER define a function named `simulate` in your code — that name is a
 protected builtin tool. Your definition is silently discarded and triggers
@@ -238,9 +241,48 @@ EXECUTE: run the path. If an action fails, go back to MODEL.
 Use set_phase("PHASE_NAME", reason="...") to change phase when ready.
 If you can't simulate this game, set_phase("EXECUTE", reason="manual play").
 
-Key tools: set_simulate(func), check(), diagnose(), bfs(), action(id), \
-set_ignore(colors/cells). Always simulate before you act — unless you've \
-declared manual play.
+Key tools: set_simulate(func), check(), diagnose(), bfs(), action(id). \
+Always simulate before you act — unless you've declared manual play.
+
+Call check() after registering or revising simulate, after batches that \
+crossed or touched abstained regions, and after board resets — not after \
+every action. LOAD-BEARING: the abstained log is the ONLY automatic surface \
+for what your abstained regions do — predict_and_compare does not flag \
+abstained cells; if you abstain anywhere and never call check(), those \
+regions are invisible to you. A check() whose coverage is low (you \
+predicted little of what changed) is not a pass — aim to model the cells \
+your goal depends on before abstaining.
+"""
+
+AGENT_ABSTENTION_ADDENDUM: str = """\
+Abstention contract
+
+You are not expected to predict every cell. Write UNKNOWN (-1) into any cell \
+your simulate cannot yet predict. UNKNOWN means "I don't know what this cell \
+does", nothing more.
+
+Procedure:
+1. Investigate first — print_region a region across several history frames \
+and diff() consecutive frames to see WHEN it changes; a region that changes \
+on every transition regardless of action id is different from one that \
+changes only on specific actions or positions.
+2. Model if you can — an approximate rule that fits your observations beats \
+abstention.
+3. If no consistent rule fits, abstain — and record in notes the region, \
+what you observed (when it changed, which actions produced those changes), \
+and what you ruled out.
+4. Every check() prints an abstained log: for each region you abstained on, \
+which transitions it changed on and which actions produced them. Read it. \
+Structure in that table is a rule you haven't modeled yet.
+5. Never abstain on cells your goal depends on. When planning with bfs, your \
+simulate must treat input UNKNOWN cells as blocking unless you have a rule \
+for them. When executing a path while abstaining anywhere: execute in small \
+batches (1-3 actions); after each batch diff(previous_frame, current_frame); \
+changes in cells you model are flagged automatically, changes in cells you \
+abstained on are that region interacting with your action — identify the \
+cluster via check()'s abstained log and decide if it is now modelable.
+
+Everything on the board might have meaning.
 """
 
 AGENT_WORLD_MODEL_ADDENDUM: str = """\
@@ -254,7 +296,8 @@ Call `update_notes` whenever you discover something worth remembering:
 - A game mechanic (what each action does, how objects move, collision rules)
 - The target or goal of the level (what to reach, what to avoid)
 - Object properties (colors, positions, shapes, which ones are important)
-- Things to ignore (timers, HUD, decorative elements — use set_ignore for these)
+- Regions you cannot yet model (record what you observed about them — see \
+the Abstention contract)
 - What you are currently working on (building simulate, debugging, planning)
 
 You don't need to call it every turn — only when you learn something new or \
@@ -264,8 +307,13 @@ notes: what you discovered or what you're working on right now
 plan: what you will do next turn — keep it short
 
 Example: call update_notes with
-  notes="Block is orange(12)+blue(9) at rows 45-49. Moves 5 cells per action. Action 3=left, 4=right, 1=up, 2=down. Yellow bar rows 61-62 shrinks every frame — will set_ignore."
-  plan="Write simulate with block movement. set_ignore(colors=[11]). check()."
+  notes="Region A: changes on every transition regardless of action — a \
+consistent rule fits, modeled; behavior at its limit unknown, will observe. \
+Region B: changed on a few transitions only — no consistent rule yet, \
+abstained (UNKNOWN); recorded when it changed and which actions produced \
+those changes; will investigate."
+  plan="Write simulate with the modeled rules. check() — read the abstained \
+log for Region B."
 
 When your simulator is correct (check() shows 0 wrong cells on all frames) and you have a winning plan, say "DONE" in your response.
 """
@@ -283,6 +331,8 @@ AGENT_SYSTEM_PROMPT: str = (
     + AGENT_SIMULATOR_TOOLS_ADDENDUM
     + "\n\n"
     + AGENT_PHASES_OVERVIEW
+    + "\n\n"
+    + AGENT_ABSTENTION_ADDENDUM
     + "\n\n"
     + AGENT_WORLD_MODEL_ADDENDUM
 )
@@ -439,7 +489,7 @@ Step 2: HYPOTHESIZE — Call update_notes with your new understanding.
 
 Step 3: FIX — Either add the confirmed mechanic to simulate() (e.g. \
 return the grid unchanged when the move is blocked; model event-driven \
-flashes), or exclude fixed regions with set_ignore(cells=[...]). \
+flashes), or declare UNKNOWN for the cells you cannot yet model. \
 Call check() to verify.
 
 Step 4: RE-PLAN — Re-run bfs(current_frame, goal) with the fixed simulate. \
@@ -538,8 +588,10 @@ Column 0 is the left, column 63 is the right.
 - The most common color is usually the background/floor. Objects sit ON it.
 - Some colors may be walls/obstacles — objects cannot move into wall cells.
 - Actions move or transform objects. Each action ID typically does one thing.
-- If you identify cells that are unimportant and should not count toward your \
-accuracy, call set_ignore(cells) to exclude them from check() and diagnose().
+- You are not expected to predict every cell: cells your simulate cannot \
+yet predict are written as UNKNOWN (-1) — check() does not grade them, and \
+its abstained log reports which transitions they changed on and which \
+actions produced those changes.
 - The game is deterministic: the same (state, action) always produces the \
 same next state.
 
@@ -580,8 +632,12 @@ UTILITIES:
 SIMULATOR CONTROL:
   set_simulate(func)    -> register your simulate function
   simulate(i, action)   -> run the current simulate function (for self-testing)
-  set_ignore(cells, colors) -> declare cells to skip in check()/diagnose(). \
-Pass cells as [(row, col), ...] or colors as [color_id, ...] or both.
+  UNKNOWN               -> the constant -1. Write it into any cell of your \
+returned grid your simulate cannot yet predict. A cell marked UNKNOWN means \
+"I don't know what this cell does" — nothing more. check() does not grade \
+UNKNOWN cells; instead its abstained log reports, per abstained region, \
+which transitions the region changed on and which actions produced those \
+changes. Never write UNKNOWN into a cell your goal depends on.
 
 CHECK AND DIAGNOSE:
   check(simulate_fn)    -> test on ALL frames, print per-frame accuracy
@@ -610,14 +666,18 @@ frames. Call diagnose(simulate) to see error types. Fix and re-test.
 Every response MUST end with two labeled blocks:
 
 Notes: what you learned this turn — objects, colors, action effects, \
-elements to ignore (use set_ignore), anything that helps next turn.
+regions you cannot yet model (record what you observed about them), \
+anything that helps next turn.
 Plan: what you will do next turn — keep it short.
 
 Example:
-Notes: Block is orange(12)+blue(9) at rows 45-49. Moves 5 cells per action. \
-Action 3=left, 4=right, 1=up, 2=down. Sometimes blocked by walls. Yellow bar \
-rows 61-62 shrinks every frame regardless of action — unimportant, will set_ignore.
-Plan: Write simulate with block movement. set_ignore(colors=[11]). check().
+Notes: Region A: changes on every transition regardless of action — a \
+consistent rule fits, modeled; behavior at its limit unknown, will observe. \
+Region B: changed on a few transitions only — no consistent rule yet, \
+abstained (UNKNOWN); recorded when it changed and which actions produced \
+those changes; will investigate.
+Plan: Write simulate with the modeled rules. check() — read the abstained \
+log for Region B.
 
 These blocks are carried forward so you don't forget between turns. If you \
 learned nothing new, write "Notes: same as before" and "Plan: same as before".
@@ -631,6 +691,7 @@ __all__ = [
     "PYTHON_TOOL_SCHEMA",
     "SYSTEM_PROMPT",
     "AGENT_SYSTEM_PROMPT",
+    "AGENT_ABSTENTION_ADDENDUM",
     "AGENT_PYTHON_TOOL_SCHEMA",
     "UPDATE_NOTES_TOOL_SCHEMA",
     "LEVEL_TRANSITION_TEXT",

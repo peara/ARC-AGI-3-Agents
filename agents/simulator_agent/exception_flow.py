@@ -64,22 +64,23 @@ def build_exception_flow_message(pending: dict[str, Any]) -> str:
         )
         diagnosis_hint = (
             "A red-boxed image of the diff was attached. "
-            "Diffs far from the moved object = unmodeled board "
-            "animation (timer, event flash), not a movement error. "
-            "Model the trigger in simulate() or exclude those fixed "
-            "regions with set_ignore(cells=[...]). If the diff covers "
-            "where your simulate() drew or cleared the object, see "
+            "Diffs far from the moved object = changes in cells your "
+            "simulate does not model — check()'s abstained log reports "
+            "them. Model the trigger in simulate() if you can, or declare "
+            "UNKNOWN for them. IMPORTANT: once you abstain, "
+            "predict_and_compare no longer flags those cells — check()'s "
+            "abstained log (when those cells change, which actions produced "
+            "it) is your only signal; a region that changes only on "
+            "specific actions is a rule you haven't modeled. If the diff "
+            "covers where your simulate() drew or cleared the object, see "
             "Step 1: the move was likely BLOCKED."
         )
     else:
         n_diff = pending.get("n_diff", 0)
         diagnosis = (
-            f"Your simulate() prediction differed from reality "
-            f"by {n_diff} cells."
+            f"Your simulate() prediction differed from reality by {n_diff} cells."
         )
-        diagnosis_hint = (
-            "Compare your prediction with what actually happened."
-        )
+        diagnosis_hint = "Compare your prediction with what actually happened."
     return EXCEPTION_FLOW_TEXT.format(
         action_id=pending["action_id"],
         action_name=action_name(pending["action_id"]),
