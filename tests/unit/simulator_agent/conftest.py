@@ -19,14 +19,18 @@ from agents.simulator_agent.sandbox import SimulatorSandbox
 # Ensure the project root is on sys.path so that top-level packages like
 # ``agents`` resolve correctly from this sub-directory (mirrors
 # ``tests/unit/entity/conftest.py``).
-_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+_PROJECT_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..")
+)
 _TEST_DIR = os.path.dirname(__file__)
 for _p in (_PROJECT_ROOT, _TEST_DIR):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
 
-def make_mock_step_env_callback(action_id: int, action_data: dict[str, Any] | None = None) -> dict[str, Any]:
+def make_mock_step_env_callback(
+    action_id: int, action_data: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Minimal step_env_callback for live-mode sandbox tests."""
     return {
         "objects": (),
@@ -59,16 +63,17 @@ def make_plain_sandbox() -> SimulatorSandbox:
     s._last_check_result = None
     s._last_bfs_result = None
     s._pending_exception_flow = None
+    s._suppressed_abstained_diffs = 0
     s.pending_images: list[dict[str, Any]] = []
     s._last_action_result: dict[str, Any] = {}
     s.namespace = {}
     s._protected_tools = {}
-    s._ignore_mask: set[tuple[int, int]] = set()
     return s
 
 
 def make_budget_sandbox(budget_seconds: float = 1.0) -> SimulatorSandbox:
     """Create a real live-mode sandbox with a small execution budget."""
+
     def fake_step(action_id: int, action_data: object) -> dict[str, object]:
         return {
             "objects": (),
@@ -111,7 +116,7 @@ def make_seeded_live_sandbox(
     s._last_check_result = None
     s._last_bfs_result = None
     s._pending_exception_flow = None
-    s._ignore_mask: set[tuple[int, int]] = set()
+    s._suppressed_abstained_diffs = 0
     s._prev_correct_frames: set[int] = set()
     s.pending_images: list[dict[str, Any]] = []
     s._pending_notes: dict[str, str] = {}
@@ -122,18 +127,36 @@ def make_seeded_live_sandbox(
     s._protected_tools = {
         k: s.namespace[k]
         for k in (
-            "set_simulate", "simulate", "check", "diagnose", "bfs", "action",
-            "set_ignore", "update_notes", "show_frame", "show_grid",
-            "atoms", "find_objects", "find_color", "diff", "compute_delta",
-            "copy_grid", "count_color", "print_region", "move_region",
-            "get_bbox", "get_frame", "get_action",
+            "set_simulate",
+            "simulate",
+            "check",
+            "diagnose",
+            "bfs",
+            "action",
+            "update_notes",
+            "show_frame",
+            "show_grid",
+            "atoms",
+            "find_objects",
+            "find_color",
+            "diff",
+            "compute_delta",
+            "copy_grid",
+            "count_color",
+            "print_region",
+            "move_region",
+            "get_bbox",
+            "get_frame",
+            "get_action",
         )
         if k in s.namespace
     }
     return s
 
 
-def make_win_callback(action_id: int, action_data: dict[str, Any] | None = None) -> dict[str, Any]:
+def make_win_callback(
+    action_id: int, action_data: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Stubbed step_env_callback: action 1 wins the level, others don't."""
     base = [[0] * 8 for _ in range(8)]
     after = [row[:] for row in base]

@@ -32,8 +32,8 @@ from collections.abc import Callable
 from io import StringIO
 from typing import Any
 
+from agents.simulator_agent.check import UNKNOWN, run_check
 from agents.simulator_agent.check import diagnose as diagnose_fn
-from agents.simulator_agent.check import run_check
 from agents.simulator_agent.frame_layers import (
     diff_count,
     is_board_reset,
@@ -76,7 +76,9 @@ BOARD_RESET_LOGGER = logging.getLogger("simulator.board_reset")
 # run_code() output marker when a batch was hard-aborted by a board reset;
 # agent.py's tool loop detects this substring to end the turn — the raise
 # site (sandbox.py) and the detector (agent.py) must never drift apart.
-BOARD_RESET_MARKER = "[BOARD RESET — level budget exhausted; board restored to start; stop acting]"
+BOARD_RESET_MARKER = (
+    "[BOARD RESET — level budget exhausted; board restored to start; stop acting]"
+)
 
 # ── Sandbox security ──────────────────────────────────────────────────────
 
@@ -283,7 +285,11 @@ class SimulatorSandbox:
         self._last_check_result: dict[str, Any] | None = None
         self._last_bfs_result: list[int] | None = None
         self._pending_exception_flow: dict[str, int] | None = None
-        self._ignore_mask: set[tuple[int, int]] = set()
+        # Persistent count of diffs predict_and_compare suppressed because
+        # every differing cell was abstained (predicted UNKNOWN). Never
+        # reset by predict_and_compare; check()/status reads it (task 4
+        # renders it in the [Simulator state] block).
+        self._suppressed_abstained_diffs: int = 0
         self._prev_correct_frames: set[int] = set()
         self.pending_images: list[dict[str, Any]] = []
 
@@ -318,11 +324,27 @@ class SimulatorSandbox:
         self._protected_tools: dict[str, Any] = {
             k: self.namespace[k]
             for k in (
-                "set_simulate", "simulate", "check", "diagnose", "bfs", "action",
-                "set_ignore", "update_notes", "show_frame", "show_grid",
-                "atoms", "find_objects", "find_color", "diff", "compute_delta",
-                "copy_grid", "count_color", "print_region", "move_region",
-                "get_bbox", "get_frame", "get_action",
+                "set_simulate",
+                "simulate",
+                "check",
+                "diagnose",
+                "bfs",
+                "action",
+                "update_notes",
+                "show_frame",
+                "show_grid",
+                "atoms",
+                "find_objects",
+                "find_color",
+                "diff",
+                "compute_delta",
+                "copy_grid",
+                "count_color",
+                "print_region",
+                "move_region",
+                "get_bbox",
+                "get_frame",
+                "get_action",
             )
             if k in self.namespace
         }
@@ -357,6 +379,7 @@ class SimulatorSandbox:
             self._simulate = frozen
             try:
                 import inspect as _inspect
+
                 src = _inspect.getsource(func)
                 self._simulate_source = src
                 first_line = src.splitlines()[0] if src else "(no source)"
@@ -480,9 +503,7 @@ class SimulatorSandbox:
             # remaining actions never step on the new level's fresh board.
             if self._last_action_result.get("level_completed"):
                 self._transition_pending = True
-                raise LevelTransition(
-                    f"Level completed after action {action_id}"
-                )
+                raise LevelTransition(f"Level completed after action {action_id}")
 
             # Board-reset detection: the response stack is the engine's
             # level-budget flash (uniform animation layers over a board
@@ -492,14 +513,22 @@ class SimulatorSandbox:
             # branch inside predict_and_compare. Detection is independent
             # of simulate registration (works in EXPLORE phase too).
             frame_layers_raw = response.get("frame_layers")
-            if frame_layers_raw and self._grids and is_board_reset(
-                frame_layers_raw, self._grids[0], action_is_reset=is_reset(action_id)
+            if (
+                frame_layers_raw
+                and self._grids
+                and is_board_reset(
+                    frame_layers_raw,
+                    self._grids[0],
+                    action_is_reset=is_reset(action_id),
+                )
             ):
                 self._board_reset_pending = True
                 self._engine_event_transitions.add(len(self._actions) - 1)
                 BOARD_RESET_LOGGER.info(
                     "frame=%d board_reset detected action_id=%s layers=%d diff=%d cells",
-                    len(self._grids) - 1, action_id, len(frame_layers_raw),
+                    len(self._grids) - 1,
+                    action_id,
+                    len(frame_layers_raw),
                     diff_count(frame_layers_raw[-1], self._grids[0]),
                 )
                 BOARD_RESET_LOGGER.debug(
@@ -518,32 +547,11 @@ class SimulatorSandbox:
 
         ns["action"] = action
 
-        # ── Ignore mask ───────────────────────────────────────────────
-        def set_ignore(
-            cells: list[tuple[int, int]] | None = None,
-            colors: list[int] | None = None,
-        ) -> None:
-            """Declare cells to skip in check() and diagnose().
-
-            Pass cells as a list of (row, col) positions, or colors as a list
-            of color indices, or both. All matching cells are excluded from
-            accuracy metrics.
-            """
-            mask: set[tuple[int, int]] = set()
-            if cells:
-                mask.update(cells)
-            if colors:
-                for grid in self._grids:
-                    for r in range(len(grid)):
-                        for c in range(len(grid[0])):
-                            if grid[r][c] in colors:
-                                mask.add((r, c))
-            self._ignore_mask = mask
-            print(
-                f"[set_ignore] {len(self._ignore_mask)} cells will be ignored in check()/diagnose()"
-            )
-
-        ns["set_ignore"] = set_ignore
+        # ── Abstention sentinel ───────────────────────────────────────
+        # Single source of truth: check.UNKNOWN. A simulate writes UNKNOWN
+        # into cells it cannot predict; check()/diagnose() score committed
+        # cells only, predict_and_compare treats abstained cells as equal.
+        ns["UNKNOWN"] = UNKNOWN
 
         # ── Inspection tools (delegated to tools.py) ───────────────────
         ns["atoms"] = segment_atoms
@@ -628,7 +636,6 @@ class SimulatorSandbox:
                 self._grids,
                 self._actions,
                 verbose=True,
-                ignore_mask=self._ignore_mask,
                 skip_transitions=self._engine_event_transitions,
             )
             self._last_check_result = result
@@ -663,7 +670,6 @@ class SimulatorSandbox:
                 fn,
                 self._grids,
                 self._actions,
-                ignore_mask=self._ignore_mask,
                 skip_transitions=self._engine_event_transitions,
             )
 
@@ -686,6 +692,10 @@ class SimulatorSandbox:
             Returns:
                 A list of action IDs, or None if no path found.
                 Requires set_simulate() to be called first.
+
+            Prints ONE warning block per call (never refuses to plan) when
+            expanded states contain UNKNOWN cells — i.e. the simulate
+            abstains somewhere on the search tree.
             """
             if self._simulate is None:
                 print("No simulate function set. Call set_simulate(func) first.")
@@ -715,6 +725,30 @@ class SimulatorSandbox:
             def deep_copy(g: list[list[int]]) -> list[list[int]]:
                 return [row[:] for row in g]
 
+            def has_unknown(g: Any) -> bool:
+                return any(UNKNOWN in row for row in g)
+
+            def warn_unknown(
+                children_with_unknown: int, children_total: int, path_has_unknown: bool
+            ) -> None:
+                """One warning block per bfs() call, never a refusal."""
+                if children_with_unknown <= 0:
+                    return
+                lines = [
+                    f"[bfs] {children_with_unknown} of {children_total} expanded "
+                    f"states contained UNKNOWN cells (your simulate abstains there)."
+                ]
+                if path_has_unknown:
+                    lines.append(
+                        "[The returned path passes through unmodeled cells — "
+                        "it may be unsound.]"
+                    )
+                lines.append(
+                    "Execute in small batches and diff() frames after each — "
+                    "abstained cells that change are rules you haven't modeled."
+                )
+                print("\n".join(lines))
+
             start_hash = grid_hash(start_grid)
             visited: set[tuple[tuple[int, ...], ...]] = {start_hash}
             queue: deque[tuple[list[list[int]], list[int]]] = deque(
@@ -722,6 +756,15 @@ class SimulatorSandbox:
             )
             max_nodes = 50_000
             nodes_expanded = 0
+            # Abstention scan (piggybacks on expansion — near-zero cost):
+            # children_with_unknown counts expanded child states containing
+            # any UNKNOWN cell; path_has_unknown tracks whether the state
+            # that produced the returned path passed through abstained
+            # cells. Computed before every return so all three return
+            # paths (goal-already-reached, path-found, no-path) warn.
+            children_with_unknown = 0
+            children_total = 0
+            path_has_unknown = False
 
             try:
                 if goal_fn(deep_copy(start_grid)):
@@ -732,6 +775,9 @@ class SimulatorSandbox:
                     goal_output = goal_buf.getvalue().strip()
                     if goal_output:
                         print(goal_output)
+                    warn_unknown(
+                        children_with_unknown, children_total, path_has_unknown
+                    )
                     return []
             except Exception as e:
                 print(f"Error in goal_fn: {e}")
@@ -758,6 +804,11 @@ class SimulatorSandbox:
                         continue
                     visited.add(nh)
 
+                    children_total += 1
+                    child_has_unknown = has_unknown(next_grid)
+                    if child_has_unknown:
+                        children_with_unknown += 1
+
                     new_path = path + [action_id]
 
                     try:
@@ -774,12 +825,17 @@ class SimulatorSandbox:
                         goal_output = goal_buf.getvalue().strip()
                         if goal_output:
                             print(goal_output)
+                        path_has_unknown = child_has_unknown or has_unknown(grid)
+                        warn_unknown(
+                            children_with_unknown, children_total, path_has_unknown
+                        )
                         self._last_bfs_result = new_path
                         return new_path
 
                     queue.append((next_grid, new_path))
 
             print(f"No path found within depth {max_depth}.")
+            warn_unknown(children_with_unknown, children_total, path_has_unknown)
             self._last_bfs_result = None
             return None
 
@@ -798,10 +854,12 @@ class SimulatorSandbox:
         On diff: populates self._pending_exception_flow with region fingerprint
         and renders a boxed visual diff into self.pending_images.
 
-        Cells in self._ignore_mask (set via set_ignore) are hidden from the
-        comparison, matching check()/diagnose() semantics — an action whose
-        only diffs are ignored (e.g. HUD timer ticks) produces no exception
-        flow.
+        Cells the simulate abstained on (predicted == UNKNOWN) are excluded
+        from the mismatch comparison, matching check()/diagnose() semantics —
+        an action whose only diffs are abstained cells produces no exception
+        flow, but increments self._suppressed_abstained_diffs so the next
+        check()/status line can surface that the world moved where the model
+        abstained. Any diff on modeled cells fires exactly as before.
 
         On crash: populates self._pending_exception_flow with the traceback tail.
 
@@ -831,26 +889,38 @@ class SimulatorSandbox:
             if (
                 predicted is not None
                 and len(predicted) == len(new_grid)
-                and all(
-                    len(pr) == len(nr)
-                    for pr, nr in zip(predicted, new_grid)
-                )
+                and all(len(pr) == len(nr) for pr, nr in zip(predicted, new_grid))
             ):
-                # Hide ignored cells by making the prediction agree with
-                # reality there — every downstream diff computation then
-                # covers only cells the LLM hasn't declared unimportant.
-                if self._ignore_mask:
-                    mask = self._ignore_mask
+                # UNKNOWN suppression: abstained cells (predicted ==
+                # UNKNOWN) are excluded from the mismatch comparison —
+                # treat as equal. Abstained cells that actually changed
+                # (reality moved them) increment the persistent
+                # _suppressed_abstained_diffs counter, surfaced by the
+                # next check()/status line. A diff confined to abstained
+                # cells produces no exception flow (the quieting
+                # property); modeled-cell diffs fire exactly as before.
+                abstained_changed = sum(
+                    1
+                    for pred_row, prev_row, new_row in zip(
+                        predicted, prev_grid, new_grid
+                    )
+                    for pred_cell, prev_cell, new_cell in zip(
+                        pred_row, prev_row, new_row
+                    )
+                    if pred_cell == UNKNOWN and prev_cell != new_cell
+                )
+                if abstained_changed:
+                    self._suppressed_abstained_diffs += abstained_changed
+                if any(UNKNOWN in row for row in predicted):
+                    # Make abstained cells agree with reality so every
+                    # downstream diff computation covers only modeled
+                    # cells (same mechanism the ignore mask used).
                     predicted = [
                         [
-                            new_cell if (r, c) in mask else cell
-                            for c, (cell, new_cell) in enumerate(
-                                zip(row, new_row)
-                            )
+                            new_grid[r][c] if cell == UNKNOWN else cell
+                            for c, cell in enumerate(row)
                         ]
-                        for r, (row, new_row) in enumerate(
-                            zip(predicted, new_grid)
-                        )
+                        for r, row in enumerate(predicted)
                     ]
                 if predicted != new_grid:
                     n_diff = sum(
@@ -865,21 +935,16 @@ class SimulatorSandbox:
                     def _area(r):
                         return (r[1] - r[0] + 1) * (r[3] - r[2] + 1)
 
-                    sorted_regions = sorted(
-                        raw_regions, key=_area, reverse=True
-                    )[:4]
+                    sorted_regions = sorted(raw_regions, key=_area, reverse=True)[:4]
                     region_info: list[dict[str, Any]] = []
                     for r0, r1, c0, c1 in sorted_regions:
                         trans: Counter = Counter()
                         for r in range(r0, r1 + 1):
                             for c in range(c0, c1 + 1):
                                 if predicted[r][c] != new_grid[r][c]:
-                                    trans[
-                                        (predicted[r][c], new_grid[r][c])
-                                    ] += 1
+                                    trans[(predicted[r][c], new_grid[r][c])] += 1
                         top = ", ".join(
-                            f"{o}->{n}"
-                            for (o, n), _ in trans.most_common(2)
+                            f"{o}->{n}" for (o, n), _ in trans.most_common(2)
                         )
                         region_info.append(
                             {
@@ -908,9 +973,7 @@ class SimulatorSandbox:
                             }
                         )
                     except Exception as img_exc:
-                        logger.warning(
-                            f"failed to render diff image: {img_exc}"
-                        )
+                        logger.warning(f"failed to render diff image: {img_exc}")
                 else:
                     self._pending_exception_flow = None
         except Exception as exc:
@@ -1041,7 +1104,6 @@ class SimulatorSandbox:
         self._grids = []
         self._actions = []
         self._last_check_result = None
-        self._ignore_mask = set()
         self._prev_correct_frames = set()
         self._pending_exception_flow = None
         self._engine_event_transitions = set()
@@ -1276,9 +1338,7 @@ class SimulatorSandbox:
             sys.stdout = before
         self.namespace = self._build_namespace()
         self._protected_tools = {
-            k: self.namespace[k]
-            for k in self._protected_tools
-            if k in self.namespace
+            k: self.namespace[k] for k in self._protected_tools if k in self.namespace
         }
 
     def _make_budget_tracer(self) -> Callable[[Any, str, Any], Any]:
@@ -1333,6 +1393,9 @@ class SimulatorSandbox:
                 "frames_correct": 0,
                 "frames_total": max(len(self._grids) - 1, 0),
                 "regressions": 0,
+                "abstained_changed": 0,
+                "abstained_stable": 0,
+                "coverage": None,
             }
 
         # Need at least 2 grids (before + after) and matching actions
@@ -1343,6 +1406,9 @@ class SimulatorSandbox:
                 "frames_correct": 0,
                 "frames_total": max(len(self._grids) - 1, 0),
                 "regressions": 0,
+                "abstained_changed": 0,
+                "abstained_stable": 0,
+                "coverage": None,
             }
 
         result = run_check(
@@ -1350,7 +1416,6 @@ class SimulatorSandbox:
             self._grids,
             self._actions,
             verbose=False,
-            ignore_mask=self._ignore_mask,
             skip_transitions=self._engine_event_transitions,
         )
 
@@ -1361,6 +1426,9 @@ class SimulatorSandbox:
                 "frames_correct": 0,
                 "frames_total": len(self._grids) - 1,
                 "regressions": 0,
+                "abstained_changed": 0,
+                "abstained_stable": 0,
+                "coverage": None,
             }
 
         current_correct = {
@@ -1375,4 +1443,7 @@ class SimulatorSandbox:
             "frames_correct": result["frames_correct"],
             "frames_total": result["frames_total"],
             "regressions": regressions,
+            "abstained_changed": result["abstained_changed"],
+            "abstained_stable": result["abstained_stable"],
+            "coverage": result["coverage"],
         }
