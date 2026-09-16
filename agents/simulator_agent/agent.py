@@ -1039,7 +1039,13 @@ class SimulatorFirstAgent(LoopAgent):
         return "Recent history:\n" + "\n".join(lines)
 
     def _build_simulate_status(self) -> str:
-        """Build text describing the current simulate function state for the prompt."""
+        """Build text describing the current simulate function state for the prompt.
+
+        Renders ONLY from cached sandbox state (no recompute) so identical
+        state yields byte-identical text (LM Studio prefix-cache stable).
+        Legacy cached checks (no ``schema`` key) degrade silently — the
+        abstention lines are absent, never a KeyError.
+        """
         if self._sandbox._simulate is None:
             return ""
         lines = ["Simulator: registered."]
@@ -1055,55 +1061,43 @@ class SimulatorFirstAgent(LoopAgent):
                 )
             else:
                 lines.append(f"Last check(): {correct}/{total} frames correct.")
+            abst_changed = result.get("abstained_changed", 0)
+            abst_stable = result.get("abstained_stable", 0)
+            if result.get("schema") == 2 and abst_changed + abst_stable > 0:
+                coverage = result.get("coverage")
+                if coverage is not None:
+                    if coverage == 0:
+                        lines.append(
+                            "Last check(): covered 0% of changed cells — you "
+                            "predicted NOTHING of what changed; this is not a pass"
+                        )
+                    else:
+                        committed = result.get("total_correct", 0) + result.get(
+                            "total_wrong", 0
+                        )
+                        lines.append(
+                            f"Last check(): covered {coverage:.1f}% of changed "
+                            f"cells — modeled {committed / total:.1f} cells/frame, "
+                            f"abstained {abst_changed + abst_stable} "
+                            f"({abst_changed} changed)"
+                        )
+                clusters = result.get("abstained_clusters") or []
+                lines.append(
+                    f"abstains: {len(clusters)} regions ({abst_changed} changed, "
+                    f"{abst_stable} stable) — see check() abstained log"
+                )
         elif result and "error" in result:
             lines.append("Last check(): error.")
         else:
             lines.append("No check() run yet. Call check() to test it.")
-        return " ".join(lines)
-
-    @staticmethod
-    def _render_ignore_mask(mask: set[tuple[int, int]]) -> str:
-        """Render an ignore mask as deterministic, sorted range groups.
-
-        Groups contiguous rows; within a row group, contiguous columns.
-        Capped at 6 groups with the remainder summarized, so the rendering
-        is byte-stable for identical masks (LM Studio prefix-cache stability).
-        """
-        if not mask:
-            return "none"
-        cells = sorted(mask)
-        groups: list[tuple[list[int], list[list[int]]]] = []
-        current_rows: list[int] = []
-        current_cols: list[list[int]] = []
-        for row, col in cells:
-            if current_rows and row == current_rows[-1] and current_cols[-1][-1] == col - 1:
-                current_cols[-1].append(col)
-            elif current_rows and row == current_rows[-1]:
-                current_rows.append(row)
-                current_cols.append([col])
-            else:
-                if current_rows:
-                    groups.append((current_rows, current_cols))
-                current_rows = [row]
-                current_cols = [[col]]
-        if current_rows:
-            groups.append((current_rows, current_cols))
-
-        def _fmt_group(rows: list[int], cols: list[list[int]]) -> str:
-            row_part = (
-                f"row {rows[0]}" if rows[0] == rows[-1] else f"rows {rows[0]}-{rows[-1]}"
+        suppressed = getattr(self._sandbox, "_suppressed_abstained_diffs", 0)
+        if isinstance(suppressed, int) and suppressed > 0:
+            lines.append(
+                f"NOTE: {suppressed} diffs on abstained cells were suppressed by "
+                "predict_and_compare since your last check() — the world moved "
+                "where you abstained; run check()"
             )
-            col_parts = [f"col {c[0]}" if len(c) == 1 else f"cols {c[0]}-{c[-1]}" for c in cols]
-            return f"{row_part}, {', '.join(col_parts)}"
-
-        rendered = [_fmt_group(rows, cols) for rows, cols in groups]
-        n_cells = len(cells)
-        if len(rendered) > 6:
-            hidden_groups = len(groups) - 6
-            hidden_cells = sum(len(run) for _, cols in groups[6:] for run in cols)
-            rendered = rendered[:6]
-            rendered.append(f"+{hidden_cells} cells in {hidden_groups} more groups")
-        return f"{n_cells} cells — " + "; ".join(rendered)
+        return " ".join(lines)
 
     def _build_sim_state_block(self) -> str | None:
         """Build the [Simulator state] block, or None when there is nothing to show.
@@ -1118,26 +1112,16 @@ class SimulatorFirstAgent(LoopAgent):
             if isinstance(getattr(sandbox, "_simulate_source", None), str)
             else ""
         )
-        mask = (
-            sandbox._ignore_mask
-            if isinstance(getattr(sandbox, "_ignore_mask", None), set)
-            else set()
-        )
 
-        has_simulate = simulate is not None
-        if not has_simulate and not mask:
+        if simulate is None:
             return None
 
         lines = [f"{SIM_STATE_HEADER} (authoritative; refreshed every call)"]
-        if has_simulate:
-            if source and source != _SOURCE_UNAVAILABLE:
-                lines.append("simulate: registered (frozen copy — helpers fixed at registration)")
-                lines.append(source)
-            else:
-                lines.append("simulate: registered (source not captured this session)")
+        if source and source != _SOURCE_UNAVAILABLE:
+            lines.append("simulate: registered (frozen copy — helpers fixed at registration)")
+            lines.append(source)
         else:
-            lines.append("simulate: not registered")
-        lines.append(f"ignore: {self._render_ignore_mask(mask)}")
+            lines.append("simulate: registered (source not captured this session)")
         return "\n".join(lines)
 
     def _inject_sim_state_block(self, messages: list[dict[str, Any]]) -> None:
@@ -1149,7 +1133,7 @@ class SimulatorFirstAgent(LoopAgent):
         in-place ONLY when it differs (preserves dict identity + LM Studio
         prefix cache); otherwise the block is inserted at index 1 (messages[0]
         is the system message). No-op when the builder returns None
-        (skip-when-empty: no simulate + empty mask).
+        (skip-when-empty: no simulate registered).
 
         Called after the ``_trim_messages_for_context`` rebind and before
         ``_llm_chat``: inject-before-trim would place the block at
@@ -1172,13 +1156,17 @@ class SimulatorFirstAgent(LoopAgent):
 
     def _extra_record_data(self) -> dict[str, Any]:
         """Return agent state for the recording sidecar."""
+        check = self._sandbox._last_check_result
         return {
             "simulator_state": {
                 "world_model": self._world_model,
                 "history_turns": len(self._history_turns),
                 "has_simulate": self._sandbox._simulate is not None,
                 "simulate_source": self._sandbox._simulate_source,
-                "last_check_result": self._sandbox._last_check_result,
+                "last_check_result": check,
+                "abstained_changed": check.get("abstained_changed") if check else None,
+                "abstained_stable": check.get("abstained_stable") if check else None,
+                "coverage": check.get("coverage") if check else None,
                 "n_collected_frames": len(self._sandbox._grids),
             }
         }

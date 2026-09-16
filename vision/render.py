@@ -9,29 +9,37 @@ from vision.palette import ARCADE_PALETTE
 
 logger = logging.getLogger(__name__)
 
+# Render-time mapping for UNKNOWN (-1) cells: a simulate abstains on a cell
+# by writing -1, and show_grid renders such predicted grids. Distinct gray,
+# deliberately NOT a 17th ARCADE_PALETTE entry (palette stays canonical 16).
+UNKNOWN_SWATCH = (128, 128, 128, 255)
+
 def grid_to_image(grid: Sequence[Sequence[int]], scale: int = 4) -> Image.Image:
     """
     Convert a 64×64 int grid to a scaled RGBA Pillow Image.
 
     Args:
-        grid: A 64x64 grid of integers 0-15.
+        grid: A 64x64 grid of integers 0-15, or -1 (UNKNOWN — abstained
+            cell in an agent-produced predicted grid; rendered as a gray
+            swatch). Real frames never contain -1.
         scale: Upscale factor (default 4 → 256×256). Use 8 for 512×512.
 
     Returns:
         A scaled PIL Image.
 
     Raises:
-        ValueError: If grid dimensions are not 64x64 or values are outside [0, 15].
+        ValueError: If grid dimensions are not 64x64 or values are outside
+            {-1} ∪ [0, 15].
     """
     if len(grid) != 64 or any(len(row) != 64 for row in grid):
         raise ValueError("Grid must be 64×64.")
-    if any(cell not in range(16) for row in grid for cell in row):
-        raise ValueError("Grid values must be integers 0–15.")
+    if any(cell not in range(16) and cell != -1 for row in grid for cell in row):
+        raise ValueError("Grid values must be integers 0–15 or -1 (UNKNOWN).")
 
     raw = bytearray()
     for row in grid:
         for idx in row:
-            raw.extend(ARCADE_PALETTE[idx])
+            raw.extend(ARCADE_PALETTE[idx] if idx != -1 else UNKNOWN_SWATCH)
 
     img = Image.frombytes("RGBA", (64, 64), bytes(raw))
     img = img.resize((64 * scale, 64 * scale), Image.NEAREST)
