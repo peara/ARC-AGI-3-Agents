@@ -31,7 +31,14 @@ _RECORDING = Path(
     "eba2a894-9ba7-4dc2-967c-c00eaf3c0f55.recording.jsonl"
 )
 
-pytestmark = pytest.mark.unit
+# reconstruct() drives ReplayHarness → a fresh offline Arcade env, so
+# even the committed-fixture machinery tests need environment_files/.
+# That dir is gitignored: on a fresh clone these tests skip. Filter
+# with ``-m "not live_env"`` or see them in ``-rs`` output.
+pytestmark = [pytest.mark.unit, pytest.mark.live_env]
+
+_ENV_DIR = Path(__file__).resolve().parents[3] / "environment_files"
+_ENV_MISSING = "gitignored environment_files/ not present (local game env)"
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
@@ -286,6 +293,8 @@ _SIM2_DEF = (
 @pytest.fixture(scope="module")
 def mini_state() -> Any:
     """Reconstructed state from the committed mini fixtures (walk once)."""
+    if not _ENV_DIR.is_dir():
+        pytest.skip(_ENV_MISSING)
     if not _MINI_RECORDING.exists() or not _MINI_LLM.exists():
         pytest.fail(
             "mini fixtures missing — regenerate with "
@@ -346,6 +355,8 @@ class TestMachinery:
     ):
         """Seq-8 ok=False row skipped with a logger.warning; its code never
         ran (no 'should not run' side effect possible — actions still match)."""
+        if not _ENV_DIR.is_dir():
+            pytest.skip(_ENV_MISSING)
         with caplog.at_level(logging.WARNING, logger="agents.simulator_agent.reconstruction"):
             state = reconstruct(_MINI_RECORDING, marker=_MINI_MARKER, seed=0)
         assert any(
@@ -357,6 +368,8 @@ class TestMachinery:
     def test_machinery_action_id_guard_loud_error(self, tmp_path):
         """Corrupted fixture copy (line 3's action id 2→3) → loud
         RuntimeError 'action-id mismatch' from the walker's guard."""
+        if not _ENV_DIR.is_dir():
+            pytest.skip(_ENV_MISSING)
         events = [
             json.loads(line)
             for line in _MINI_RECORDING.read_text().splitlines()
@@ -393,6 +406,8 @@ _MARKER = ReplayMarker(turn_frame=12, turn_seq=18)
 
 @pytest.fixture(scope="module")
 def fidelity_state():
+    if not _ENV_DIR.is_dir():
+        pytest.skip(_ENV_MISSING)
     if not _RECORDING.exists():
         pytest.skip(
             "gitignored dev artifact: eba2a894 recording not present; "

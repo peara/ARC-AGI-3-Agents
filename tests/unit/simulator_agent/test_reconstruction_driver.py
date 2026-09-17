@@ -48,7 +48,10 @@ _RECORDING = Path(
 # recording line 12 / LLM-log seq 18 (phase MODEL, 53-message prefix).
 _MARKER = ReplayMarker(turn_frame=12, turn_seq=18)
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.live_env]
+
+_ENV_DIR = Path(__file__).resolve().parents[3] / "environment_files"
+_ENV_MISSING = "gitignored environment_files/ not present (local game env)"
 
 
 # ── Agent seeding (house __new__ pattern, from the archived _build_agent) ─
@@ -156,6 +159,8 @@ def _make_fake_llm() -> Any:
 
 @pytest.fixture(scope="module")
 def driver_state():
+    if not _ENV_DIR.is_dir():
+        pytest.skip(_ENV_MISSING)
     if not _RECORDING.exists():
         pytest.skip("gitignored dev artifact: eba2a894 recording not present")
     return reconstruct(_RECORDING, marker=_MARKER, seed=0)

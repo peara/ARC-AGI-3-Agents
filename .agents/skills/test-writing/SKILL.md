@@ -43,6 +43,14 @@ volatile fields (timestamp, guid) so regeneration is byte-identical, with a
 `--check` mode for drift detection. Keep the generator next to the fixture; a
 fixture without its generator is unpinnable.
 
+Tests that need the env at RUNTIME (not just to regenerate a fixture) — e.g.
+anything calling `Arcade.make`, `ReplayHarness.from_recording`, or
+`reconstruct()` — carry `@pytest.mark.live_env` plus a skip guard on
+`environment_files/` presence (exemplars: `tests/unit/replay/test_replay_harness.py`,
+`tests/unit/simulator_agent/test_reconstruction.py`). Filter them out of a run
+with `-m "not live_env"`; see the skips in `-rs` output. The marker is
+registered in `pytest.ini` (`--strict-markers`).
+
 ## 2. Test real paths, not mocks-of-the-thing-under-test
 
 Avoid mocking the method you are trying to verify. Instead, construct the object

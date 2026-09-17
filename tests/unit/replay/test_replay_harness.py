@@ -28,10 +28,19 @@ from arcengine import FrameData, GameAction
 
 from replay.harness import ReplayHarness
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.live_env]
 
 GAME_ID = "ls20-9607627b"
 SCRIPT = (1, 2, 3, 4, 1, 1, 1, 2, 2, 2)
+
+# environment_files/ is gitignored: on a fresh clone (or any checkout
+# without the local env) these tests cannot run. Filter with
+# ``-m "not live_env"`` or see them in ``-rs`` output.
+_ENV_DIR = Path(__file__).resolve().parents[3] / "environment_files"
+_no_local_env = pytest.mark.skipif(
+    not _ENV_DIR.is_dir(),
+    reason="gitignored environment_files/ not present (local game env)",
+)
 
 
 def _env(tmp_path: Path, *, save_recording: bool = False):
@@ -93,6 +102,8 @@ def recorded(tmp_path_factory) -> tuple[list[FrameData], list[dict[str, Any]], P
     wrapper's LocalEnvironmentWrapper.__init__ calls reset() itself and
     records that frame before the agent's explicit reset().
     """
+    if not _ENV_DIR.is_dir():
+        pytest.skip("gitignored environment_files/ not present (local game env)")
     tmp = tmp_path_factory.mktemp("replay_roundtrip")
     raws, _ = _run_live(tmp, save_recording=True)
     rec_path = _find_recording(tmp)
@@ -225,6 +236,7 @@ class TestLoadContract:
 
 
 class TestEngineDeterminism:
+    @_no_local_env
     def test_determinism_across_fresh_envs(self, tmp_path_factory):
         """Same seed + same actions → identical frames on two fresh envs.
         This is the property that makes round-trip identity possible at all."""
