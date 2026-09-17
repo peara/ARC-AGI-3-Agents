@@ -204,7 +204,9 @@ class TestSimulateStatus:
         )
         status = agent._build_simulate_status()
         assert "covered 42.9% of changed cells" in status
-        assert "abstains: 1 regions (4 changed, 120 stable)" in status
+        assert (
+            "abstains: 1 changed regions (4 changed, 120 stable cells/frame)" in status
+        )
 
     @pytest.mark.unit
     def test_legacy_check_dict_degrades_without_abstention_lines(self):

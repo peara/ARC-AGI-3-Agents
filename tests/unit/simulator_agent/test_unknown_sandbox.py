@@ -526,3 +526,164 @@ def test_unknown_global_prints_minus_one_via_run_code(seeded_live_sandbox) -> No
 
     assert error is None
     assert output == "-1\n"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# (g) F2 review fixes: diagnose abstention semantics, counter reset, bfs flag
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.unit
+def test_diagnose_unknown_over_stable_region_not_spurious(capsys) -> None:
+    """Given a sim that abstains on a region reality leaves stable,
+
+    When diagnose runs,
+
+    Then those abstained cells do NOT count as SPURIOUS (F1: raw grid_diff
+    put every UNKNOWN cell into pred_set — phantom errors the LLM saw).
+    """
+    from agents.simulator_agent.check import diagnose
+
+    g0 = [[0] * 8 for _ in range(8)]
+    g1 = [[0] * 8 for _ in range(8)]
+    g1[0][0] = 3  # one real change, correctly predicted below
+
+    def sim(grid: list[list[int]], action: int) -> list[list[int]]:
+        out = [row[:] for row in grid]
+        out[0][0] = 3  # model the real change
+        out[5][5] = UNKNOWN  # abstain on a stable cell
+        out[5][6] = UNKNOWN
+        return out
+
+    result = diagnose(sim, [g0, g1], [1])
+
+    assert result["total_spurious"] == 0, (
+        "abstained cells over a stable region must not be SPURIOUS"
+    )
+    assert result["total_wrong"] == 0
+    assert result["total_abstained"] == 2
+
+
+@pytest.mark.unit
+def test_diagnose_unknown_over_changed_region_not_missed_not_spurious(
+    capsys,
+) -> None:
+    """Given a sim that abstains on the very cells reality changed,
+
+    When diagnose runs,
+
+    Then those cells are neither MISSED nor SPURIOUS — abstained means
+    not judged (mirrors run_check's abstained_changed bucket).
+    """
+    from agents.simulator_agent.check import diagnose
+
+    g0 = [[0] * 8 for _ in range(8)]
+    g1 = [[0] * 8 for _ in range(8)]
+    g1[2][2] = 3  # reality changes (2,2); sim abstains on it
+
+    def sim(grid: list[list[int]], action: int) -> list[list[int]]:
+        out = [row[:] for row in grid]
+        out[2][2] = UNKNOWN
+        return out
+
+    result = diagnose(sim, [g0, g1], [1])
+
+    assert result["total_missed"] == 0
+    assert result["total_spurious"] == 0
+    assert result["total_wrong"] == 0
+    assert result["total_abstained"] == 1
+
+
+@pytest.mark.unit
+def test_check_resets_suppressed_abstained_diffs_counter(plain_sandbox) -> None:
+    """Given a sandbox with a non-zero _suppressed_abstained_diffs counter,
+
+    When the namespace check() runs,
+
+    Then the counter resets to 0 — the NOTE window is genuinely 'since
+    your last check()' (F2: the counter was never reset, so the NOTE
+    lied about the window).
+    """
+    s = plain_sandbox()
+    s._simulate = _abstaining_sim({(61, 27)})
+    s._suppressed_abstained_diffs = 5
+    # plain_sandbox ships an empty namespace; build the real one so the
+    # production check() closure is exercised.
+    s._grids = [_grid64(), _grid64()]
+    s._actions = [1]
+    s._engine_event_transitions = set()
+    s.namespace = s._build_namespace()
+
+    prev = _grid64()
+    new = _grid64()
+    new[61][27] = 3
+    s.predict_and_compare(prev, new, action_id=4)
+    assert s._suppressed_abstained_diffs == 6
+
+    with contextlib.redirect_stdout(io.StringIO()):
+        s.namespace["check"]()
+
+    assert s._suppressed_abstained_diffs == 0, (
+        "check() must consume the suppressed-diff counter (window = since last check)"
+    )
+
+
+@pytest.mark.unit
+def test_reset_for_level_transition_clears_suppressed_counter(plain_sandbox) -> None:
+    """Given a sandbox with a non-zero suppressed-diff counter,
+
+    When reset_for_level_transition runs,
+
+    Then the counter resets to 0 — level transitions start a fresh
+    NOTE window (F2).
+    """
+    s = plain_sandbox()
+    s._suppressed_abstained_diffs = 9
+
+    s.reset_for_level_transition()
+
+    assert s._suppressed_abstained_diffs == 0
+
+
+@pytest.mark.unit
+def test_bfs_intermediate_unknown_state_carries_bracketed_sentence() -> None:
+    """Given a 2-step path whose INTERMEDIATE state contains UNKNOWN but
+    whose final parent+child states do not,
+
+    When bfs runs,
+
+    Then the bracketed unsoundness sentence still prints (F4: the old
+    final-parent+child check missed intermediate abstained states).
+    """
+
+    # Action 1: move the 2 at (0,0) right AND abstain on (30, 30) — but
+    # ONLY on the first step (when the 2 is still at col 0/1). The second
+    # step's states are fully modeled. The returned path [1, 1] therefore
+    # has UNKNOWN only in its intermediate state.
+    def intermediate_unknown_sim(grid: list[list[int]], action: int) -> list[list[int]]:
+        out = [row[:] for row in grid]
+        if action == 1:
+            if out[0][0] == 2:  # first step from the start state
+                out[30][30] = UNKNOWN
+            for c in range(63, 0, -1):
+                if out[0][c - 1] == 2:
+                    out[0][c - 1] = 0
+                    out[0][c] = 2
+                    break
+        return out
+
+    s = _bfs_sandbox(intermediate_unknown_sim, valid_actions=[1, 2])
+
+    start = _grid64()
+    start[0][0] = 2
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        path = s.namespace["bfs"](start, _goal_cell_2())
+
+    out = buf.getvalue()
+    assert path == [1, 1], "bfs must still return the path (never refuses)"
+    assert out.count("[bfs]") == 1
+    assert (
+        "[The returned path passes through unmodeled cells — it may be unsound.]" in out
+    ), "intermediate-state UNKNOWN must set the path flag"

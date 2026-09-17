@@ -192,7 +192,7 @@ def test_status_abstention_summary_from_cached_schema2_check() -> None:
     )
     status = _status_agent(check)._build_simulate_status()
     assert "covered 42.9% of changed cells" in status
-    assert "abstains: 1 regions (4 changed, 120 stable)" in status
+    assert "abstains: 1 changed regions (4 changed, 120 stable cells/frame)" in status
     assert "see check() abstained log" in status
 
 

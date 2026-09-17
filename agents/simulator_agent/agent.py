@@ -1066,7 +1066,7 @@ class SimulatorFirstAgent(LoopAgent):
             if result.get("schema") == 2 and abst_changed + abst_stable > 0:
                 coverage = result.get("coverage")
                 if coverage is not None:
-                    if coverage == 0:
+                    if coverage < 0.05:
                         lines.append(
                             "Last check(): covered 0% of changed cells — you "
                             "predicted NOTHING of what changed; this is not a pass"
@@ -1075,16 +1075,18 @@ class SimulatorFirstAgent(LoopAgent):
                         committed = result.get("total_correct", 0) + result.get(
                             "total_wrong", 0
                         )
+                        per_frame = committed / total if total else 0.0
                         lines.append(
                             f"Last check(): covered {coverage:.1f}% of changed "
-                            f"cells — modeled {committed / total:.1f} cells/frame, "
+                            f"cells — modeled {per_frame:.1f} cells/frame, "
                             f"abstained {abst_changed + abst_stable} "
                             f"({abst_changed} changed)"
                         )
                 clusters = result.get("abstained_clusters") or []
                 lines.append(
-                    f"abstains: {len(clusters)} regions ({abst_changed} changed, "
-                    f"{abst_stable} stable) — see check() abstained log"
+                    f"abstains: {len(clusters)} changed regions ({abst_changed} "
+                    f"changed, {abst_stable} stable cells/frame) — see check() "
+                    f"abstained log"
                 )
         elif result and "error" in result:
             lines.append("Last check(): error.")

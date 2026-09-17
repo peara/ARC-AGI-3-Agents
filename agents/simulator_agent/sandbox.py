@@ -639,6 +639,10 @@ class SimulatorSandbox:
                 skip_transitions=self._engine_event_transitions,
             )
             self._last_check_result = result
+            # The NOTE window is "since your last check()" — check() consumes
+            # the suppressed-diff counter (agent.py renders it from this
+            # cache, so the reset is invisible in the same-turn status).
+            self._suppressed_abstained_diffs = 0
             return result
 
         ns["check"] = check
@@ -751,8 +755,13 @@ class SimulatorSandbox:
 
             start_hash = grid_hash(start_grid)
             visited: set[tuple[tuple[int, ...], ...]] = {start_hash}
-            queue: deque[tuple[list[list[int]], list[int]]] = deque(
-                [(deep_copy(start_grid), [])]
+            # Queue tuples carry a per-node path_has_unknown flag: True when
+            # ANY state on the path to this node (inclusive) contains UNKNOWN.
+            # The goal-return site reads the dequeued flag, so intermediate
+            # abstained states are never lost (F4: checking only the final
+            # parent+child under-reported).
+            queue: deque[tuple[list[list[int]], list[int], bool]] = deque(
+                [(deep_copy(start_grid), [], has_unknown(start_grid))]
             )
             max_nodes = 50_000
             nodes_expanded = 0
@@ -784,7 +793,7 @@ class SimulatorSandbox:
                 return None
 
             while queue and nodes_expanded < max_nodes:
-                grid, path = queue.popleft()
+                grid, path, path_has_unknown_flag = queue.popleft()
                 nodes_expanded += 1
 
                 if len(path) >= max_depth:
@@ -825,14 +834,20 @@ class SimulatorSandbox:
                         goal_output = goal_buf.getvalue().strip()
                         if goal_output:
                             print(goal_output)
-                        path_has_unknown = child_has_unknown or has_unknown(grid)
+                        path_has_unknown = path_has_unknown_flag or child_has_unknown
                         warn_unknown(
                             children_with_unknown, children_total, path_has_unknown
                         )
                         self._last_bfs_result = new_path
                         return new_path
 
-                    queue.append((next_grid, new_path))
+                    queue.append(
+                        (
+                            next_grid,
+                            new_path,
+                            path_has_unknown_flag or child_has_unknown,
+                        )
+                    )
 
             print(f"No path found within depth {max_depth}.")
             warn_unknown(children_with_unknown, children_total, path_has_unknown)
@@ -1104,6 +1119,7 @@ class SimulatorSandbox:
         self._grids = []
         self._actions = []
         self._last_check_result = None
+        self._suppressed_abstained_diffs = 0
         self._prev_correct_frames = set()
         self._pending_exception_flow = None
         self._engine_event_transitions = set()

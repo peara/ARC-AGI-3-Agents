@@ -128,6 +128,11 @@ def run_check(
 
         if abstained_changed_set:
             abstained_changed_by_transition[i] = abstained_changed_set
+        # Stable-CELL-SET for the cluster line: abstained in this transition
+        # AND abstained-changed in NO transition (a cell that changed in one
+        # transition and was stable in another is NOT "no changes observed").
+        # The cross-transition exclusion is applied after the loop, when the
+        # abstained-changed union is complete.
         abstained_stable_cells.update(
             (r, c)
             for r in range(len(predicted))
@@ -186,6 +191,12 @@ def run_check(
     abstained_clusters = _build_abstained_clusters(
         abstained_changed_by_transition, actions
     )
+    abstained_changed_union: set[tuple[int, int]] = (
+        set().union(*abstained_changed_by_transition.values())
+        if abstained_changed_by_transition
+        else set()
+    )
+    abstained_stable_cells -= abstained_changed_union
 
     if verbose:
         print()
@@ -323,6 +334,7 @@ def diagnose(
     total_missed = 0
     total_spurious = 0
     total_wrong_val = 0
+    total_abstained = 0
     skip = skip_transitions or set()
     all_transitions = max(len(grids) - 1, 0)
     scored_transitions = [i for i in range(all_transitions) if i not in skip]
@@ -346,16 +358,27 @@ def diagnose(
         actual_diff = grid_diff(grid_before, grid_after)
         pred_diff = grid_diff(grid_before, predicted)
 
+        # UNKNOWN-first (mirrors run_check): a cell the model abstained on
+        # (predicted == UNKNOWN) is never judged — it is neither MISSED nor
+        # SPURIOUS. Without this filter every abstained cell would land in
+        # pred_set and count as SPURIOUS (phantom errors).
+        abstained_set = {
+            (r, c)
+            for r in range(len(predicted))
+            for c in range(len(predicted[r]))
+            if predicted[r][c] == UNKNOWN
+        }
         actual_set = {(r, c) for r, c, _, _ in actual_diff}
-        pred_set = {(r, c) for r, c, _, _ in pred_diff}
+        pred_set = {(r, c) for r, c, _, _ in pred_diff if (r, c) not in abstained_set}
 
-        missed = actual_set - pred_set
+        missed = actual_set - pred_set - abstained_set
         spurious = pred_set - actual_set
         wrong_val = {
             (r, c)
             for r, c, _, _ in actual_diff
             if (r, c) in pred_set and predicted[r][c] != grid_after[r][c]
         }
+        n_abstained = len(abstained_set)
 
         n_missed = len(missed)
         n_spurious = len(spurious)
@@ -366,6 +389,7 @@ def diagnose(
         total_missed += n_missed
         total_spurious += n_spurious
         total_wrong_val += n_wrong_val
+        total_abstained += n_abstained
 
         if n_wrong == 0:
             continue
@@ -423,11 +447,14 @@ def diagnose(
     print(
         f"Total errors: {total_wrong} (missed={total_missed}, spurious={total_spurious}, wrong_val={total_wrong_val})"
     )
+    if total_abstained:
+        print(f"Abstained cells (not judged): {total_abstained}")
     return {
         "total_wrong": total_wrong,
         "total_missed": total_missed,
         "total_spurious": total_spurious,
         "total_wrong_val": total_wrong_val,
+        "total_abstained": total_abstained,
         "frames_total": frames_total,
         "skipped_transitions": skipped_transitions,
     }
