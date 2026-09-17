@@ -16,15 +16,18 @@ survivor flag); Task 8 consumes the flag at the agent's turn boundary:
   following turn).
 
 The flash-through-abort-to-message chain is END-TO-END: a real live-mode
-sandbox runs ``run_code('for a in [3,3,4,4,4]: action(a)')`` over the
-d91cdde0 f48 stack (mid-batch abort, marker output, pending flag), then
-the test simulates the NEXT turn boundary exactly as ``run()`` does —
-build the user prompt via ``build_agent_user_prompt`` and apply the same
-injection block semantics — and asserts the full RESET-parity contract.
+sandbox runs ``run_code('for a in [3,3,4,4,4]: action(a)')`` over a real
+flash stack (mid-batch abort, marker output, pending flag), then the test
+simulates the NEXT turn boundary exactly as ``run()`` does — build the
+user prompt via ``build_agent_user_prompt`` and apply the same injection
+block semantics — and asserts the full RESET-parity contract.
 
-Real-stack fixtures load the d91cdde0 recording by path (deliberately
-NOT in tests/reference_recordings.json — plan_cases manifest only).
-corpus[k] == recording frame k-1 (synthetic reset at corpus[0]).
+Fixture: the d91cdde0 recording is unrecoverable, so ``flash_frames``
+loads the committed flash fixture (regenerated from the local ls20
+environment — see ``fixtures/gen_ls20_recordings.py``): ls20 gives a
+42-step budget per board; 43 consecutive ACTION2 moves exhaust it and
+produce the same 6-layer flash stack (5 uniform layers + restored
+board). Move count pinned: 43 (seed=0, deterministic).
 """
 
 from __future__ import annotations
@@ -36,7 +39,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from arcengine import FrameData
+from arcengine import FrameData, GameState
 
 from agents.simulator_agent.agent import SimulatorFirstAgent
 from agents.simulator_agent.frame_layers import settled_board
@@ -56,33 +59,34 @@ from tests.unit.simulator_agent.conftest import make_seeded_live_sandbox
 
 pytestmark = pytest.mark.unit
 
-_RECORDING = Path(
-    "recordings/ls20-9607627b.simulatorfirstagent.simulatorfirst."
-    "d91cdde0-b45a-41b4-9da3-d50985102d94.recording.jsonl"
+_FLASH_FIXTURE = (
+    Path(__file__).resolve().parent.parent.parent
+    / "fixtures" / "recordings" / "ls20-local-flash.recording.jsonl"
 )
+_FLASH_MOVE = 44
 
-_FLASH_48 = 48
 
-
-def _recording_frames(path: Path) -> list[list[list[int]]]:
-    frames: list[list[list[int]]] = []
-    with open(path, encoding="utf-8") as f:
-        for line in f:
+def _load_fixture_frames(path: Path) -> list[list[list[list[int]]]]:
+    frames: list[list[list[list[int]]]] = []
+    with path.open(encoding="utf-8") as fh:
+        for line in fh:
             line = line.strip()
             if not line:
                 continue
-            event = json.loads(line)
-            data = event.get("data", {})
-            if "frame" in data:
+            data = json.loads(line).get("data", {})
+            if data.get("frame") is not None:
                 frames.append(data["frame"])
     return frames
 
 
-@pytest.fixture(scope="module")
-def d91_frames() -> list[list[list[int]]]:
-    if not _RECORDING.exists():
-        pytest.skip("incident recording not present")
-    return _recording_frames(_RECORDING)
+@pytest.fixture(scope="session")
+def flash_frames() -> list[list[list[list[int]]]]:
+    """Real flash stacks from the committed ls20 flash fixture."""
+    if not _FLASH_FIXTURE.is_file():
+        pytest.skip("flash fixture missing")
+    frames = _load_fixture_frames(_FLASH_FIXTURE)
+    assert len(frames) > _FLASH_MOVE, "fixture must contain the flash stack"
+    return frames
 
 
 def _scripted_callback(
@@ -256,12 +260,43 @@ class TestOnBoardResetPurity:
         )
 
 
+class TestBoardResetFlagSurvival:
+    """Recording-free sandbox-level contracts (ported from the deleted
+    incident-replay file; the d91cdde0 recording is unrecoverable)."""
+
+    def test_offline_response_without_frame_layers_no_raise(self) -> None:
+        """Offline replay responses carry no frame_layers key —
+        response.get('frame_layers') returning None means no detection
+        (graceful degradation, reconstruction.py paths unchanged)."""
+        grid = [[5] * 8 for _ in range(8)]
+        calls: list[int] = []
+        response = _normal_response(grid)
+        del response["frame_layers"]
+        responses = [response]
+        sb = _seed_sandbox(_scripted_callback(responses, calls), grid)
+
+        resp = sb.namespace["action"](2)
+
+        assert sb._board_reset_pending is False
+        assert resp is not None
+
+    def test_reset_for_level_transition_preserves_flag(self) -> None:
+        """reset_for_level_transition() clears per-level state but does
+        NOT touch _board_reset_pending (consumption is agent-side)."""
+        sb = make_seeded_live_sandbox(_scripted_callback([], []))
+        sb._board_reset_pending = True
+
+        sb.reset_for_level_transition()
+
+        assert sb._board_reset_pending is True
+
+
 class TestBoardResetTurnBoundaryEndToEnd:
     """Flash → mid-batch abort → next-turn consumption, END-TO-END."""
 
     def test_flash_to_message_chain(
         self,
-        d91_frames: list[list[list[int]]],
+        flash_frames: list[list[list[list[int]]]],
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Scripted run: EXECUTE phase with a registered simulate + bfs
@@ -269,14 +304,14 @@ class TestBoardResetTurnBoundaryEndToEnd:
         flag) → next turn boundary: message injected at top salience,
         path invalidated, phase UNCHANGED, history/corpus retained,
         exactly-once consumption."""
-        level_start = settled_board(d91_frames[0])
-        restored = settled_board(d91_frames[_FLASH_48])
+        level_start = settled_board(flash_frames[0])
+        restored = settled_board(flash_frames[_FLASH_MOVE])
         pre_flash = [row[:] for row in level_start]
         pre_flash[10][10] = 3  # one action of drift from the start board
         calls: list[int] = []
         responses = [
             _normal_response(pre_flash),
-            _flash_response(d91_frames[_FLASH_48], level_start),
+            _flash_response(flash_frames[_FLASH_MOVE], level_start),
         ]
         sb = _seed_sandbox(_scripted_callback(responses, calls), level_start)
         agent = _make_agent(sb)
@@ -414,10 +449,10 @@ class TestBoardResetTurnBoundaryEndToEnd:
 
     def test_board_reset_message_not_injected_on_normal_turn(
         self,
-        d91_frames: list[list[list[int]]],
+        flash_frames: list[list[list[list[int]]]],
     ) -> None:
         """A turn without a pending flag injects nothing (negative case)."""
-        level_start = settled_board(d91_frames[0])
+        level_start = settled_board(flash_frames[0])
         calls: list[int] = []
         responses = [_normal_response([row[:] for row in level_start])]
         sb = _seed_sandbox(_scripted_callback(responses, calls), level_start)
@@ -444,15 +479,15 @@ class TestLevelTransitionPrecedence:
 
     def test_transition_block_clears_history_board_reset_does_not(
         self,
-        d91_frames: list[list[list[int]]],
+        flash_frames: list[list[list[list[int]]]],
     ) -> None:
         """Pin the DELTA between the two sibling blocks: the transition
         block clears history (LEVEL_TRANSITION_TEXT flow), the board-reset
         block preserves it. Both consume their flags exactly once."""
-        level_start = settled_board(d91_frames[0])
-        restored = settled_board(d91_frames[_FLASH_48])
+        level_start = settled_board(flash_frames[0])
+        restored = settled_board(flash_frames[_FLASH_MOVE])
         calls: list[int] = []
-        responses = [_flash_response(d91_frames[_FLASH_48], level_start)]
+        responses = [_flash_response(flash_frames[_FLASH_MOVE], level_start)]
         sb = _seed_sandbox(_scripted_callback(responses, calls), level_start)
         agent = _make_agent(sb)
         agent._workflow.set_phase("EXECUTE", "manual play")
@@ -532,11 +567,11 @@ class TestRefusalBeforeEnvStep:
 
     def test_refused_action_does_not_invoke_callback(
         self,
-        d91_frames: list[list[list[int]]],
+        flash_frames: list[list[list[list[int]]]],
     ) -> None:
-        level_start = settled_board(d91_frames[0])
+        level_start = settled_board(flash_frames[0])
         calls: list[int] = []
-        responses = [_flash_response(d91_frames[_FLASH_48], level_start)]
+        responses = [_flash_response(flash_frames[_FLASH_MOVE], level_start)]
         sb = _seed_sandbox(_scripted_callback(responses, calls), level_start)
 
         with pytest.raises(BoardReset):
@@ -556,16 +591,16 @@ class TestRefusalBeforeEnvStep:
 
     def test_refused_action_keeps_corpus_frozen(
         self,
-        d91_frames: list[list[list[int]]],
+        flash_frames: list[list[list[list[int]]]],
     ) -> None:
-        level_start = settled_board(d91_frames[0])
-        restored = settled_board(d91_frames[_FLASH_48])
+        level_start = settled_board(flash_frames[0])
+        restored = settled_board(flash_frames[_FLASH_MOVE])
         pre_flash = [row[:] for row in level_start]
         pre_flash[10][10] = 3
         calls: list[int] = []
         responses = [
             _normal_response(pre_flash),
-            _flash_response(d91_frames[_FLASH_48], level_start),
+            _flash_response(flash_frames[_FLASH_MOVE], level_start),
         ]
         sb = _seed_sandbox(_scripted_callback(responses, calls), level_start)
 
@@ -593,11 +628,11 @@ class TestRefusalBeforeEnvStep:
 
     def test_refused_action_returns_marker_from_run_code(
         self,
-        d91_frames: list[list[list[int]]],
+        flash_frames: list[list[list[list[int]]]],
     ) -> None:
-        level_start = settled_board(d91_frames[0])
+        level_start = settled_board(flash_frames[0])
         calls: list[int] = []
-        responses = [_flash_response(d91_frames[_FLASH_48], level_start)]
+        responses = [_flash_response(flash_frames[_FLASH_MOVE], level_start)]
         sb = _seed_sandbox(_scripted_callback(responses, calls), level_start)
 
         with pytest.raises(BoardReset):
@@ -614,14 +649,14 @@ class TestRefusalBeforeEnvStep:
 
     def test_swallow_attempt_cannot_block_unwind(
         self,
-        d91_frames: list[list[list[int]]],
+        flash_frames: list[list[list[list[int]]]],
     ) -> None:
         """BoardReset derives from BaseException: sandbox code wrapping
         action() in ``except Exception`` cannot swallow the batch abort —
         the unwind is unconditional and the env is not re-stepped."""
-        level_start = settled_board(d91_frames[0])
+        level_start = settled_board(flash_frames[0])
         calls: list[int] = []
-        responses = [_flash_response(d91_frames[_FLASH_48], level_start)]
+        responses = [_flash_response(flash_frames[_FLASH_MOVE], level_start)]
         sb = _seed_sandbox(_scripted_callback(responses, calls), level_start)
 
         output, error, _ = sb.run_code(
@@ -649,9 +684,9 @@ class TestTransitionRefusalBeforeStep:
 
     def test_transition_refusal_does_not_invoke_callback(
         self,
-        d91_frames: list[list[list[int]]],
+        flash_frames: list[list[list[list[int]]]],
     ) -> None:
-        level_start = settled_board(d91_frames[0])
+        level_start = settled_board(flash_frames[0])
         calls: list[int] = []
         responses = [_normal_response([row[:] for row in level_start])]
         sb = _seed_sandbox(_scripted_callback(responses, calls), level_start)
@@ -692,7 +727,7 @@ class TestBoardResetEndsToolLoop:
         responses: list[dict[str, Any]],
         calls: list[int],
         level_start: list[list[int]],
-        d91_frames: list[list[list[int]]],
+        flash_frames: list[list[list[list[int]]]],
     ) -> SimulatorFirstAgent:
         """Agent wired for run() with a scripted sandbox callback.
 
@@ -701,7 +736,6 @@ class TestBoardResetEndsToolLoop:
         arc_env.
         """
         import numpy as np
-        from arcengine import FrameData, GameState
 
         agent = _make_agent(
             _seed_sandbox(_scripted_callback(responses, calls), level_start)
@@ -727,7 +761,7 @@ class TestBoardResetEndsToolLoop:
 
     def test_tool_loop_exits_after_board_reset_marker(
         self,
-        d91_frames: list[list[list[int]]],
+        flash_frames: list[list[list[list[int]]]],
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """End-to-end through run(): a flash batch aborts, the tool loop
@@ -740,16 +774,16 @@ class TestBoardResetEndsToolLoop:
         TestLevelTransition). The spiral demotion in later turns is a
         harness artifact; phase preservation AT CONSUMPTION is pinned via
         the on_board_reset log line, not the post-run phase."""
-        level_start = settled_board(d91_frames[0])
-        restored = settled_board(d91_frames[_FLASH_48])
+        level_start = settled_board(flash_frames[0])
+        restored = settled_board(flash_frames[_FLASH_MOVE])
         pre_flash = [row[:] for row in level_start]
         pre_flash[10][10] = 3
         calls: list[int] = []
         responses = [
             _normal_response(pre_flash),
-            _flash_response(d91_frames[_FLASH_48], level_start),
+            _flash_response(flash_frames[_FLASH_MOVE], level_start),
         ]
-        agent = self._make_run_agent(responses, calls, level_start, d91_frames)
+        agent = self._make_run_agent(responses, calls, level_start, flash_frames)
         sb = agent._sandbox
 
         def perfect_simulate(grid: list[list[int]], action: int) -> list[list[int]]:
@@ -806,12 +840,12 @@ class TestBoardResetEndsToolLoop:
 
     def test_marker_only_turn_terminates_without_spiral(
         self,
-        d91_frames: list[list[list[int]]],
+        flash_frames: list[list[list[list[int]]]],
     ) -> None:
         """LLM calls action() while the flag is pending (marker-only turn):
         the turn ends on the FIRST python call, no spiral growth beyond the
         single loop iteration, and the flag reaches the boundary unconsumed."""
-        level_start = settled_board(d91_frames[0])
+        level_start = settled_board(flash_frames[0])
         calls: list[int] = []
         responses = [_normal_response([row[:] for row in level_start])]
         sb = _seed_sandbox(_scripted_callback(responses, calls), level_start)

@@ -25,6 +25,24 @@ Exemplars:
 `pytest.ini` sets `python_files = test_*.py`, so renaming a test file needs no
 config change.
 
+**NEVER make tests depend on gitignored files.** `recordings/*.recording.jsonl`,
+`recordings/*.llm.jsonl`, and `environment_files/` are all gitignored — a test
+reading them passes on the author's machine and silently skips (or fails) on
+every fresh clone. Test-consumed recordings are committed fixtures:
+
+- Agent-scoped: `tests/unit/<agent>/fixtures/` (exemplar:
+  `tests/unit/simulator_agent/fixtures/mini.recording.jsonl` + its generator
+  `gen_mini.py`; `ls20-local-win-flash2.recording.jsonl` +
+  `gen_ls20_recordings.py` for the frame-layer incident pins).
+- Cross-cutting: `tests/fixtures/recordings/` (exemplar:
+  `ls20-local-walk.recording.jsonl`, consumed by `tests/reference_recordings.json`
+  manifest plan cases and `tests/unit/test_optitrack_integration.py`).
+
+Generators play the real local environment (deterministic, seed=0) and scrub
+volatile fields (timestamp, guid) so regeneration is byte-identical, with a
+`--check` mode for drift detection. Keep the generator next to the fixture; a
+fixture without its generator is unpinnable.
+
 ## 2. Test real paths, not mocks-of-the-thing-under-test
 
 Avoid mocking the method you are trying to verify. Instead, construct the object

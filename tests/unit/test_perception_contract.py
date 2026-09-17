@@ -22,41 +22,6 @@ def perception_case_id(expect) -> str:
 
 @pytest.mark.unit
 class TestSettledSubframeExtraction:
-    def test_last_subframe_is_settled_state(self):
-        """g50t: last sub-frame continues into the next step's first sub-frame."""
-        g50t = [
-            e for e in load_perception_expectations()
-            if e.recording.name == "g50t-curiosity"
-        ]
-        if not g50t or not g50t[0].recording.path.is_file():
-            pytest.skip("g50t recording not on disk")
-        path = g50t[0].recording.path
-        import json
-
-        raw_frames = []
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                data = json.loads(line).get("data", {})
-                if data.get("frame") is not None:
-                    raw_frames.append(np.asarray(data["frame"]))
-
-        # find a multi-subframe step followed by another frame
-        for t in range(len(raw_frames) - 1):
-            if raw_frames[t].ndim == 3 and raw_frames[t].shape[0] > 1:
-                last = raw_frames[t][-1]
-                first_next = raw_frames[t + 1][0]
-                diff = int(np.sum(last != first_next))
-                assert diff <= 1, (
-                    f"settled continuity broken at step {t}: "
-                    f"{diff} cells differ between last and next-first"
-                )
-                break
-        else:
-            pytest.skip("no multi-subframe pair found")
-
     def test_to_grid_defaults_to_last_subframe(self):
         stack = np.stack(
             [

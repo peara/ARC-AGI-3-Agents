@@ -14,8 +14,21 @@ design (see ``run_code`` docstring):
 Regression anchor: the 2026-09-04 incident run ``fd3925f7`` (ls20) — the LLM's
 ``while ar>8:`` loop over a non-converging ``simulate()`` hung one
 ``run_code()`` execution forever, with no LLM calls and no log output.
+
+COST WARNING — tests marked ``@_zombie_leaking`` deliberately run bare-
+``except:`` infinite loops to force the containment path. The quarantined
+worker thread CANNOT be killed in-process (it swallows even async
+exceptions) and keeps spinning until the pytest process exits. Measured
+impact on this suite: a 0.11s test file takes 32.7s when run after these
+tests (300× slowdown on every later CPU-bound test) — a full-suite run
+cannot finish inside a 10-minute budget with them enabled. They are
+therefore gated behind ``RUN_ZOMBIE_TESTS=1``; the default run skips them
+and the suite completes in ~3.5 minutes. Run them explicitly with:
+
+    RUN_ZOMBIE_TESTS=1 uv run pytest tests/unit/simulator_agent/test_sandbox_safety.py -q
 """
 
+import os
 import sys
 import time
 
@@ -24,6 +37,14 @@ import pytest
 from agents.simulator_agent.sandbox import (
     SandboxBudgetExceeded,
     SimulatorSandbox,
+)
+
+_zombie_leaking = pytest.mark.skipif(
+    os.environ.get("RUN_ZOMBIE_TESTS") != "1",
+    reason=(
+        "spawns unkillable bare-except worker threads that slow every "
+        "subsequent test ~300x; set RUN_ZOMBIE_TESTS=1 to run explicitly"
+    ),
 )
 
 
@@ -102,6 +123,7 @@ class TestContainment:
             "        pass\n"
         )
 
+    @_zombie_leaking
     def test_bare_except_swallow_is_contained(self, budget_sandbox):
         """Worst case: bare `except:` can swallow the tracer raise (CPython
         3.12 pathology at high event counts). Either the tracer raise
@@ -136,6 +158,7 @@ class TestContainment:
         assert raised
         assert sb.namespace.get("action") is not orphan_ns["action"]
 
+    @_zombie_leaking
     def test_sandbox_usable_after_containment(self, budget_sandbox):
         """After a timeout+quarantine, the next run_code works normally on
         the fresh namespace (agent tool loop can resume)."""
@@ -158,6 +181,7 @@ class TestStdoutSafety:
         sb.run_code("x = 0\nwhile True:\n    x += 1\n")
         assert before is sys.stdout
 
+    @_zombie_leaking
     def test_global_stdout_untouched_after_containment(self, budget_sandbox):
         sb = budget_sandbox(budget_seconds=0.05)
         before = sys.stdout

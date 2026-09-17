@@ -7,12 +7,18 @@ import json
 import pytest
 
 from effects.context import EffectContext
+from effects.engine import inject_llm_proposals
+from effects.engine_step_result import run_engine_step
 from effects.rules import Effect, Rule
+from effects.state import SceneState
+from effects.transition_history import TransitionHistory
 from perception.entities import Entity, EntityCatalog, LifecycleState
 from perception.registry import ObjectRegistry, Observation, Track
 from perception.session import RESET_ACTION, PerceptionSession, SceneSnapshot
+from planning.adapters import snapshot_from_scene
 from planning.heuristics import ExplorationConfig
 from planning.rule_first import RuleFirstPolicy
+from planning.search import PlanSpec
 from tests.perception_fixtures import load_manifest
 
 # ---------------------------------------------------------------------------
@@ -458,44 +464,118 @@ def _load_raw_frames(path: str):
 
 @pytest.mark.unit
 class TestRuleFirstOnRecording:
-    """Integration test: RuleFirstPolicy on a recording.
+    """Recording replay through the production learning loop.
 
-    V2 policy should reach directed phase by learning movement rules
-    from entity motion patterns.
+    Drives session.ingest → policy.on_observed → policy.decide →
+    run_engine_step → inject → update_context, mirroring
+    llm_curiosity_agent minus the LLM: a deterministic stand-in derives
+    candidate movement rules from observed transitions the way the LLM
+    rule proposer does, exercising the real inject → predict → confirm →
+    promote pipeline.
     """
+
+    @staticmethod
+    def _observed_transition_rules(
+        observed_transition: tuple[SceneState, int, SceneState],
+    ) -> tuple[Rule, ...]:
+        """Deterministic stand-in for the LLM rule proposer.
+
+        The production proposer reads the observed transition of an
+        unknown action and emits candidate movement rules. Here the same
+        candidates are derived directly from position deltas, so the
+        replay tests exercise the real inject → predict → confirm →
+        promote pipeline without an LLM.
+        """
+        state_before, action, observed = observed_transition
+        proposals: list[Rule] = []
+        for eid in state_before.entity_ids_with_dim("pos"):
+            p0 = state_before.pos(eid)
+            p1 = observed.pos(eid)
+            if p0 is None or p1 is None:
+                continue
+            dr = int(round(p1[0] - p0[0]))
+            dc = int(round(p1[1] - p0[1]))
+            if (dr, dc) == (0, 0):
+                continue
+            proposals.append(
+                Rule(
+                    guard_spec={"action": action},
+                    effects=(Effect("pos", eid, "delta", (dr, dc)),),
+                    support=0,
+                    kind="movement",
+                )
+            )
+        return tuple(proposals)
+
+    @staticmethod
+    def _replay_learning_loop(recording_path: str, max_frames: int) -> RuleFirstPolicy:
+        raw_frames, actions, _, _ = _load_raw_frames(recording_path)
+        session = PerceptionSession()
+        policy = RuleFirstPolicy(
+            action_space=[1, 2, 3, 4],
+            config=ExplorationConfig(min_random_steps=6, seed=42),
+        )
+        history = TransitionHistory()
+
+        engine_step_pending: tuple[SceneState, PlanSpec, int] | None = None
+        for i in range(min(max_frames, len(raw_frames))):
+            scene = session.ingest(raw_frames[i], actions[i])
+            policy.on_observed(scene)
+
+            if engine_step_pending is not None and policy.context is not None:
+                state_before, spec, pending_action = engine_step_pending
+                observed = snapshot_from_scene(scene, spec)
+                if observed is not None:
+                    result = run_engine_step(
+                        ctx=policy.context,
+                        state_before=state_before,
+                        action=pending_action,
+                        observed=observed,
+                        spec=spec,
+                        history=history,
+                    )
+                    ctx = result.ctx
+                    if result.observed_transition is not None:
+                        proposals = TestRuleFirstOnRecording._observed_transition_rules(
+                            result.observed_transition
+                        )
+                        ctx = inject_llm_proposals(ctx, proposals)
+                        history.append(
+                            state_before=state_before,
+                            action=pending_action,
+                            state_after=observed,
+                            frame_idx=scene.frame_idx,
+                        )
+                    policy.update_context(ctx)
+                engine_step_pending = None
+
+            policy.decide(scene)
+            state = policy._snapshot_state(scene)
+            if (
+                state is not None
+                and policy.context is not None
+                and i + 1 < len(raw_frames)
+            ):
+                # The next frame is produced by the RECORDED action, not
+                # the policy's choice (replay, not live play).
+                engine_step_pending = (
+                    state,
+                    policy._engine_plan_spec(scene),
+                    actions[i + 1],
+                )
+        return policy
 
     def test_rule_first_reaches_directed_phase(self):
         cases = [c for c in load_manifest() if c.recording.path.is_file()]
         if not cases:
             pytest.skip("no reference recordings available")
 
-        # Prefer wa30, fall back to first available
-        wa30_cases = [c for c in cases if "wa30" in c.recording.name]
-        case = wa30_cases[0] if wa30_cases else cases[0]
+        case = cases[0]
+        policy = self._replay_learning_loop(str(case.recording.path), max_frames=30)
 
-        raw_frames, actions, _, _ = _load_raw_frames(str(case.recording.path))
-        if not raw_frames:
-            pytest.skip("recording file has no frames")
-
-        session = PerceptionSession()
-        policy = RuleFirstPolicy(
-            action_space=[1, 2, 3, 4],
-            config=ExplorationConfig(min_random_steps=6, seed=42),
-        )
-
-        max_frames = min(30, len(raw_frames))
-        last_action = RESET_ACTION
-
-        for i in range(max_frames):
-            scene = session.ingest(raw_frames[i], last_action)
-            policy.on_observed(scene)
-            action = policy.decide(scene)
-            last_action = action
-
-        # V2 should learn movement rules
-        assert policy.context is not None, "V2 should build an EffectContext"
+        assert policy.context is not None, "should build an EffectContext"
         assert len(policy.context.movement_rules) > 0, (
-            "V2 should learn movement rules for multiple entities"
+            "learning loop should confirm movement rules from replayed motion"
         )
 
     def test_rule_first_no_crash_on_recording(self):
@@ -504,21 +584,5 @@ class TestRuleFirstOnRecording:
             pytest.skip("no reference recordings available")
 
         case = cases[0]
-        raw_frames, actions, _, _ = _load_raw_frames(str(case.recording.path))
-        if not raw_frames:
-            pytest.skip("recording file has no frames")
-
-        session = PerceptionSession()
-        policy = RuleFirstPolicy(
-            action_space=[1, 2, 3, 4],
-            config=ExplorationConfig(min_random_steps=6, seed=42),
-        )
-
-        max_frames = min(50, len(raw_frames))
-        last_action = RESET_ACTION
-
-        for i in range(max_frames):
-            scene = session.ingest(raw_frames[i], last_action)
-            policy.on_observed(scene)
-            action = policy.decide(scene)
-            last_action = action
+        policy = self._replay_learning_loop(str(case.recording.path), max_frames=50)
+        assert policy.context is not None

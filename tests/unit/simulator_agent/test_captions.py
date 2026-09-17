@@ -33,7 +33,7 @@ if _TEST_DIR not in sys.path or sys.path.index(_PROJECT_ROOT) < sys.path.index(_
 
 @pytest.fixture
 def seeded_live_sandbox_factory():
-    from conftest import make_seeded_live_sandbox
+    from tests.unit.simulator_agent.conftest import make_seeded_live_sandbox
 
     return make_seeded_live_sandbox
 

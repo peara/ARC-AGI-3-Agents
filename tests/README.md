@@ -25,7 +25,15 @@ uv run pytest tests/unit/test_planning.py -v
 - `entity_id` — controllable entity from `track_recording` / entity catalog for that file.
 - `start_frame` / `goal_frame` — BFS plans between player positions at those frames.
 
-Tests parametrize over every `plan_case` in the manifest. Missing files fail `test_manifest_paths_exist`.
+Tests parametrize over every `plan_case` in the manifest. Missing files skip the parametrized cases (the manifest loader filters on `path.is_file()`).
+
+## Reference recordings
+
+Test-consumed recordings are committed fixtures, never gitignored dev
+artifacts (see the test-writing skill). The manifest's `ls20-local-walk`
+entry points at `tests/fixtures/recordings/ls20-local-walk.recording.jsonl`
+(18 events: init-RESET + 16 maze-walking moves; regenerable with
+`uv run python tests/unit/simulator_agent/fixtures/gen_ls20_recordings.py`).
 
 ## Manual check (same cases as tests)
 

@@ -14,9 +14,27 @@ from __future__ import annotations
 
 import pytest
 
+import grouping.heuristics
 from entity.builder import EntityBuilder
 from perception.registry import ObjectRegistry, Observation, Track
 from tests.conftest import make_confirming_combined_engine
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _no_adjacency_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Disable the co_movement cell-adjacency pre-filter for ID-stability tests.
+
+    These tests build minimal tracks with empty cell sets; the adjacency
+    pre-filter (ADJACENCY_MIN_FRAMES, 41a1376) would drop every co_movement
+    proposal before the confirming LLM sees it. Adjacency has dedicated
+    coverage in tests/unit/test_grouping.py.
+    """
+    monkeypatch.setattr(grouping.heuristics, "ADJACENCY_MIN_FRAMES", 0)
+
 
 # ---------------------------------------------------------------------------
 # Helpers

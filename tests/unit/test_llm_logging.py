@@ -7,12 +7,10 @@ import os
 
 import pytest
 
-from agents.llm_client import ChatResponse
 from agents.recorder import LLM_LOG_SUFFIX, Recorder
 from agents.templates.llm_logging import (
     MAX_CONTENT_CHARS,
     LlmCallLogger,
-    LLMTruncationError,
     wrap_llm_call,
 )
 
@@ -39,24 +37,24 @@ def _read_jsonl(path: str) -> list[dict]:
         return [json.loads(line) for line in f if line.strip()]
 
 
-def _ok_llm(messages: list[dict[str, str]], *, thinking=None, max_tokens=None) -> str:
+# Fakes take **kwargs because wrap_llm_call forwards its whole keyword
+# surface (thinking, max_tokens, temperature, top_p, tools, tool_choice).
+
+
+def _ok_llm(messages: list[dict[str, str]], **kwargs) -> str:
     return "ok"
 
 
-def _hello_llm(messages: list[dict[str, str]], *, thinking=None, max_tokens=None) -> str:
+def _hello_llm(messages: list[dict[str, str]], **kwargs) -> str:
     return "hello world"
 
 
-def _four_llm(messages: list[dict[str, str]], *, thinking=None, max_tokens=None) -> str:
+def _four_llm(messages: list[dict[str, str]], **kwargs) -> str:
     return "4"
 
 
-def _raising_llm(messages: list[dict[str, str]], *, thinking=None, max_tokens=None) -> str:
+def _raising_llm(messages: list[dict[str, str]], **kwargs) -> str:
     raise ValueError("bad model")
-
-
-def _truncated_llm(messages: list[dict[str, str]], *, thinking=None, max_tokens=None) -> ChatResponse:
-    return ChatResponse(content="partial response...", finish_reason="length")
 
 
 # ===========================================================================
@@ -174,47 +172,6 @@ class TestLlmCallLogger:
         ev = events[0]
         assert ev["truncated"] is False
         assert ev["messages"][0]["content"] == short_content
-
-    def test_finish_reason_length_marks_truncated(self, tmp_path: pytest.Path) -> None:
-        """When finish_reason is 'length', the event is marked truncated."""
-        logger = _make_logger(tmp_path)
-        fake_llm = _truncated_llm
-        wrapped = wrap_llm_call(fake_llm, logger, kind="planner")
-
-        result = wrapped([{"role": "user", "content": "go"}])
-
-        assert isinstance(result, ChatResponse)
-        assert result.finish_reason == "length"
-
-        events = _read_jsonl(logger.path)
-        ev = events[0]
-        assert ev["truncated"] is True
-        assert ev["finish_reason"] == "length"
-
-    def test_strict_mode_raises_on_truncation(self, tmp_path: pytest.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """LLM_STRICT_MODE=true causes LLMTruncationError on finish_reason='length'."""
-        monkeypatch.setenv("LLM_STRICT_MODE", "true")
-        logger = _make_logger(tmp_path)
-        fake_llm = _truncated_llm
-        wrapped = wrap_llm_call(fake_llm, logger, kind="planner")
-
-        with pytest.raises(LLMTruncationError, match="truncated"):
-            wrapped([{"role": "user", "content": "go"}])
-
-        events = _read_jsonl(logger.path)
-        assert events[0]["truncated"] is True
-        assert events[0]["finish_reason"] == "length"
-
-    def test_strict_mode_off_does_not_raise(self, tmp_path: pytest.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Without LLM_STRICT_MODE, truncation is logged but no exception raised."""
-        monkeypatch.delenv("LLM_STRICT_MODE", raising=False)
-        logger = _make_logger(tmp_path)
-        fake_llm = _truncated_llm
-        wrapped = wrap_llm_call(fake_llm, logger, kind="planner")
-
-        result = wrapped([{"role": "user", "content": "go"}])
-        assert isinstance(result, ChatResponse)
-        assert result.finish_reason == "length"
 
     # -------------------------------------------------------------------
     # 4. Monotonic seq

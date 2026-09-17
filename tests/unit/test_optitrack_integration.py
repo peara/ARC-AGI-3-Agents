@@ -29,8 +29,8 @@ WA30_RECORDING = (
 )
 
 LS20_RECORDING = (
-    _RECORDINGS_DIR
-    / "ls20-9607627b.llmcuriosity.00c39d56-c738-4bba-af9f-58f7b53aa0f9.recording.jsonl"
+    Path(__file__).resolve().parent.parent / "fixtures" / "recordings"
+    / "ls20-local-walk.recording.jsonl"
 )
 
 

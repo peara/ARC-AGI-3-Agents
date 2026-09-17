@@ -140,7 +140,7 @@ class TestTruncationDetection:
         """When finish_reason='length', the JSONL event has truncated=true."""
         logger = _make_logger(tmp_path)
 
-        def truncated_llm(messages, *, thinking=None, max_tokens=None):
+        def truncated_llm(messages, **kwargs):
             return ChatResponse(content="partial response", finish_reason="length")
 
         wrapped = wrap_llm_call(truncated_llm, logger, kind="planner")
@@ -161,7 +161,7 @@ class TestTruncationDetection:
         """When finish_reason='stop', the event is not truncated."""
         logger = _make_logger(tmp_path)
 
-        def normal_llm(messages, *, thinking=None, max_tokens=None):
+        def normal_llm(messages, **kwargs):
             return ChatResponse(content="hello", finish_reason="stop")
 
         wrapped = wrap_llm_call(normal_llm, logger, kind="planner")
@@ -207,7 +207,7 @@ class TestStrictMode:
         monkeypatch.setenv("LLM_STRICT_MODE", "true")
         logger = _make_logger(tmp_path)
 
-        def truncated_llm(messages, *, thinking=None, max_tokens=None):
+        def truncated_llm(messages, **kwargs):
             return ChatResponse(content="partial", finish_reason="length")
 
         wrapped = wrap_llm_call(truncated_llm, logger, kind="planner")
@@ -222,7 +222,7 @@ class TestStrictMode:
         monkeypatch.delenv("LLM_STRICT_MODE", raising=False)
         logger = _make_logger(tmp_path)
 
-        def truncated_llm(messages, *, thinking=None, max_tokens=None):
+        def truncated_llm(messages, **kwargs):
             return ChatResponse(content="partial", finish_reason="length")
 
         wrapped = wrap_llm_call(truncated_llm, logger, kind="planner")

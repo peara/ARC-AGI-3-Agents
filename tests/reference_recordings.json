@@ -1,14 +1,17 @@
 {
   "recordings": [
     {
-      "name": "ls20-random-legal",
-      "path": "recordings/ls20-9607627b.random.80.a4c1812d-d46e-4f04-bc3b-3cd4bb812247.recording.jsonl",
+      "name": "ls20-local-walk",
+      "path": "tests/fixtures/recordings/ls20-local-walk.recording.jsonl",
       "plan_cases": [
-        {"entity_id": 0, "start_frame": 0, "goal_frame": 10},
-        {"entity_id": 0, "start_frame": 0, "goal_frame": 40}
+        {
+          "entity_id": 13,
+          "start_frame": 2,
+          "goal_frame": 10
+        }
       ],
       "perception": {
-        "controllable_entity_id": 0,
+        "controllable_entity_id": 13,
         "min_counters": 0,
         "min_animation_events": 0
       },
@@ -16,58 +19,6 @@
         "expect_terminal_rule": false,
         "expect_counter_rule": true
       }
-    },
-    {
-      "name": "g50t-curiosity",
-      "path": "recordings/g50t-5849a774.curiosity.200.31c022a3-dd4e-4ebe-8ad9-c237c6053bb1.recording.jsonl",
-      "plan_cases": [],
-      "perception": {
-        "controllable_entity_id": 0,
-        "min_counters": 1,
-        "min_animation_events": 1
-      },
-      "effects": {
-        "expect_terminal_rule": true,
-        "expect_counter_rule": true
-      }
-    },
-    {
-      "name": "ls20-gameover",
-      "path": "recordings/ls20-9607627b.llmcuriosity.978d496a-e522-47b3-b422-cafb764e56c2.recording.jsonl",
-      "plan_cases": [],
-      "perception": {
-        "controllable_entity_id": 0,
-        "min_counters": 0,
-        "min_animation_events": 0
-      },
-      "effects": {
-        "expect_terminal_rule": true,
-        "expect_counter_rule": true
-      }
-    },
-    {
-      "name": "wa30-human-reset",
-      "path": "recordings/wa30.human.697d5e3e-6233-492b-9678-d5e0d5800ef6.recording.jsonl",
-      "plan_cases": [],
-      "perception": {
-        "controllable_entity_id": 0,
-        "min_counters": 0,
-        "min_animation_events": 0
-      },
-      "effects": {
-        "expect_terminal_rule": true,
-        "expect_counter_rule": true
-      }
-    },
-    {
-      "name": "ls20-simulatorfirst-b3a8ef1f",
-      "path": "recordings/ls20-9607627b.simulatorfirstagent.simulatorfirst.b3a8ef1f-cdab-47c6-9be5-67d0375e7d23.recording.jsonl",
-      "plan_cases": []
-    },
-    {
-      "name": "ls20-simulatorfirst-11fe642e",
-      "path": "recordings/ls20-9607627b.simulatorfirstagent.simulatorfirst.11fe642e-0edb-4b97-85b4-eefdf35a498f.recording.jsonl",
-      "plan_cases": []
     }
   ]
 }

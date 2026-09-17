@@ -5,14 +5,14 @@ Incident anchor: 2026-09-08 run d91cdde0-b45a-41b4-9da3-d50985102d94
 animation stacks; the agent mis-picked the settled layer and mis-read
 the level-reset flash. Continuity evidence baked into these fixtures:
 
-- flash 48 diff profile ``[4014, 4014, 4014, 4014, 4014, 52]`` →
-  settled = LAST layer;
-- highlight 19/20 diff profile ``[0, 0, 0, 0, 0, 76]`` → next frame
-  continues from layer 0 (falsifies always-last) → settled = FIRST;
-- win 70 diff profile ``[1459, 54]`` → settled = LAST.
+- flash stacks of 5 uniform layers + restored board → settled = LAST;
+- highlight stacks of 5 identical base layers + 1 highlighted → next
+  frame continues from layer 0 (falsifies always-last) → settled = FIRST;
+- win stacks of 2 non-uniform layers → settled = LAST.
 
-The incident recording is loaded by path (it is deliberately NOT in
-tests/reference_recordings.json — that manifest is plan_cases-only).
+The original recording is unrecoverable; the incident-replay section
+pins against the committed win+flash2 fixture (regenerated from the
+same stack taxonomy — see ``fixtures/gen_ls20_recordings.py``).
 """
 
 from __future__ import annotations
@@ -33,11 +33,6 @@ from agents.simulator_agent.frame_layers import (
 )
 
 pytestmark = pytest.mark.unit
-
-_RECORDING = Path(
-    "recordings/ls20-9607627b.simulatorfirstagent.simulatorfirst."
-    "d91cdde0-b45a-41b4-9da3-d50985102d94.recording.jsonl"
-)
 
 # --- synthetic stack builders (game-agnostic: colours are arbitrary) ---
 
@@ -204,38 +199,59 @@ class TestDiffCount:
         assert diff_count([[1, 1]], [[1, 1], [1, 1]]) == 2
 
 
-# --- incident recording d91cdde0 ---
+# --- committed win+flash2 fixture (d91cdde0 successor) ---
+
+
+_WIN_FLASH2_FIXTURE = (
+    Path(__file__).resolve().parent / "fixtures" / "ls20-local-win-flash2.recording.jsonl"
+)
 
 
 @pytest.fixture(scope="module")
 def frames() -> list[list[list[list[int]]]]:
-    if not _RECORDING.exists():
-        pytest.skip("incident recording not present")
-    with _RECORDING.open() as fh:
-        return [json.loads(line)["data"]["frame"] for line in fh]
+    """Real ls20 stacks from the committed win+flash2 fixture.
+
+    The original incident recording (d91cdde0, 2026-09-08) is
+    unrecoverable; this fixture regenerates the same stack taxonomy
+    deterministically (see ``fixtures/gen_ls20_recordings.py``):
+    13 solved level-1 moves (key pickup at event 7, LEVEL_WIN at event
+    14, level-2 start at event 15), then 24 budget-burning moves
+    trigger the level-2 flash at event 36. Multi-layer events:
+    7 (HIGHLIGHT), 14 (LEVEL_WIN), 36 (FLASH_RESET).
+    """
+    if not _WIN_FLASH2_FIXTURE.is_file():
+        pytest.skip("win+flash2 fixture missing")
+    stacks: list[list[list[list[int]]]] = []
+    with _WIN_FLASH2_FIXTURE.open(encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            data = json.loads(line).get("data", {})
+            if data.get("frame") is not None:
+                stacks.append(data["frame"])
+    return stacks
 
 
 class TestIncidentClassification:
-    """Pin the classifier against the real d91cdde0 stacks."""
+    """Pin the classifier against real ls20 stacks."""
 
     def test_single_frames(self, frames):
-        for i in (0, 47, 50):
+        for i in (0, 5, 37):
             assert classify_stack(frames[i]) is StackClass.SINGLE, f"frame {i}"
 
     def test_flash_frames(self, frames):
-        for i in (48, 92):
-            assert classify_stack(frames[i]) is StackClass.FLASH_RESET, f"frame {i}"
+        assert classify_stack(frames[36]) is StackClass.FLASH_RESET
 
     def test_highlight_frames(self, frames):
-        for i in (19, 20, 21, 35, 38, 61):
-            assert classify_stack(frames[i]) is StackClass.HIGHLIGHT, f"frame {i}"
+        assert classify_stack(frames[7]) is StackClass.HIGHLIGHT
 
     def test_win_frame(self, frames):
-        assert classify_stack(frames[70]) is StackClass.LEVEL_WIN
+        assert classify_stack(frames[14]) is StackClass.LEVEL_WIN
 
     def test_flash_layer_profile(self, frames):
-        # d91cdde0 flash 48: 6 layers, 5 uniform + 1 non-uniform settled.
-        stack = frames[48]
+        # flash 36: 6 layers, 5 uniform animation + 1 non-uniform settled.
+        stack = frames[36]
         assert len(stack) == 6
         assert len({len(row) for row in stack[0]}) == 1
         assert all(
@@ -244,121 +260,100 @@ class TestIncidentClassification:
         )
 
     def test_highlight_layer_profile(self, frames):
-        # d91cdde0 highlight 19: 6 layers, 5 identical base + 1 different.
-        stack = frames[19]
+        # highlight 7: 6 layers, 5 identical base + 1 different.
+        stack = frames[7]
         assert len(stack) == 6
         assert stack[0] == stack[1] == stack[2] == stack[3] == stack[4]
         assert stack[5] != stack[0]
 
     def test_win_layer_profile(self, frames):
-        # d91cdde0 win 70: 2 layers, both non-uniform.
-        stack = frames[70]
-        assert len(stack) == 2
+        # win 14: 2 layers, both non-uniform.
+        assert len(frames[14]) == 2
 
 
 class TestIncidentBoardReset:
-    """Pin the detector against the real d91cdde0 resets.
+    """Pin the detector against real ls20 resets.
 
-    Recording frames are already ``[layer][row][col]`` stacks, so the
+    Fixture frames are already ``[layer][row][col]`` stacks, so the
     level-start BOARD is ``settled_board(frames[i])`` of a 1-layer frame.
     """
 
-    def test_fires_on_flash_48(self, frames):
-        level_start = settled_board(frames[0])
-        assert is_board_reset(frames[48], level_start) is True
+    def test_fires_on_level2_flash(self, frames):
+        level_start = settled_board(frames[15])
+        assert is_board_reset(frames[36], level_start) is True
 
-    def test_fires_on_flash_92(self, frames):
-        # Level 2 starts at frames 70/71 (win at 70 → new level board 71).
-        level_start = settled_board(frames[71])
-        assert is_board_reset(frames[92], level_start) is True
-
-    def test_silent_on_highlights_and_win(self, frames):
+    def test_silent_on_highlight_and_win(self, frames):
         level_start = settled_board(frames[0])
-        for i in (19, 20, 21, 35, 38, 61, 70):
+        for i in (7, 14):
             assert is_board_reset(frames[i], level_start) is False, f"frame {i}"
 
     def test_one_layer_never_fires_despite_small_diff(self, frames):
-        # Frame 50 vs the frame-0 level start: distance 58 ≤ 128, but C1
-        # (len(layers) > 1) fails → no fire.
-        level_start = settled_board(frames[0])
-        assert is_board_reset(frames[50], level_start) is False
+        # Frame 37 (first post-flash frame) vs the level-2 start: within
+        # TOL, but C1 (len(layers) > 1) fails → no fire.
+        level_start = settled_board(frames[15])
+        assert is_board_reset(frames[37], level_start) is False
 
     def test_c4_explicit_reset_action_suppresses(self, frames):
-        level_start = settled_board(frames[0])
-        assert is_board_reset(frames[48], level_start, action_is_reset=True) is False
+        level_start = settled_board(frames[15])
+        assert is_board_reset(frames[36], level_start, action_is_reset=True) is False
 
 
 class TestIncidentSettledIdentity:
     """Byte-identity and continuity pins from the incident evidence."""
 
     def test_single_frame_identity(self, frames):
-        # frames[0] is a 1-layer stack: settled board IS its only layer.
         assert settled_board(frames[0]) is frames[0][0]
-        assert settled_board(frames[50]) is frames[50][0]
+        assert settled_board(frames[37]) is frames[37][0]
 
     def test_flash_settled_is_last_layer(self, frames):
-        assert settled_board(frames[48]) is frames[48][-1]
+        assert settled_board(frames[36]) is frames[36][-1]
 
     def test_highlight_settled_is_first_layer(self, frames):
-        assert settled_board(frames[19]) is frames[19][0]
+        assert settled_board(frames[7]) is frames[7][0]
 
     def test_win_settled_is_last_layer(self, frames):
-        assert settled_board(frames[70]) is frames[70][-1]
+        assert settled_board(frames[14]) is frames[14][-1]
 
     def test_frame0_byte_equality(self, frames):
         assert settled_board(frames[0]) == frames[0][0]
 
 
-class TestD91cdde0SweepPin:
-    """Pin the full sweep output for d91cdde0 (scripts/scan_frame_stacks.py).
+class TestLocalSweepPin:
+    """Pin the full sweep output for the win+flash2 fixture.
 
-    Regression fixture for the 2026-09-09 sampled corpus sweep: the
-    recording must classify as exactly 2 FLASH_RESET (48, 92), 6
-    HIGHLIGHT (19, 20, 21, 35, 38, 61) and 1 LEVEL_WIN (70), with C3
-    (settled ≈ level-start ≤ TOL) satisfied on both flashes.
+    Regression fixture mirroring the sampled-corpus sweep (see
+    scripts/scan_frame_stacks.py): the fixture must classify as exactly
+    1 FLASH_RESET (36), 1 HIGHLIGHT (7) and 1 LEVEL_WIN (14), with C3
+    (settled ≈ level-start ≤ TOL) satisfied on the flash.
     """
 
-    def test_multi_layer_frames_exactly_nine(self, frames):
+    def test_multi_layer_frames_exactly_three(self, frames):
         multi = [i for i, f in enumerate(frames) if len(f) > 1]
-        assert multi == [19, 20, 21, 35, 38, 48, 61, 70, 92]
+        assert multi == [7, 14, 36]
 
-    def test_flash_frames_are_48_and_92(self, frames):
-        flashes = [i for i, f in enumerate(frames) if classify_stack(f) is StackClass.FLASH_RESET]
-        assert flashes == [48, 92]
+    def test_flash_frames_are_36(self, frames):
+        flashes = [
+            i for i, f in enumerate(frames)
+            if classify_stack(f) is StackClass.FLASH_RESET
+        ]
+        assert flashes == [36]
 
-    def test_highlight_frames_are_the_six_known(self, frames):
-        highlights = [i for i, f in enumerate(frames) if classify_stack(f) is StackClass.HIGHLIGHT]
-        assert highlights == [19, 20, 21, 35, 38, 61]
+    def test_highlight_frames_are_the_known(self, frames):
+        highlights = [
+            i for i, f in enumerate(frames)
+            if classify_stack(f) is StackClass.HIGHLIGHT
+        ]
+        assert highlights == [7]
 
-    def test_win_frame_is_70(self, frames):
-        wins = [i for i, f in enumerate(frames) if classify_stack(f) is StackClass.LEVEL_WIN]
-        assert wins == [70]
+    def test_win_frame_is_14(self, frames):
+        wins = [
+            i for i, f in enumerate(frames)
+            if classify_stack(f) is StackClass.LEVEL_WIN
+        ]
+        assert wins == [14]
 
-    def test_c3_holds_on_both_flashes(self, frames):
-        level_starts = _level_start_boards(frames)
-        for i in (48, 92):
-            settled = settled_board(frames[i])
-            start = level_starts[i]
-            tol = reset_tol(len(start) * len(start[0]))
-            assert diff_count(settled, start) <= tol, f"frame {i}"
-
-
-def _level_start_boards(frames: list[list[list[list[int]]]]) -> list[list[list[int]]]:
-    """Mirror the sweep's level-start tracker (settled board at the last
-    ``levels_completed`` increment; frame 0 for level 1)."""
-    import json as _json
-
-    data_frames: list[dict] = []
-    with _RECORDING.open() as fh:
-        for line in fh:
-            data_frames.append(_json.loads(line)["data"])
-    starts: list[list[list[int]]] = []
-    last_level: int | None = None
-    start_board: list[list[int]] | None = None
-    for d in data_frames:
-        levels = d.get("levels_completed")
-        if last_level is None or levels != last_level or start_board is None:
-            start_board = settled_board(d["frame"])
-            last_level = levels
-        starts.append(start_board)
-    return starts
+    def test_c3_holds_on_flash(self, frames):
+        level_start = settled_board(frames[15])
+        settled = settled_board(frames[36])
+        tol = reset_tol(len(level_start) * len(level_start[0]))
+        assert diff_count(settled, level_start) <= tol
