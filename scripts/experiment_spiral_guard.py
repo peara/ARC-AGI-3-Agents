@@ -27,11 +27,12 @@ Variant policies (patched into the production tool loop per run):
   nudge4    nudge at 4 non-action calls (patched SPIRAL_NUDGE_TEXT)
   explore   phase-aware switch at threshold with a visible message;
             EXPLORE-phase spirals keep force-MODEL
-  nudge4+explore  both (= current production semantics)
-  prompt    f5-firstsim only: production guard + patched prompts —
-            MODEL directive gains a census + locator-verification step
-            before set_simulate(); sandbox-tools text gains the pre-reg
-            checklist. Measures: first check() accuracy.
+  nudge4+explore  both (= current production guard semantics)
+  prompt    LEGACY prompts (pre-2026-09-22): census-free directives —
+            production adopted the census + locator-verification +
+            collision-check directives on 2026-09-22 (the prompt arm was
+            the only one to reach 100% sim -> PLAN -> EXECUTE), so
+            'prompt' now patches the OLD prompts back in as the control
   guardmsg  production guard + patched _apply_spiral_phase_switch: the
             message branches on whether a simulate is registered (never
             claims "rewriting simulate is not working" when none exists)
@@ -159,45 +160,36 @@ EXPLORE_SWITCH_TEXT = (
 )
 
 # ── 'prompt' variant texts ─────────────────────────────────────────────────
-# Evidence (fdb596e0 vs ed693237, identical system prompt md5): the 0% sim
-# located the player via color 12 OR 9, but 9 also appears in two static
-# decorations (bbox poisoned); and it had no wall-collision check (walls
-# are 4, floor is 3 — the notes said the reverse). ed693237 hit 96.2%
-# first try because it had run a global color census and located by the
-# unique color. Nothing in the production prompt requires either check.
+# Legacy (pre-2026-09-22) directive texts: production adopted the census +
+# locator-verification + collision-check directives after the 2026-09-18
+# arms (the prompt arm was the only one to reach 100% sim -> PLAN ->
+# EXECUTE), so the 'prompt' variant now RESTORES these as the control.
+# Evidence for the original change (fdb596e0 vs ed693237, identical system
+# prompt md5): the 0% sim located the player via color 12 OR 9, but 9
+# also appears in two static decorations (bbox poisoned); and it had no
+# wall-collision check (walls are 4, floor is 3 — the notes said the
+# reverse). ed693237 hit 96.2% first try because it had run a global
+# color census and located by the unique color.
 
-PROMPT_MODEL_DIRECTIVE = (
+LEGACY_MODEL_DIRECTIVE = (
     "PHASE: MODEL. Write a simulate(grid, action) function, call "
     "set_simulate(), then call check() to test accuracy. If wrong cells "
     "appear, use diagnose(), fix simulate, and re-check. You don't need "
-    "100% accuracy. Before you register: (1) census — count_color() each "
-    "color and note which are unique vs reused by static objects; "
-    "(2) locator — locate your controllable object ONLY by a color "
-    "confirmed unique, then run your locator on current_frame and verify "
-    "the bbox matches where the object actually is; (3) collisions — "
-    "verify against the observed blocking (what destination cells are "
-    "legal), not just board edges. Call set_phase('PLAN') when check is "
-    "good enough. Call set_phase('EXECUTE') with reason='manual play' to "
-    "skip planning."
+    "100% accuracy. Call set_phase('PLAN') when check is good enough. "
+    "Call set_phase('EXECUTE') with reason='manual play' to skip planning."
 )
 
-# The recorded f5 turn opened in EXPLORE (the f4 guardrail had switched
-# MODEL→EXPLORE) and the first simulate was written under the EXPLORE
-# directive — patch it too, else the variant text is never seen at
-# sim-writing time.
-PROMPT_EXPLORE_DIRECTIVE = (
+LEGACY_EXPLORE_DIRECTIVE = (
     "PHASE: EXPLORE. Take 1 of each available action to learn what moves. "
-    "Use atoms(), diff(), find_color() to identify objects. Early in "
-    "exploration, run a color census — count_color() each color once and "
-    "note in update_notes which colors are unique to one object vs reused "
-    "by static decorations; when you later write simulate, locate objects "
-    "ONLY by a color confirmed unique. Call update_notes when you learn a "
-    "mechanic. Keep this short — 4-8 actions. Call set_phase('MODEL') when "
-    "ready to build a simulator. If you decide this game can't be "
-    "simulated, call set_phase('EXECUTE') with reason='manual play' to "
-    "play without a simulator."
+    "Use atoms(), diff(), find_color() to identify objects. Call "
+    "update_notes when you learn a mechanic. Keep this short — 4-8 "
+    "actions. Call set_phase('MODEL') when ready to build a simulator. "
+    "If you decide this game can't be simulated, call set_phase('EXECUTE') "
+    "with reason='manual play' to play without a simulator."
 )
 
+# The production pre-reg line (prompts.py), duplicated here because the
+# variant strips it from both the module string and the seed messages.
 PROMPT_PRE_REG_LINE = (
     "PRE-REGISTRATION SELF-CHECK: before calling set_simulate(), run your "
     "locator on current_frame and confirm the found bbox matches the "
@@ -543,19 +535,22 @@ def _apply_variant(variant: str) -> dict[str, Any]:
         from agents.simulator_agent import prompts as prompts_mod
         from agents.simulator_agent import workflow as workflow_mod
 
-        workflow_mod.PHASE_DIRECTIVES[workflow_mod.Phase.MODEL] = PROMPT_MODEL_DIRECTIVE
+        # 'prompt' is now the LEGACY control: production carries the
+        # census/locator/collision directives, so the variant strips them
+        # back out (module strings + seed messages, below).
+        workflow_mod.PHASE_DIRECTIVES[workflow_mod.Phase.MODEL] = LEGACY_MODEL_DIRECTIVE
         workflow_mod.PHASE_DIRECTIVES[workflow_mod.Phase.EXPLORE] = (
-            PROMPT_EXPLORE_DIRECTIVE
+            LEGACY_EXPLORE_DIRECTIVE
         )
         # AGENT_SYSTEM_PROMPT is pre-concatenated at import time and the
-        # seed's system message is recorded verbatim from the OLD prompt —
-        # so the module strings alone reach nothing. Patch the seed
-        # messages in-place (see _patch_seed_prompts); patch the module
-        # strings too so any later rebuild uses the variant text.
+        # seed's system message is recorded verbatim from the CURRENT
+        # prompt — so the module strings alone reach nothing. Patch the
+        # seed messages in-place (see _patch_seed_prompts); patch the
+        # module strings too so any later rebuild uses the variant text.
         prompts_mod.AGENT_SYSTEM_PROMPT = prompts_mod.AGENT_SYSTEM_PROMPT.replace(
-            "\nVALIDATION:", PROMPT_PRE_REG_LINE + "\n\nVALIDATION:"
+            PROMPT_PRE_REG_LINE + "\n\n", ""
         )
-        applied["prompt_patch"] = "census+locator+collision directives"
+        applied["prompt_patch"] = "legacy census-free directives"
         applied["seed_prompt_patch"] = True
 
     if "guardmsg" in variant:
@@ -751,23 +746,18 @@ def _substitute_images(agent: Any, state: Any) -> None:
 
 
 def _patch_seed_prompts(messages: list[dict[str, Any]]) -> None:
-    """Apply the 'prompt' variant to the recorded seed conversation.
+    """Apply the 'prompt' (legacy) variant to the recorded seed conversation.
 
-    The seed is the recorded conversation verbatim: its system message is
-    the OLD prompt, and the turn-opening user block carries the OLD phase
-    directive (EXPLORE for the f5-firstsim scenario — the first simulate
-    was written under the EXPLORE directive). Patch both in-place so the
-    variant text is what the LLM actually sees.
+    Direction-aware: the seed is the recorded conversation verbatim. Seeds
+    recorded before 2026-09-22 carry the census-free directives (already
+    legacy — nothing to strip); seeds recorded after production adopted
+    the census/locator/collision directives carry the new texts, which
+    this patch removes in-place so the variant text is what the LLM
+    actually sees.
     """
     for m in messages:
         if m.get("role") == "system" and isinstance(m.get("content"), str):
-            if (
-                "\nVALIDATION:" in m["content"]
-                and PROMPT_PRE_REG_LINE not in m["content"]
-            ):
-                m["content"] = m["content"].replace(
-                    "\nVALIDATION:", PROMPT_PRE_REG_LINE + "\n\nVALIDATION:"
-                )
+            m["content"] = m["content"].replace(PROMPT_PRE_REG_LINE + "\n\n", "")
         if m.get("role") == "user" and isinstance(m.get("content"), list):
             for part in m["content"]:
                 if not (
@@ -777,10 +767,10 @@ def _patch_seed_prompts(messages: list[dict[str, Any]]) -> None:
                 ):
                     continue
                 text = part["text"]
-                if text.startswith("PHASE: MODEL.") and "census" not in text:
-                    part["text"] = PROMPT_MODEL_DIRECTIVE
-                if text.startswith("PHASE: EXPLORE.") and "census" not in text:
-                    part["text"] = PROMPT_EXPLORE_DIRECTIVE
+                if text.startswith("PHASE: MODEL.") and "census" in text:
+                    part["text"] = LEGACY_MODEL_DIRECTIVE
+                if text.startswith("PHASE: EXPLORE.") and "census" in text:
+                    part["text"] = LEGACY_EXPLORE_DIRECTIVE
 
 
 # ── Main experiment ────────────────────────────────────────────────────────
