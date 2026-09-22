@@ -79,10 +79,10 @@ class WorkflowController:
     def escape_fired(self) -> bool:
         """True while an escape guardrail has fired in the current spiral.
 
-        The tool loop uses this to suppress the forced set_phase('MODEL') —
-        otherwise it re-fires every iteration at >=24 non-action calls and
-        undoes the MODEL→EXPLORE rescue (incident a21a2571: rescue fired,
-        forced MODEL pulled the phase back, spiral continued to the cap).
+        The tool loop uses this to suppress the spiral phase switch —
+        otherwise it re-fires every iteration at >=12 non-action calls and
+        oscillates EXPLORE↔MODEL (incident a21a2571: rescue fired, forced
+        MODEL pulled the phase back, spiral continued to the cap).
         Cleared by update() (turn boundary / after each action) — i.e. on
         every spiral reset.
         """
@@ -92,14 +92,20 @@ class WorkflowController:
         """Apply guardrails. Called once per turn BEFORE the LLM call."""
         self._action_counter = action_counter
         frame = action_counter - 1
-        logger.info("frame=%d phase=%s actions=%d", frame, self._phase.value, action_counter)
+        logger.info(
+            "frame=%d phase=%s actions=%d", frame, self._phase.value, action_counter
+        )
 
         self._escape_fired = False
 
         # Guardrail: auto-advance from EXPLORE after 10 actions
         if self._phase == Phase.EXPLORE and action_counter >= 10:
             self._phase = Phase.MODEL
-            logger.info("frame=%d guardrail: EXPLORE→MODEL (action_counter=%d)", frame, action_counter)
+            logger.info(
+                "frame=%d guardrail: EXPLORE→MODEL (action_counter=%d)",
+                frame,
+                action_counter,
+            )
 
         self.apply_escape_guardrails()
         return self._phase
@@ -121,7 +127,10 @@ class WorkflowController:
             self._phase = Phase.EXPLORE
             self._check_failures = 0
             self._escape_fired = True
-            logger.warning("frame=%d guardrail: MODEL→EXPLORE (5 consecutive check failures)", frame)
+            logger.warning(
+                "frame=%d guardrail: MODEL→EXPLORE (5 consecutive check failures)",
+                frame,
+            )
             return True
 
         # Guardrail: after 3 exception flows, back to EXPLORE
@@ -131,7 +140,9 @@ class WorkflowController:
             self._exception_flow_count = 0
             self._last_path = None
             self._escape_fired = True
-            logger.warning("frame=%d guardrail: %s→EXPLORE (3 exception flows)", frame, old_phase)
+            logger.warning(
+                "frame=%d guardrail: %s→EXPLORE (3 exception flows)", frame, old_phase
+            )
             return True
 
         return False
@@ -152,7 +163,9 @@ class WorkflowController:
 
         # Gate: can't enter PLAN without simulate registered
         if phase == Phase.PLAN and self._sandbox._simulate is None:
-            logger.info("frame=%d set_phase→PLAN REJECTED: no simulate registered", frame)
+            logger.info(
+                "frame=%d set_phase→PLAN REJECTED: no simulate registered", frame
+            )
             return False, (
                 "Cannot enter PLAN without a registered simulate. "
                 "Call set_phase('MODEL') first."
@@ -161,11 +174,17 @@ class WorkflowController:
         # Gate: can't enter EXECUTE without simulate UNLESS reason declares manual play
         if phase == Phase.EXECUTE and self._sandbox._simulate is None:
             manual_keywords = {
-                "manual", "can't simulate", "cannot simulate",
-                "no simulate", "skip simulate",
+                "manual",
+                "can't simulate",
+                "cannot simulate",
+                "no simulate",
+                "skip simulate",
             }
             if not any(kw in reason.lower() for kw in manual_keywords):
-                logger.info("frame=%d set_phase→EXECUTE REJECTED: no simulate (reason lacks manual keyword)", frame)
+                logger.info(
+                    "frame=%d set_phase→EXECUTE REJECTED: no simulate (reason lacks manual keyword)",
+                    frame,
+                )
                 return False, (
                     "Cannot enter EXECUTE without simulate. "
                     "Call set_phase('MODEL') first, or set_phase('EXECUTE') "
@@ -177,8 +196,13 @@ class WorkflowController:
         # Reset counters on phase change
         if phase == Phase.EXPLORE:
             self._check_failures = 0
-        logger.info("frame=%d set_phase %s→%s reason='%s'",
-                    frame, old_phase, phase.value, reason[:80])
+        logger.info(
+            "frame=%d set_phase %s→%s reason='%s'",
+            frame,
+            old_phase,
+            phase.value,
+            reason[:80],
+        )
         return True, f"Phase changed to {phase.value}.\n\n{PHASE_DIRECTIVES[phase]}"
 
     def on_check_result(self, result: dict[str, Any] | None) -> None:
@@ -187,18 +211,24 @@ class WorkflowController:
             return
         if "error" in result:
             self._check_failures += 1
-            logger.debug("frame=%d check: error (failures=%d)",
-                         self._action_counter - 1, self._check_failures)
+            logger.debug(
+                "frame=%d check: error (failures=%d)",
+                self._action_counter - 1,
+                self._check_failures,
+            )
             return
         wrong = result.get("wrong_cells", 999)
         if wrong > 0:
             self._check_failures += 1
-            logger.debug("frame=%d check: wrong_cells=%d (failures=%d)",
-                         self._action_counter - 1, wrong, self._check_failures)
+            logger.debug(
+                "frame=%d check: wrong_cells=%d (failures=%d)",
+                self._action_counter - 1,
+                wrong,
+                self._check_failures,
+            )
         else:
             self._check_failures = 0
-            logger.debug("frame=%d check: ok (failures=0)",
-                         self._action_counter - 1)
+            logger.debug("frame=%d check: ok (failures=0)", self._action_counter - 1)
 
     def on_bfs_result(self, path: list[int] | None) -> None:
         """Called after bfs() runs in the sandbox."""
@@ -206,7 +236,9 @@ class WorkflowController:
         if path is None:
             logger.debug("frame=%d bfs: no path", self._action_counter - 1)
         else:
-            logger.debug("frame=%d bfs: path len=%d", self._action_counter - 1, len(path))
+            logger.debug(
+                "frame=%d bfs: path len=%d", self._action_counter - 1, len(path)
+            )
 
     def on_exception_flow(self) -> None:
         """Called when simulate prediction differs from reality."""
@@ -214,8 +246,12 @@ class WorkflowController:
         self._exception_flow_count += 1
         self._phase = Phase.MODEL
         self._last_path = None  # invalidate the failed path
-        logger.info("frame=%d exception_flow #%d %s→MODEL (path invalidated)",
-                    self._action_counter - 1, self._exception_flow_count, old_phase)
+        logger.info(
+            "frame=%d exception_flow #%d %s→MODEL (path invalidated)",
+            self._action_counter - 1,
+            self._exception_flow_count,
+            old_phase,
+        )
 
     def on_board_reset(self) -> None:
         """Board-reset consumption: invalidate the path, preserve everything else.
@@ -248,7 +284,9 @@ class WorkflowController:
         old_phase = self._phase.value
         logger.info(
             "frame=%d level_transition %s→EXPLORE reason='%s'",
-            frame, old_phase, reason[:80],
+            frame,
+            old_phase,
+            reason[:80],
         )
         self._phase = Phase.EXPLORE
         self._check_failures = 0
@@ -312,11 +350,18 @@ class SpiralGuard:
 
     Pure policy, no I/O: ``record()`` takes the current counter and returns
     the new counter plus which thresholds were crossed. The agent performs
-    the side effects (nudge message, set_phase('MODEL'), terminate).
+    the side effects (nudge message, phase switch, terminate).
+
+    Thresholds (2026-09-18, incident ed693237 — 36-call spiral, 30 nudges
+    ignored; local-LLM calls cost 30-100s, so 12 pre-nudge calls ≈ 10+
+    idle minutes): nudge at 4, phase switch at 12, terminate at 36. A
+    normal MODEL turn (simulate build + check + diagnose) runs 15-19
+    calls, so the nudge text explicitly licenses one probe before acting
+    (SPIRAL_NUDGE_TEXT) — the phase switch, not the nudge, is the lever.
     """
 
-    NUDGE_AT = 12
-    PHASE_MODEL_AT = 24
+    NUDGE_AT = 4
+    PHASE_MODEL_AT = 12
     TERMINATE_AT = 36
 
     @classmethod

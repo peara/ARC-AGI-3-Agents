@@ -60,6 +60,7 @@ from agents.simulator_agent.reset_policy import ResetSeedTracker, is_reset
 from agents.simulator_agent.sandbox import BOARD_RESET_MARKER, SimulatorSandbox
 from agents.simulator_agent.workflow import (
     SET_PHASE_TOOL_SCHEMA,
+    Phase,
     SpiralGuard,
     WorkflowController,
 )
@@ -76,6 +77,17 @@ logger = logging.getLogger(__name__)
 ITER0_RESET_PROVENANCE = "iteration 0: env RESET — initial observation"
 MIDGAME_RESET_PROVENANCE = (
     "mid-game RESET (action 0): env re-observe — not a world transition"
+)
+
+# Anti-spiral nudge text (SpiralGuard NUDGE_AT). Module-level seam: the
+# spiral-guard experiment swaps variants; the loop body stays variant-agnostic.
+# Wall-clock aware (local LLM: 30-100s/call — incident ed693237 burned 10+
+# idle minutes before the first nudge): licenses ONE probe, then demands
+# action on the very next call.
+SPIRAL_NUDGE_TEXT = (
+    "You have made several tool calls without taking an action. "
+    "If you need one quick probe first, do it — then act on the very next "
+    "call: use the python tool to call action() with one of the valid actions."
 )
 
 # Header of the injected [Simulator state] block (see _build_sim_state_block).
@@ -155,8 +167,6 @@ class SimulatorFirstAgent(LoopAgent):
     def name(self) -> str:
         return f"{super().name}.simulatorfirst"
 
-
-
     def _exception_flow_can_fire(self, action_id: int) -> bool:
         return self._exception_flow_fired_for != action_id
 
@@ -233,7 +243,9 @@ class SimulatorFirstAgent(LoopAgent):
 
             # Available actions
             self._valid_actions = (
-                list(latest_frame.available_actions) if latest_frame.available_actions else []
+                list(latest_frame.available_actions)
+                if latest_frame.available_actions
+                else []
             )
 
             # ── 3. Render grid image ───────────────────────────────────
@@ -294,7 +306,9 @@ class SimulatorFirstAgent(LoopAgent):
             )
 
             if transition_active:
-                user_content[0]["content"].insert(0, {"type": "text", "text": transition_msg})
+                user_content[0]["content"].insert(
+                    0, {"type": "text", "text": transition_msg}
+                )
 
             # Board-reset turn (RESET-parity): the engine flashed and restored
             # the board to the level start. Runs AFTER the LevelTransition
@@ -362,6 +376,56 @@ class SimulatorFirstAgent(LoopAgent):
             if not self._transition_ended_turn:
                 self._history_messages = self._persistent_history_messages(messages)
 
+    def _apply_spiral_phase_switch(self, messages: list[dict[str, Any]]) -> None:
+        """Phase intervention at the SpiralGuard PHASE_MODEL_AT threshold.
+
+        Phase-aware (incident ed693237: the silent force-MODEL fired 6× as
+        MODEL→MODEL no-ops — invisible, and it re-licensed the very
+        perfectionism that caused the spiral):
+        - MODEL-phase spiral → switch to EXPLORE with a VISIBLE message:
+          rewriting simulate() is not working; act to gather fresh context.
+        - other-phase spiral → force MODEL (the historical lever).
+
+        One-shot per spiral (``_escape_fired``, cleared on action/turn
+        boundary): without it the switch re-fires every iteration ≥
+        PHASE_MODEL_AT and oscillates EXPLORE→MODEL→EXPLORE (a21a2571
+        pattern).
+        """
+        if self._workflow.phase is Phase.MODEL:
+            n = self._non_action_calls
+            logger.warning(
+                "simulatorfirst: frame=%d guardrail: %d consecutive "
+                "non-action calls in MODEL — MODEL→EXPLORE",
+                self.action_counter - 1,
+                n,
+            )
+            self._workflow.set_phase(
+                "EXPLORE",
+                reason="consecutive-tool-call-cap: MODEL-phase spiral",
+            )
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        f"GUARDRAIL: {n} consecutive tool calls without "
+                        "acting while in MODEL phase. Repeatedly rewriting "
+                        "simulate() is not working — it keeps failing to "
+                        "match reality. Phase switched MODEL → EXPLORE. "
+                        "Stop fixing simulate() for now. Take 2-3 actions "
+                        "in the environment to gather fresh context: "
+                        "after each action, diff(previous_frame, "
+                        "current_frame) and read what actually changed. "
+                        "Then decide — either fix simulate() from the new "
+                        "evidence, or declare manual play "
+                        "(set_phase('EXECUTE', reason='manual play')) and "
+                        "keep acting."
+                    ),
+                }
+            )
+        else:
+            self._workflow.set_phase("MODEL", reason="consecutive-tool-call-cap")
+        self._workflow._escape_fired = True  # noqa: SLF001 — one-shot per spiral
+
     # ── Inner tool loop (extracted from run()) ────────────────────────────
 
     def _run_tool_loop(
@@ -383,7 +447,6 @@ class SimulatorFirstAgent(LoopAgent):
         max_tool_steps = 100
 
         for step in range(max_tool_steps):
-
             # ── Anti-spiral guard (per iteration) ──────────────────
             verdict = SpiralGuard.record(
                 self._non_action_calls, took_action=action_taken_id is not None
@@ -393,10 +456,7 @@ class SimulatorFirstAgent(LoopAgent):
                 messages.append(
                     {
                         "role": "user",
-                        "content": (
-                            "You have not taken an action in the last 12 tool calls. "
-                            "Use the python tool to call action() now."
-                        ),
+                        "content": SPIRAL_NUDGE_TEXT,
                     }
                 )
             if verdict.phase_model:
@@ -411,9 +471,9 @@ class SimulatorFirstAgent(LoopAgent):
                     logger.warning(
                         f"simulatorfirst: frame={self.action_counter - 1} guardrail: "
                         f"{self._non_action_calls} consecutive non-action calls — "
-                        f"set_phase('MODEL')"
+                        f"spiral phase switch"
                     )
-                    self._workflow.set_phase("MODEL", reason="consecutive-tool-call-cap")
+                    self._apply_spiral_phase_switch(messages)
 
             # ── End condition check (per iteration) ────────────────
             latest_frame = self.frames[-1]
@@ -448,7 +508,11 @@ class SimulatorFirstAgent(LoopAgent):
                 self._inject_sim_state_block(messages)
                 response = self._llm_chat(
                     messages=messages,
-                    tools=[AGENT_PYTHON_TOOL_SCHEMA, UPDATE_NOTES_TOOL_SCHEMA, SET_PHASE_TOOL_SCHEMA],
+                    tools=[
+                        AGENT_PYTHON_TOOL_SCHEMA,
+                        UPDATE_NOTES_TOOL_SCHEMA,
+                        SET_PHASE_TOOL_SCHEMA,
+                    ],
                     tool_choice="auto",
                 )
             except Exception as exc:
@@ -685,9 +749,7 @@ class SimulatorFirstAgent(LoopAgent):
             tool_result_parts.append(f"Error: {error}")
 
         tool_result_text = (
-            "\n".join(tool_result_parts)
-            if tool_result_parts
-            else "(no output)"
+            "\n".join(tool_result_parts) if tool_result_parts else "(no output)"
         )
 
         # Append pending images from sandbox (show_frame, show_grid)
@@ -698,9 +760,7 @@ class SimulatorFirstAgent(LoopAgent):
             content_parts.append(
                 {
                     "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/png;base64,{img['b64']}"
-                    },
+                    "image_url": {"url": f"data:image/png;base64,{img['b64']}"},
                 }
             )
             content_parts.append(
@@ -727,9 +787,7 @@ class SimulatorFirstAgent(LoopAgent):
 
         # ── Exception flow injection ────────────────────────
         pending = getattr(self._sandbox, "_pending_exception_flow", None)
-        if pending and self._exception_flow_can_fire(
-            pending["action_id"]
-        ):
+        if pending and self._exception_flow_can_fire(pending["action_id"]):
             messages.append(
                 {
                     "role": "user",
@@ -747,9 +805,11 @@ class SimulatorFirstAgent(LoopAgent):
     ) -> None:
         """Mid-turn prompt refresh (T2): rebuild the frame user prompt in
         place after an action so the next LLM call sees the post-action grid."""
-        new_grid_b64 = image_to_base64(
-            grid_to_image(self._current_grid, scale=8)
-        ) if self._current_grid else grid_b64
+        new_grid_b64 = (
+            image_to_base64(grid_to_image(self._current_grid, scale=8))
+            if self._current_grid
+            else grid_b64
+        )
         new_user_content = build_agent_user_prompt(
             grid_image_b64=new_grid_b64,
             world_model_text="",
@@ -872,9 +932,7 @@ class SimulatorFirstAgent(LoopAgent):
             if self.action_counter == 1 and not self._history_turns:
                 self._record_iter0_reset_history(frame)
             else:
-                self._append_history(
-                    0, frame, provenance=MIDGAME_RESET_PROVENANCE
-                )
+                self._append_history(0, frame, provenance=MIDGAME_RESET_PROVENANCE)
         else:
             self._append_history(action_id, frame)
         self._workflow.update(self.action_counter)
@@ -1120,7 +1178,9 @@ class SimulatorFirstAgent(LoopAgent):
 
         lines = [f"{SIM_STATE_HEADER} (authoritative; refreshed every call)"]
         if source and source != _SOURCE_UNAVAILABLE:
-            lines.append("simulate: registered (frozen copy — helpers fixed at registration)")
+            lines.append(
+                "simulate: registered (frozen copy — helpers fixed at registration)"
+            )
             lines.append(source)
         else:
             lines.append("simulate: registered (source not captured this session)")

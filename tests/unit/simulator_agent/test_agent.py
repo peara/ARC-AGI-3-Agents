@@ -232,8 +232,8 @@ class TestSimulateStatus:
         (byte-stable status for clean state)."""
         agent = self._make_status_agent(None, suppressed=7)
         assert (
-            "NOTE: 7 diffs on abstained cells were suppressed" in
-            agent._build_simulate_status()
+            "NOTE: 7 diffs on abstained cells were suppressed"
+            in agent._build_simulate_status()
         )
         agent_clean = self._make_status_agent(None, suppressed=0)
         assert "NOTE:" not in agent_clean._build_simulate_status()
@@ -742,7 +742,10 @@ class TestTrimOldNonToolMessages:
                     "role": "user",
                     "content": [
                         {"type": "text", "text": f"Frame prompt {i}"},
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{i}"}},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{i}"},
+                        },
                     ],
                 }
             )
@@ -779,7 +782,10 @@ class TestTrimOldNonToolMessages:
                 == '{"code": "# previous code omitted"}'
             )
         for i in range(2, 6):
-            assert msgs[i]["tool_calls"][0]["function"]["arguments"] == f'{{"code": "print({i})"}}'
+            assert (
+                msgs[i]["tool_calls"][0]["function"]["arguments"]
+                == f'{{"code": "print({i})"}}'
+            )
 
     def test_trim_no_delete(self):
         msgs = []
@@ -879,7 +885,10 @@ class TestTrimOldNonToolMessages:
                 for tc_orig, tc_after in zip(orig["tool_calls"], after["tool_calls"]):
                     assert tc_orig["id"] == tc_after["id"]
                     assert tc_orig["function"]["name"] == tc_after["function"]["name"]
-                    assert tc_orig["function"]["arguments"] == tc_after["function"]["arguments"]
+                    assert (
+                        tc_orig["function"]["arguments"]
+                        == tc_after["function"]["arguments"]
+                    )
 
     def test_trim_single_frame_no_op(self):
         msgs = [
@@ -887,7 +896,10 @@ class TestTrimOldNonToolMessages:
                 "role": "user",
                 "content": [
                     {"type": "text", "text": "Only frame prompt"},
-                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,abc"},
+                    },
                 ],
             }
         ]
@@ -927,8 +939,14 @@ class TestTrimOldNonToolMessages:
 
     def test_trim_both_nudge_types(self):
         msgs = [
-            {"role": "user", "content": "If you discovered something new about the game, call update_notes."},
-            {"role": "user", "content": "Please use the python tool to explore the game."},
+            {
+                "role": "user",
+                "content": "If you discovered something new about the game, call update_notes.",
+            },
+            {
+                "role": "user",
+                "content": "Please use the python tool to explore the game.",
+            },
             {"role": "user", "content": "Another nudge: discovered something new."},
         ]
         SimulatorFirstAgent._trim_old_non_tool_messages(msgs)
@@ -948,10 +966,10 @@ class TestActionBudget:
         import inspect
 
         source = inspect.getsource(LoopAgent.step_env)
-        assert "MAX_ACTIONS" not in source, \
+        assert "MAX_ACTIONS" not in source, (
             "step_env must not contain a budget guard (committed batches complete)"
-        assert "RuntimeError" not in source, \
-            "step_env must not raise a RuntimeError"
+        )
+        assert "RuntimeError" not in source, "step_env must not raise a RuntimeError"
 
     @pytest.mark.unit
     def test_tool_loop_budget_guard(self):
@@ -963,12 +981,15 @@ class TestActionBudget:
                 inspect.getsource(SimulatorFirstAgent._run_tool_loop),
             ]
         )
-        assert "action_counter >= self.MAX_ACTIONS" in source, \
+        assert "action_counter >= self.MAX_ACTIONS" in source, (
             "run()/_run_tool_loop must check action_counter vs MAX_ACTIONS"
-        assert "budget exhausted mid-turn" in source, \
+        )
+        assert "budget exhausted mid-turn" in source, (
             "tool loop must log budget exhausted mid-turn"
-        assert "guardrail:" in source and "budget exhausted" in source, \
+        )
+        assert "guardrail:" in source and "budget exhausted" in source, (
             "tool loop must use the guardrail log format"
+        )
 
     @pytest.mark.unit
     def test_no_fallback_returns_reset_on_exhaustion(self):
@@ -984,14 +1005,15 @@ class TestActionBudget:
         )
 
         # P2-T3: no random action injection anywhere in run()/_run_tool_loop
-        assert "random" not in source or "No random fallback" in source, \
+        assert "random" not in source or "No random fallback" in source, (
             "run() must not inject random actions"
+        )
 
     @pytest.mark.unit
     def test_no_max_actions_attr_on_class(self):
-        assert (
-            "max_actions" not in SimulatorFirstAgent.__dict__
-        ), "SimulatorFirstAgent must not have the stale max_actions class attr"
+        assert "max_actions" not in SimulatorFirstAgent.__dict__, (
+            "SimulatorFirstAgent must not have the stale max_actions class attr"
+        )
 
     def _make_budget_exhausted_agent(self):
         import numpy as np
@@ -1078,14 +1100,16 @@ class TestActionBudget:
                 "R",
                 (),
                 {
-                    "tool_calls": [{
-                        "id": "tc1",
-                        "type": "function",
-                        "function": {
-                            "name": "python",
-                            "arguments": '{"code": "action(4)\\naction(4)\\naction(4)"}',
-                        },
-                    }],
+                    "tool_calls": [
+                        {
+                            "id": "tc1",
+                            "type": "function",
+                            "function": {
+                                "name": "python",
+                                "arguments": '{"code": "action(4)\\naction(4)\\naction(4)"}',
+                            },
+                        }
+                    ],
                     "content": "running batch",
                 },
             )()
@@ -1307,12 +1331,14 @@ class TestNotesMessageRegression:
         agent._append_notes_message(messages_1, agent._world_model)
         history_1 = agent._persistent_history_messages(messages_1)
         assert (
-            len([
-                m
-                for m in messages_1
-                if isinstance(m.get("content"), str)
-                and m["content"].startswith("[Current notes]")
-            ])
+            len(
+                [
+                    m
+                    for m in messages_1
+                    if isinstance(m.get("content"), str)
+                    and m["content"].startswith("[Current notes]")
+                ]
+            )
             == 1
         )
 
@@ -1325,12 +1351,14 @@ class TestNotesMessageRegression:
         ]
         agent._append_notes_message(messages_2, agent._world_model)
         assert (
-            len([
-                m
-                for m in messages_2
-                if isinstance(m.get("content"), str)
-                and m["content"].startswith("[Current notes]")
-            ])
+            len(
+                [
+                    m
+                    for m in messages_2
+                    if isinstance(m.get("content"), str)
+                    and m["content"].startswith("[Current notes]")
+                ]
+            )
             == 1
         )
         history_2 = agent._persistent_history_messages(messages_2)
@@ -1344,12 +1372,14 @@ class TestNotesMessageRegression:
         ]
         agent._append_notes_message(messages_3, agent._world_model)
         assert (
-            len([
-                m
-                for m in messages_3
-                if isinstance(m.get("content"), str)
-                and m["content"].startswith("[Current notes]")
-            ])
+            len(
+                [
+                    m
+                    for m in messages_3
+                    if isinstance(m.get("content"), str)
+                    and m["content"].startswith("[Current notes]")
+                ]
+            )
             == 1
         )
 
@@ -1400,12 +1430,14 @@ class TestNotesMessageRegression:
         agent._append_notes_message(messages_1, agent._world_model)
         history_1 = agent._persistent_history_messages(messages_1)
         assert (
-            len([
-                m
-                for m in history_1
-                if isinstance(m.get("content"), str)
-                and m["content"].startswith("[Current notes]")
-            ])
+            len(
+                [
+                    m
+                    for m in history_1
+                    if isinstance(m.get("content"), str)
+                    and m["content"].startswith("[Current notes]")
+                ]
+            )
             == 0
         )
 
@@ -1421,7 +1453,9 @@ class TestNotesMessageRegression:
 
     def test_degenerate_notes_only_user_message(self):
         """_strip_notes_messages handles the case where the only user message is notes."""
-        notes_content = f"[Current notes]\n{format_notes({'notes': 'only', 'plan': ''})}"
+        notes_content = (
+            f"[Current notes]\n{format_notes({'notes': 'only', 'plan': ''})}"
+        )
         messages = [
             {"role": "system", "content": "sys"},
             {"role": "user", "content": notes_content},
@@ -1443,7 +1477,9 @@ class TestNotesMessageRegression:
         """Notes are stripped before _keep_recent_assistant_turns can retain them."""
         agent = SimulatorFirstAgent.__new__(SimulatorFirstAgent)
         agent._context_budget_tokens = 100000
-        notes_content = f"[Current notes]\n{format_notes({'notes': 'high turn', 'plan': ''})}"
+        notes_content = (
+            f"[Current notes]\n{format_notes({'notes': 'high turn', 'plan': ''})}"
+        )
         messages: list[dict] = [
             {"role": "system", "content": "sys"},
             {"role": "user", "content": notes_content},
@@ -1542,14 +1578,16 @@ class TestLevelTransition:
                     "R",
                     (),
                     {
-                        "tool_calls": [{
-                            "id": "tc-win",
-                            "type": "function",
-                            "function": {
-                                "name": "python",
-                                "arguments": '{"code": "for a in [4, 4, 1]:\\n    action(a)\\n"}',
-                            },
-                        }],
+                        "tool_calls": [
+                            {
+                                "id": "tc-win",
+                                "type": "function",
+                                "function": {
+                                    "name": "python",
+                                    "arguments": '{"code": "for a in [4, 4, 1]:\\n    action(a)\\n"}',
+                                },
+                            }
+                        ],
                         "content": None,
                     },
                 )()
@@ -1558,20 +1596,23 @@ class TestLevelTransition:
                     "R",
                     (),
                     {
-                        "tool_calls": [{
-                            "id": f"tc-{call_index[0]}",
-                            "type": "function",
-                            "function": {
-                                "name": "python",
-                                "arguments": '{"code": "x = 1"}',
-                            },
-                        }],
+                        "tool_calls": [
+                            {
+                                "id": f"tc-{call_index[0]}",
+                                "type": "function",
+                                "function": {
+                                    "name": "python",
+                                    "arguments": '{"code": "x = 1"}',
+                                },
+                            }
+                        ],
                         "content": None,
                     },
                 )()
 
         def fake_step_env(action):
             from arcengine import FrameData, GameState
+
             agent._sandbox_steps += 1
             action_id = action.value if hasattr(action, "value") else int(action)
             levels_before = agent._current_grid_levels_completed
@@ -1609,14 +1650,19 @@ class TestLevelTransition:
 
         def adapter(action_id: int, action_data):
             from arcengine import GameAction
+
             ag = holder["agent"]
             game_action = GameAction.from_id(action_id)
             ag.step_env(game_action)
             if len(ag.frames) >= 2:
                 prev = ag.frames[-2]
                 curr = ag.frames[-1]
-                prev_levels = prev.levels_completed if hasattr(prev, "levels_completed") else 0
-                curr_levels = curr.levels_completed if hasattr(curr, "levels_completed") else 0
+                prev_levels = (
+                    prev.levels_completed if hasattr(prev, "levels_completed") else 0
+                )
+                curr_levels = (
+                    curr.levels_completed if hasattr(curr, "levels_completed") else 0
+                )
                 prev_grid = prev.frame[0] if prev.frame else None
                 curr_grid = curr.frame[0] if curr.frame else None
                 ag._last_action_result = {
@@ -1714,9 +1760,7 @@ class TestLevelTransition:
                 )
                 break
 
-        assert found_transition, (
-            "transition prompt must contain LEVEL TRANSITION text"
-        )
+        assert found_transition, "transition prompt must contain LEVEL TRANSITION text"
 
     @pytest.mark.unit
     def test_transition_clears_history_messages_and_history_turns(self):
@@ -1756,7 +1800,8 @@ class TestLevelTransition:
         seeded_notes = "Maze. floor=3,wall=4. Player 5x5. Target box=portal."
         seeded_plan = "Execute path [1,4,4,4,4,1,1,1] in real env."
         agent, frames, _ = self._make_level_transition_agent(
-            seed_notes=seeded_notes, seed_plan=seeded_plan,
+            seed_notes=seeded_notes,
+            seed_plan=seeded_plan,
         )
 
         sandbox = agent._sandbox
@@ -1901,9 +1946,7 @@ class TestFrameZeroSeed:
             last_action_result={},
             history=[],
         )
-        assert len(sandbox._grids) == 1, (
-            "seeding must only fire when _grids is empty"
-        )
+        assert len(sandbox._grids) == 1, "seeding must only fire when _grids is empty"
 
     @pytest.mark.unit
     def test_action_after_seed_keeps_pairing_consistent(self, live_sandbox):
@@ -1922,9 +1965,7 @@ class TestFrameZeroSeed:
         assert len(sandbox._actions) == 1
 
     @pytest.mark.unit
-    def test_check_with_single_seeded_grid_reports_no_transitions(
-        self, live_sandbox
-    ):
+    def test_check_with_single_seeded_grid_reports_no_transitions(self, live_sandbox):
         sandbox = self._make_seeded(live_sandbox)
         sandbox.run_code("def my_sim(g, a):\n    return g\nset_simulate(my_sim)\n")
         output, error, _ = sandbox.run_code("check()")
@@ -2154,9 +2195,7 @@ class TestEventDrivenStateRefactor:
 
         def llm_call1(**kwargs):
             captured["messages"].append([dict(m) for m in kwargs.get("messages", [])])
-            return self._python_tool_call(
-                "for a in [1, 1, 2]:\n    action(a)\n"
-            )
+            return self._python_tool_call("for a in [1, 1, 2]:\n    action(a)\n")
 
         def llm_call2(**kwargs):
             captured["messages"].append([dict(m) for m in kwargs.get("messages", [])])
@@ -2197,8 +2236,7 @@ class TestEventDrivenStateRefactor:
             aid = entry["action"]
             grid = entry["frame"]
             assert grid[aid][0] == aid + 10, (
-                f"entry {i}: grid[{aid}][0] should be {aid + 10}, "
-                f"got {grid[aid][0]}"
+                f"entry {i}: grid[{aid}][0] should be {aid + 10}, got {grid[aid][0]}"
             )
 
     # ── T4.b: test_history_semantics_matches_prompt ────────────────────────
@@ -2917,8 +2955,7 @@ class TestMainOverride:
         agent.run()
 
         assert agent.action_counter == 5, (
-            f"action_counter should be 5 (MAX_ACTIONS), "
-            f"got {agent.action_counter}"
+            f"action_counter should be 5 (MAX_ACTIONS), got {agent.action_counter}"
         )
         assert agent.action_counter >= agent.MAX_ACTIONS
 
@@ -2927,18 +2964,20 @@ class TestAntiSpiralGuard:
     """Tests for the anti-spiral guard in run().
 
     The corrected anti-spiral guard: increments _non_action_calls on no-action
-    iterations, resets on action. At >=12: nudge. At >=24: set_phase('MODEL')
+    iterations, resets on action. At >=4: nudge. At >=12: phase switch
     (NO reset — counter continues). At >=36: terminate run().
 
-    Counter climbs 0→12(nudge)→24(set_phase MODEL)→36(terminate).
+    Counter climbs 0→4(nudge)→12(phase switch)→36(terminate).
     Reset only happens when an action IS taken.
     """
 
     @pytest.mark.unit
     def test_anti_spiral_nudge_and_set_phase(self):
-        """Non-action iterations trigger nudge at >=12 and set_phase('MODEL') at >=24.
-        With the corrected guard (no >=24 reset), the counter reaches 36 and
-        run() terminates via the hard cap."""
+        """Non-action iterations trigger nudge at >=4 and the phase switch
+        at >=12 (fresh workflow starts in EXPLORE: forced to MODEL, then
+        one-shot _escape_fired suppression — later iterations at >=12 do
+        NOT re-fire). With the corrected guard (no >=12 reset), the counter
+        reaches 36 and run() terminates via the hard cap."""
         import numpy as np
         from arcengine import FrameData, GameState
 
@@ -3008,14 +3047,16 @@ class TestAntiSpiralGuard:
                 "R",
                 (),
                 {
-                    "tool_calls": [{
-                        "id": "tc-1",
-                        "type": "function",
-                        "function": {
-                            "name": "python",
-                            "arguments": '{"code": "x = 1"}',
-                        },
-                    }],
+                    "tool_calls": [
+                        {
+                            "id": "tc-1",
+                            "type": "function",
+                            "function": {
+                                "name": "python",
+                                "arguments": '{"code": "x = 1"}',
+                            },
+                        }
+                    ],
                     "content": None,
                 },
             )()
@@ -3036,19 +3077,17 @@ class TestAntiSpiralGuard:
         )
 
         model_calls = [
-            (phase, reason)
-            for phase, reason in set_phase_calls
-            if phase == "MODEL"
+            (phase, reason) for phase, reason in set_phase_calls if phase == "MODEL"
         ]
         assert len(model_calls) >= 1, (
-            f"Expected set_phase('MODEL') call at >=24 non-action calls, "
+            f"Expected set_phase('MODEL') call at >=12 non-action calls "
+            f"(fresh workflow starts in EXPLORE — the else-branch force), "
             f"got {model_calls}"
         )
 
         # No action was taken, so action_counter should still be 0.
         assert agent.action_counter == 0, (
-            f"action_counter should be 0 (no random action), "
-            f"got {agent.action_counter}"
+            f"action_counter should be 0 (no random action), got {agent.action_counter}"
         )
 
     @pytest.mark.unit
@@ -3119,8 +3158,12 @@ class TestAntiSpiralGuard:
             if len(ag.frames) >= 2:
                 prev = ag.frames[-2]
                 curr = ag.frames[-1]
-                prev_levels = prev.levels_completed if hasattr(prev, "levels_completed") else 0
-                curr_levels = curr.levels_completed if hasattr(curr, "levels_completed") else 0
+                prev_levels = (
+                    prev.levels_completed if hasattr(prev, "levels_completed") else 0
+                )
+                curr_levels = (
+                    curr.levels_completed if hasattr(curr, "levels_completed") else 0
+                )
                 prev_grid = prev.frame[0] if prev.frame else None
                 curr_grid = curr.frame[0] if curr.frame else None
                 ag._last_action_result = {
@@ -3166,14 +3209,16 @@ class TestAntiSpiralGuard:
                     "R",
                     (),
                     {
-                        "tool_calls": [{
-                            "id": "tc-1",
-                            "type": "function",
-                            "function": {
-                                "name": "python",
-                                "arguments": '{"code": "action(1)"}',
-                            },
-                        }],
+                        "tool_calls": [
+                            {
+                                "id": "tc-1",
+                                "type": "function",
+                                "function": {
+                                    "name": "python",
+                                    "arguments": '{"code": "action(1)"}',
+                                },
+                            }
+                        ],
                         "content": None,
                     },
                 )()
@@ -3183,14 +3228,16 @@ class TestAntiSpiralGuard:
                     "R",
                     (),
                     {
-                        "tool_calls": [{
-                            "id": f"tc-{call_index[0]}",
-                            "type": "function",
-                            "function": {
-                                "name": "python",
-                                "arguments": '{"code": "x = 1"}',
-                            },
-                        }],
+                        "tool_calls": [
+                            {
+                                "id": f"tc-{call_index[0]}",
+                                "type": "function",
+                                "function": {
+                                    "name": "python",
+                                    "arguments": '{"code": "x = 1"}',
+                                },
+                            }
+                        ],
                         "content": None,
                     },
                 )()
@@ -3321,14 +3368,16 @@ class TestMidTurnEscapeGuardrail:
                 "R",
                 (),
                 {
-                    "tool_calls": [{
-                        "id": "tc-x",
-                        "type": "function",
-                        "function": {
-                            "name": "python",
-                            "arguments": '{"code": "check()"}',
-                        },
-                    }],
+                    "tool_calls": [
+                        {
+                            "id": "tc-x",
+                            "type": "function",
+                            "function": {
+                                "name": "python",
+                                "arguments": '{"code": "check()"}',
+                            },
+                        }
+                    ],
                     "content": None,
                 },
             )()
@@ -3355,7 +3404,7 @@ class TestMidTurnEscapeGuardrail:
 
 
 class TestSpiralGuard:
-    """Unit tests for the SpiralGuard policy class (thresholds 12/24/36)."""
+    """Unit tests for the SpiralGuard policy class (thresholds 4/12/36)."""
 
     def test_reset_on_action(self):
         verdict = SpiralGuard.record(20, took_action=True)
@@ -3371,19 +3420,19 @@ class TestSpiralGuard:
         assert not verdict.phase_model
         assert not verdict.terminate
 
-    def test_nudge_at_12(self):
-        verdict = SpiralGuard.record(11, took_action=False)
-        assert verdict.count == 12
+    def test_nudge_at_4(self):
+        verdict = SpiralGuard.record(3, took_action=False)
+        assert verdict.count == 4
         assert verdict.nudge
         assert not verdict.phase_model
         assert not verdict.terminate
 
-    def test_phase_model_at_24_counter_continues(self):
-        verdict = SpiralGuard.record(23, took_action=False)
-        assert verdict.count == 24
+    def test_phase_model_at_12_counter_continues(self):
+        verdict = SpiralGuard.record(11, took_action=False)
+        assert verdict.count == 12
         assert verdict.nudge
         assert verdict.phase_model
-        assert verdict.count == 24, "counter must NOT reset at 24"
+        assert verdict.count == 12, "counter must NOT reset at 12"
         assert not verdict.terminate
 
     def test_terminate_at_36(self):
