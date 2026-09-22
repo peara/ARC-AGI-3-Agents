@@ -118,8 +118,8 @@ flowchart TD
     subgraph AntiSpiralGuard
         A1["_non_action_calls++ per non-action tool call"]
         A2["action taken → reset to 0"]
-        A3["≥12: append nudge message"]
-        A4["≥24: set_phase MODEL (suppressed if escape fired)"]
+        A3["≥4: append nudge message"]
+        A4["≥12: phase switch (phase-aware, visible)"]
         A5["≥36: terminate loop"]
         A1 --> A2
         A2 --> A3
@@ -137,17 +137,27 @@ thinking but never acts:
 - **Counter semantics.** The counter increments by 1 for every non-action tool
   call (`python`, `update_notes`, etc.) that does **not** result in an
   environment action. It resets to 0 whenever an action is executed.
-- **Nudge at ≥12.** A user nudge message is appended: "You have not taken an
-  action in the last 12 tool calls...". This reminds the LLM to act.
-- **Phase force at ≥24.** `set_phase("MODEL", reason="consecutive-tool-call-cap")`
-  is called. The counter continues (no reset — only an executed action resets
-  it). This forces the agent back into model-building mode without ending
-  the game. Suppressed while `WorkflowController.escape_fired` is set: once an
-  escape guardrail has rescued the phase to EXPLORE during the current spiral,
-  the forced MODEL would just undo it (incident `a21a2571` — rescue fired at
-  ~24, forced MODEL dragged it straight back, spiral ran to the cap). The flag
-  clears in `update()` (turn boundary / after each action), i.e. on every
-  spiral reset.
+- **Nudge at ≥4.** `SPIRAL_NUDGE_TEXT` (module constant in `agent.py`) is
+  appended: the LLM is licensed to run one quick probe, then must act on the
+  very next call. Threshold moved 12→4 (2026-09-18, incident `ed693237`):
+  local-LLM calls cost 30-100s, so 12 pre-nudge calls ≈ 10+ idle minutes;
+  the incident LLM ignored 30 nudges anyway — earlier and sharper beats
+  later and softer. A normal MODEL turn legitimately runs 15-19 calls, so
+  the text licenses the probe rather than demanding blind obedience.
+- **Phase switch at ≥12 (phase-aware, visible).** Replaced the silent
+  `set_phase("MODEL")` (incident `ed693237`: it fired 6× as MODEL→MODEL
+  no-ops — invisible to the LLM, and its directive re-licensed the very
+  perfectionism that caused the spiral). Semantics in
+  `_apply_spiral_phase_switch`:
+  - **MODEL-phase spiral → EXPLORE + a visible GUARDRAIL message**: stop
+    rewriting simulate(); take 2-3 actions to gather fresh context
+    (diff after each), then either fix simulate from the new evidence or
+    declare manual play. The message + new phase directive land in the
+    conversation, so the LLM sees the intervention.
+  - **Other-phase spiral → force MODEL** (the historical lever).
+  - **One-shot per spiral** (`_escape_fired`, cleared in `update()` on
+    action/turn boundary): without it the switch re-fires every iteration
+    ≥12 and oscillates EXPLORE↔MODEL (the `a21a2571` pattern).
 - **Hard cap at ≥36.** The inner tool loop returns a terminate flag, `run()`
   returns immediately (persistent-history save skipped), and the game ends.
   The game terminates because the LLM exceeded the non-action budget.
@@ -728,7 +738,7 @@ agents/
     ├── exception_flow.py    — build_exception_flow_message (simulate-crash / region-diff diagnosis text)
     ├── reset_policy.py      — single owner of RESET semantics: is_reset, virtual_reset_pair, ResetSeedTracker, policy constants, captions (canonical mapping table in docstring)
     ├── sandbox.py           — SimulatorSandbox: in-process exec, action(), bfs(), check(), diagnose(), two modes
-    ├── workflow.py          — WorkflowController (EXPLORE→MODEL→PLAN→EXECUTE) + SpiralGuard (12/24/36 thresholds)
+    ├── workflow.py          — WorkflowController (EXPLORE→MODEL→PLAN→EXECUTE) + SpiralGuard (4/12/36 thresholds)
     ├── prompts.py           — AGENT_SYSTEM_PROMPT (7 addendums), build_agent_user_prompt, tool schemas
     ├── tools.py             — 11 pure grid functions (segment_atoms, find_color, compute_delta, etc.)
     ├── check.py             — run_check, diagnose, cluster_cells (grid-based simulate)
