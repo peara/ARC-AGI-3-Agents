@@ -28,8 +28,12 @@ class Phase(str, Enum):
 PHASE_DIRECTIVES: dict[Phase, str] = {
     Phase.EXPLORE: (
         "PHASE: EXPLORE. Take 1 of each available action to learn what moves. "
-        "Use atoms(), diff(), find_color() to identify objects. Call update_notes "
-        "when you learn a mechanic. Keep this short — 4-8 actions. "
+        "Use atoms(), diff(), find_color() to identify objects. Early in "
+        "exploration, run a color census — count_color() each color once and "
+        "note in update_notes which colors are unique to one object vs reused "
+        "by static decorations; when you later write simulate, locate objects "
+        "ONLY by a color confirmed unique. Call update_notes when you learn a "
+        "mechanic. Keep this short — 4-8 actions. "
         'Call set_phase("MODEL") when ready to build a simulator. '
         'If you decide this game can\'t be simulated, call set_phase("EXECUTE") '
         'with reason="manual play" to play without a simulator.'
@@ -38,6 +42,12 @@ PHASE_DIRECTIVES: dict[Phase, str] = {
         "PHASE: MODEL. Write a simulate(grid, action) function, call set_simulate(), "
         "then call check() to test accuracy. If wrong cells appear, use diagnose(), "
         "fix simulate, and re-check. You don't need 100% accuracy. "
+        "Before you register: (1) census — count_color() each color and note "
+        "which are unique vs reused by static objects; (2) locator — locate "
+        "your controllable object ONLY by a color confirmed unique, then run "
+        "your locator on current_frame and verify the bbox matches where the "
+        "object actually is; (3) collisions — verify against the observed "
+        "blocking (what destination cells are legal), not just board edges. "
         'Call set_phase("PLAN") when check is good enough. '
         'Call set_phase("EXECUTE") with reason="manual play" to skip planning.'
     ),

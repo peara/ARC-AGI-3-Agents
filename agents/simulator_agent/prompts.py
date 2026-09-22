@@ -216,6 +216,11 @@ IMPORTANT — build simulate() from the provided tools:
   (sorted by size). Use it inside simulate to locate your controllable
   object instead of hand-rolling connected-component search.
 
+PRE-REGISTRATION SELF-CHECK: before calling set_simulate(), run your
+locator on current_frame and confirm the found bbox matches the object's
+visual position; locate objects only by colors confirmed unique via
+count_color().
+
 Namespaces: your simulate is FROZEN at set_simulate() time. Redefining a
 helper later does NOT affect the registered simulate. If you improve a
 helper, call set_simulate() again to pick it up.
