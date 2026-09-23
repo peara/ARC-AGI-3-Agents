@@ -32,6 +32,10 @@ from collections.abc import Callable
 from io import StringIO
 from typing import Any
 
+from agents.simulator_agent.board_extraction import (
+    FlashEvent,
+    flash_event_text,
+)
 from agents.simulator_agent.check import UNKNOWN, run_check
 from agents.simulator_agent.check import diagnose as diagnose_fn
 from agents.simulator_agent.frame_layers import (
@@ -242,6 +246,10 @@ class SimulatorSandbox:
         ) = step_env_callback
         self.actions_this_turn: int = 0
         self._action_taken: int | None = None
+
+        # Flash events by transition index (board_extraction continuity
+        # policy) — parallel to _engine_event_transitions.
+        self._flash_events: dict[int, FlashEvent] = {}
 
         # ── Load grids and actions ──────────────────────────────────────
         if harness is not None:
@@ -461,14 +469,30 @@ class SimulatorSandbox:
             # Append to grid/action history
             # We need _grids to have len(_actions) + 1 entries for check() to work:
             # _grids[i] = grid before action i, _grids[i+1] = grid after action i
+            new_grid = response.get("grid")
             if prev_grid is not None:
                 if not self._grids:
                     # First action: append the initial grid as the starting state
                     self._grids.append(prev_grid)
-                new_grid = response.get("grid")
                 if new_grid is not None:
                     self._grids.append(new_grid)
                 self._actions.append(action_id)
+
+            # Flash-event store (board_extraction continuity policy): the
+            # agent's extraction reported a transient overlay on this
+            # transition. Stored per transition index (same shape as
+            # _engine_event_transitions) and printed into the action()
+            # result so the flash is LLM-visible as an EVENT, never as
+            # board state.
+            flash_event_raw = response.get("flash_event")
+            flash_event = (
+                FlashEvent.from_dict(flash_event_raw)
+                if flash_event_raw is not None
+                else None
+            )
+            if flash_event is not None:
+                self._flash_events[len(self._actions) - 1] = flash_event
+                print(flash_event_text(flash_event))
 
             # Track last action taken
             self._action_taken = action_id
@@ -1123,6 +1147,7 @@ class SimulatorSandbox:
         self._prev_correct_frames = set()
         self._pending_exception_flow = None
         self._engine_event_transitions = set()
+        self._flash_events = {}
         self.pending_images = []
         self._current_frame = None
         self._previous_grid = None

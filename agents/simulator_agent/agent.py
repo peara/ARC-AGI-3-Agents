@@ -31,6 +31,11 @@ from arcengine import FrameData, GameAction, GameState
 from agents.langgraph_vision_agent.sandbox import atoms_to_dicts, compute_adjacency
 from agents.llm_client import LLMClient
 from agents.loop_agent import LoopAgent
+from agents.simulator_agent.board_extraction import (
+    BoardPolicy,
+    FlashEvent,
+    extract_board,
+)
 from agents.simulator_agent.conversation import (
     IMAGE_TOKEN_COST,
     SIM_STATE_HEADER,
@@ -105,6 +110,21 @@ class SimulatorFirstAgent(LoopAgent):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
+
+        # Board extraction policy (board_extraction.py): "class" is the
+        # historical settled_board rule (byte-identical, default);
+        # "continuity" anchors on the previous board — flash overlays are
+        # reported as FlashEvents instead of ingested as board state.
+        # kwargs reach here through the harness config passthrough; the
+        # default keeps every existing run byte-faithful.
+        raw_policy = kwargs.pop("board_policy", "class")
+        self.board_policy: BoardPolicy = (
+            "continuity" if raw_policy == "continuity" else "class"
+        )
+        # Flash event of the last extracted frame (continuity policy),
+        # re-set on every _update_segmentation — read by the sandbox
+        # response, never a stale carry-over.
+        self._last_flash_event: FlashEvent | None = None
 
         # World model: 2-block (Notes + Plan)
         self._world_model: dict[str, str] = {"notes": "", "plan": ""}
@@ -230,16 +250,24 @@ class SimulatorFirstAgent(LoopAgent):
             if latest_frame.levels_completed is not None:
                 self._current_grid_levels_completed = latest_frame.levels_completed
 
-            # Get current grid — settled board (see frame_layers.settled_board)
-            grid = settled_board(latest_frame.frame)
-            self._current_grid = [list(row) for row in grid]
-
-            # Previous grid (for diff / sandbox)
-            if len(self.frames) >= 2 and getattr(self.frames[-2], "frame", None):
-                prev_raw = self.frames[-2].frame
-                self._previous_grid = [list(row) for row in settled_board(prev_raw)]
+            # Current grid: the step-hook extraction when the last frame was
+            # already extracted (multi-layer stacks need the continuity
+            # anchor); turn-1 bootstrap via the class rule otherwise —
+            # continuity's own no-anchor fallback, so both policies agree.
+            if self._current_grid is not None:
+                grid = self._current_grid
             else:
-                self._previous_grid = None
+                grid = [list(row) for row in settled_board(latest_frame.frame)]
+                self._current_grid = [list(row) for row in grid]
+                self._last_flash_event = None
+
+            # Previous grid (for diff / sandbox): the previous extraction
+            # when available, class-rule fallback for turn 1.
+            if self._previous_grid is None:
+                if len(self.frames) >= 2 and getattr(self.frames[-2], "frame", None):
+                    self._previous_grid = [
+                        list(row) for row in settled_board(self.frames[-2].frame)
+                    ]
 
             # Available actions
             self._valid_actions = (
@@ -884,10 +912,13 @@ class SimulatorFirstAgent(LoopAgent):
         Trims to max_hist=30 to bound growth.
         """
         max_hist = 30
+        grid = self._current_grid
+        if grid is None:
+            grid = [list(row) for row in settled_board(frame.frame)]
         entry: dict[str, Any] = {
             "action": action_id,
             "frame_index": self.action_counter - 1,
-            "frame": [list(row) for row in settled_board(frame.frame)],
+            "frame": [list(row) for row in grid],
         }
         if provenance is not None:
             entry["provenance"] = provenance
@@ -983,20 +1014,25 @@ class SimulatorFirstAgent(LoopAgent):
             curr_levels = (
                 curr.levels_completed if hasattr(curr, "levels_completed") else 0
             )
-            prev_grid = settled_board(prev.frame) if prev.frame else None
-            curr_grid = settled_board(curr.frame) if curr.frame else None
-            self._last_action_result = {
-                "board_changed": prev_grid != curr_grid,
-                "done": curr.state is GameState.GAME_OVER
-                or curr.state is GameState.WIN,
-                "level_completed": curr_levels > prev_levels,
-                "game_over": curr.state is GameState.GAME_OVER,
-                "run_complete": curr.state is GameState.WIN,
-                "reward": curr_levels - prev_levels,
-                "valid_actions": list(curr.available_actions)
-                if curr.available_actions
-                else [],
-            }
+            curr_grid = self._current_grid
+            if curr_grid is None and curr.frame:
+                # Direct hook call (no step yet): class-rule fallback.
+                curr_grid = [list(row) for row in settled_board(curr.frame)]
+            if curr_grid is None:
+                self._last_action_result = {}
+            else:
+                self._last_action_result = {
+                    "board_changed": self._previous_grid != curr_grid,
+                    "done": curr.state is GameState.GAME_OVER
+                    or curr.state is GameState.WIN,
+                    "level_completed": curr_levels > prev_levels,
+                    "game_over": curr.state is GameState.GAME_OVER,
+                    "run_complete": curr.state is GameState.WIN,
+                    "reward": curr_levels - prev_levels,
+                    "valid_actions": list(curr.available_actions)
+                    if curr.available_actions
+                    else [],
+                }
             if curr_levels > self._current_grid_levels_completed:
                 self._current_grid_levels_completed = curr_levels
         else:
@@ -1014,6 +1050,10 @@ class SimulatorFirstAgent(LoopAgent):
         }
         if self._current_grid is not None:
             state_response["grid"] = self._current_grid
+        elif frame is not None and frame.frame:
+            # No cached extraction (direct hook call on a __new__-built
+            # agent): class-rule fallback so the sandbox still gets a grid.
+            state_response["grid"] = [list(row) for row in settled_board(frame.frame)]
         if frame is not None and frame.frame:
             # Detection seam (task 6 input): the RAW layer stack rides
             # through step_env's FrameData into the sandbox response;
@@ -1021,6 +1061,9 @@ class SimulatorFirstAgent(LoopAgent):
             state_response["frame_layers"] = [
                 [list(row) for row in layer] for layer in frame.frame
             ]
+        flash_event = getattr(self, "_last_flash_event", None)
+        if flash_event is not None:
+            state_response["flash_event"] = flash_event.as_dict()
         state_response["valid_actions"] = self._valid_actions
         state_response["last_action_result"] = self._last_action_result
 
@@ -1072,12 +1115,30 @@ class SimulatorFirstAgent(LoopAgent):
     # ── Helpers ────────────────────────────────────────────────────────────
 
     def _update_segmentation(self, frame: FrameData) -> None:
-        """Re-segment the grid from the given frame and cache results."""
+        """Re-segment the grid from the given frame and cache results.
+
+        The ONE extraction point: continuity anchors on the previous
+        ``_current_grid`` (the previous frame's board) BEFORE it is
+        overwritten; class policy is a pure settled_board call, so this
+        is byte-identical to the pre-refactor behavior under the default.
+        The flash event (continuity) is stashed for the sandbox response;
+        re-set every frame — never stale.
+        """
         if not frame.frame:
             return
-        grid = settled_board(frame.frame)
-        self._current_grid = [list(row) for row in grid]
-        grid_np = np.array(grid, dtype=int)
+        # getattr default: __new__-built test agents skip __init__ (house
+        # convention, cf. _reset_seed_tracker) — they get the class rule.
+        policy: BoardPolicy = (
+            "continuity"
+            if getattr(self, "board_policy", "class") == "continuity"
+            else "class"
+        )
+        anchor = self._current_grid
+        board, flash_event = extract_board(frame.frame, anchor, policy)
+        self._previous_grid = [list(row) for row in anchor] if anchor else None
+        self._current_grid = [list(row) for row in board]
+        self._last_flash_event = flash_event
+        grid_np = np.array(board, dtype=int)
         atoms = extract_atoms(grid_np)
         self._objects = atoms_to_dicts(atoms)
         self._adjacency = compute_adjacency(atoms)
