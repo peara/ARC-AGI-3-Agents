@@ -23,6 +23,11 @@ from pathlib import Path
 from typing import Any
 
 from agents.simulator_agent.agent import ITER0_RESET_PROVENANCE
+from agents.simulator_agent.board_extraction import (
+    BoardPolicy,
+    FlashEvent,
+    extract_board,
+)
 from agents.simulator_agent.frame_layers import settled_board
 from agents.simulator_agent.reconstruction import (
     ReconstructedState,
@@ -30,6 +35,7 @@ from agents.simulator_agent.reconstruction import (
     _count_llm_calls,
     _embedded_state,
     _row_tool_calls,
+    error_is_live_parity,
     is_legacy_mask_code,
     load_llm_rows,
 )
@@ -51,6 +57,7 @@ def _make_timeline_step_callback(
     *,
     turn_frame: int,
     mismatches: list[str],
+    board_policy: BoardPolicy = "class",
 ) -> Callable[[int, dict[str, Any] | None], dict[str, Any]]:
     """Build a step_env_callback that serves recorded frames from a queue.
 
@@ -106,7 +113,24 @@ def _make_timeline_step_callback(
                         f"embedded={emb.last_check_result.get(key)} walker={lcr.get(key)}"
                     )
 
+    # Running extraction anchor (board_extraction continuity policy): the
+    # previous extracted board. Starts as the class-rule pick of the
+    # pre-turn frame so turn 1 of the replay matches the live agent's
+    # first-turn bootstrap.
+    anchor: list[list[int]] | None = None
+    if harness.frames:
+        first = harness.frames[0]
+        if first.frame:
+            anchor = [list(row) for row in settled_board(first.frame)]
+
+    def _extract(
+        stack: Any,
+    ) -> tuple[list[list[int]], FlashEvent | None]:
+        board, flash_event = extract_board(stack, anchor, board_policy)
+        return [list(row) for row in board], flash_event
+
     def step(action_id: int, action_data: dict[str, Any] | None) -> dict[str, Any]:
+        nonlocal anchor
         m = cursor["next_line"]
         if m > turn_frame:
             # Queue drained — post-incident continuation steps the live env.
@@ -116,8 +140,9 @@ def _make_timeline_step_callback(
             frame = harness.env.step(game_action)
             if frame is None:
                 raise RuntimeError(f"env.step returned None for action {action_id}")
-            curr = [list(row) for row in settled_board(frame.frame)]
-            prev = [list(row) for row in settled_board(harness.frames[-1].frame)]
+            curr, flash_event = _extract(frame.frame)
+            prev = anchor if anchor is not None else curr
+            anchor = curr
             prev_levels = harness.frames[-1].levels_completed or 0
             curr_levels = frame.levels_completed or 0
             last = {
@@ -131,7 +156,7 @@ def _make_timeline_step_callback(
                 if frame.available_actions
                 else [],
             }
-            return {
+            response = {
                 "objects": (),
                 "adjacency": frozenset(),
                 "grid": curr,
@@ -139,6 +164,9 @@ def _make_timeline_step_callback(
                 "last_action_result": last,
                 "history": history_turns,
             }
+            if flash_event is not None:
+                response["flash_event"] = flash_event.as_dict()
+            return response
         recorded = lines[m]["data"]["action_input"]["id"]
         expected = RESET_ACTION if is_reset(recorded) else int(recorded)
         if expected != action_id:
@@ -148,8 +176,9 @@ def _make_timeline_step_callback(
             )
         cursor["next_line"] = m + 1
         frame = harness.frames[m + 1]  # frames[i+1] == recording line i
-        curr = [list(row) for row in settled_board(frame.frame)]
-        prev = [list(row) for row in settled_board(harness.frames[m].frame)]
+        curr, flash_event = _extract(frame.frame)
+        prev = anchor if anchor is not None else curr
+        anchor = curr
         # Per-line verification BEFORE appends (live recorder-hook timing:
         # the embedded counts are PRE-action for line m).
         _verify_at_line(m)
@@ -173,7 +202,7 @@ def _make_timeline_step_callback(
             if frame.available_actions
             else [],
         }
-        return {
+        response = {
             "objects": (),
             "adjacency": frozenset(),
             "grid": curr,
@@ -182,6 +211,9 @@ def _make_timeline_step_callback(
             "history": history_turns,
             "frame_layers": [list(layer) for layer in frame.frame],
         }
+        if flash_event is not None:
+            response["flash_event"] = flash_event.as_dict()
+        return response
 
     return step
 
@@ -194,6 +226,7 @@ def reconstruct(
     *,
     marker: ReplayMarker,
     seed: int = 0,
+    board_policy: BoardPolicy = "class",
 ) -> ReconstructedState:
     """Rebuild the exact agent/sandbox state at the marked turn.
 
@@ -204,6 +237,13 @@ def reconstruct(
     read-only); the corpus grows via the sandbox's own action() machinery.
     Per-frame verification against the recording's embedded simulator_state
     runs at each line (collect-then-raise).
+
+    ``board_policy`` is the replay ERA flag: "class" (default) replays the
+    recording under the extraction rule it was recorded with (byte-faithful
+    to the embedded state); "continuity" replays it under the continuity
+    rule — flash overlays are skipped and reported as flash events instead
+    of corpus state, so embedded checks WILL diverge at flash transitions
+    (only useful for continuity-era recordings or divergence probes).
     """
     llm_path = Path(str(recording_path).replace(".recording.jsonl", ".llm.jsonl"))
     rows_all = load_llm_rows(llm_path)
@@ -259,6 +299,7 @@ def reconstruct(
         lines,
         turn_frame=marker.turn_frame,
         mismatches=mismatches,
+        board_policy=board_policy,
     )
     sandbox._grids = [[row[:] for row in b0], [row[:] for row in b0]]  # noqa: SLF001
     sandbox._actions = [RESET_ACTION]  # noqa: SLF001
@@ -291,6 +332,9 @@ def reconstruct(
     workflow = WorkflowController(sandbox)
     world_model: dict[str, str] = {"notes": "", "plan": ""}
     legacy_skipped: list[int] = []
+    rows_sorted = sorted(
+        rows_all, key=lambda r: r.get("seq", 0) if isinstance(r.get("seq"), int) else 0
+    )
 
     for n in range(0, marker.turn_frame + 1):
         for row in rows_by_frame.get(n, []):
@@ -313,7 +357,9 @@ def reconstruct(
                         )
                         continue
                     output, error, _ = sandbox.run_code(code)
-                    if error:
+                    if error and not error_is_live_parity(
+                        rows_sorted, row.get("seq"), error
+                    ):
                         mismatches.append(
                             f"seq {row.get('seq')}: python error {error!r}"
                         )
@@ -325,6 +371,21 @@ def reconstruct(
                             f"seq {row.get('seq')}: set_simulate did not register "
                             f"(output={output!r})"
                         )
+                    # Board-reset live parity: the live tool loop ENDS THE
+                    # TURN when the engine flash fires (remaining calls in
+                    # the flashing row never ran) and the next turn boundary
+                    # consumes the pending flag (agent.run():
+                    # workflow.on_board_reset()). Mirror both.
+                    if sandbox._board_reset_pending:  # noqa: SLF001
+                        logger.info(
+                            "reconstruct: seq %s board-reset boundary — "
+                            "pending flag consumed; remaining tool calls in "
+                            "the flashing row skipped",
+                            row.get("seq"),
+                        )
+                        workflow.on_board_reset()
+                        sandbox._board_reset_pending = False  # noqa: SLF001
+                        break
                 elif name == "update_notes":
                     if args.get("notes"):
                         world_model["notes"] = str(args["notes"])
