@@ -149,6 +149,64 @@ def _row_tool_calls(row: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
     return calls
 
 
+def _row_tool_texts(row: dict[str, Any]) -> list[str]:
+    """Extract the text of every ``tool``-role message in a row's prefix.
+
+    The prefix of the row AFTER a python call carries that call's recorded
+    result as a ``tool`` message (the live tool loop appends it before the
+    next LLM call). Content may be a plain string or a list of
+    ``{"type": "text"|"image_url", ...}`` parts (multimodal tool results);
+    image parts are skipped, text parts joined with newlines.
+    """
+    texts: list[str] = []
+    for msg in row.get("messages") or []:
+        if not isinstance(msg, dict) or msg.get("role") != "tool":
+            continue
+        content = msg.get("content")
+        if isinstance(content, str):
+            texts.append(content)
+        elif isinstance(content, list):
+            parts = [
+                p.get("text", "")
+                for p in content
+                if isinstance(p, dict) and p.get("type") == "text"
+            ]
+            if parts:
+                texts.append("\n".join(str(t) for t in parts))
+    return texts
+
+
+def error_is_live_parity(
+    rows_sorted: list[dict[str, Any]], seq: int | None, error: str
+) -> bool:
+    """True when a re-executed python error also occurred in the recorded run.
+
+    The recorded tool result for an erroring python call carries
+    ``"Error: <error>"`` in the NEXT row's message prefix (the live tool
+    loop appends ``f"Error: {error}"`` to the tool text). An exact-substring
+    needle match there means the walk reproduced the recording's own
+    failure — live parity, not drift — so the walker must not flag it.
+    Sandbox outputs are capped at 4 KB and the log truncates at 40 KB per
+    field, so the trailing error line can never be cut off.
+
+    ``rows_sorted`` must be sorted ascending by ``seq`` (see
+    ``load_llm_rows`` order, re-sorted defensively by callers). Rows with
+    a non-int ``seq`` are skipped; ``seq is None`` never matches (mismatch
+    stays loud).
+    """
+    if seq is None:
+        return False
+    for row in rows_sorted:
+        row_seq = row.get("seq")
+        if not isinstance(row_seq, int) or row_seq <= seq:
+            continue
+        needle = f"Error: {error}"
+        if any(needle in text for text in _row_tool_texts(row)):
+            return True
+        return False  # next row by seq — the only one carrying this result
+    return False
+
+
 def is_legacy_mask_code(code: str) -> bool:
     """True when a recorded python snippet invokes the removed ``set_ignore``.
 

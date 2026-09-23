@@ -240,6 +240,99 @@ class TestRowToolCalls:
         assert _row_tool_calls(row) == [("python", {})]
 
 
+# ── error_is_live_parity (live-parity error verification) ──────────────────
+
+
+class TestErrorIsLiveParity:
+    """A re-execution error is live parity (NOT drift) when the recording's
+    next-row prefix carries the identical ``"Error: <error>"`` tool text.
+
+    Anchor: abb14eca seqs 48/73/89/96/97 — the model's own live errors
+    (``or=[...]`` SyntaxError, blocked ``import sys``, bfs line-event
+    budget) replayed byte-identically by the walker.
+    """
+
+    ABB_PATH = Path(
+        "recordings/ls20-9607627b.simulatorfirstagent.simulatorfirst."
+        "abb14eca-e587-4aa0-ad7f-ec5cdb712e53.recording.jsonl"
+    )
+
+    @pytest.fixture(scope="class")
+    def abb_rows(self) -> list[dict[str, Any]]:
+        llm_path = Path(str(self.ABB_PATH).replace(".recording.jsonl", ".llm.jsonl"))
+        if not llm_path.exists():
+            pytest.skip("gitignored dev artifact: abb14eca llm log not present")
+        from agents.simulator_agent.reconstruction import load_llm_rows
+
+        rows = load_llm_rows(llm_path)
+        return sorted(
+            rows,
+            key=lambda r: r.get("seq", 0) if isinstance(r.get("seq"), int) else 0,
+        )
+
+    def test_abb14eca_real_error_rows_are_live_parity(self, abb_rows):
+        from agents.simulator_agent.reconstruction import error_is_live_parity
+
+        for seq, error in (
+            (
+                48,
+                "SandboxBudgetExceeded: your code exceeded the execution "
+                "budget (30000000 line events for sandbox code). Bound your "
+                "loops (e.g. `for _ in range(200)`); never loop on "
+                "simulate() output without a step cap.",
+            ),
+            (73, "TypeError: M() missing 1 required positional argument: 'ch'"),
+            (
+                89,
+                "ImportError: import of 'sys' is not allowed. Allowed: "
+                "collections, copy, functools, itertools, json, math, "
+                "random, re, string",
+            ),
+            (96, "SyntaxError: invalid syntax (<sandbox>, line 3)"),
+            (97, "SyntaxError: invalid syntax (<sandbox>, line 3)"),
+        ):
+            assert error_is_live_parity(
+                abb_rows, seq, error
+            ), f"seq {seq} should be live parity"
+
+    def test_synthetic_drift_not_live_parity(self):
+        from agents.simulator_agent.reconstruction import error_is_live_parity
+
+        rows = [
+            {"seq": 10, "messages": [{"role": "tool", "content": "Error: boom"}]},
+        ]
+        assert not error_is_live_parity(rows, 10, "Error: something else")
+        assert not error_is_live_parity(rows, 11, "Error: boom")
+
+    def test_seq_none_never_matches(self):
+        from agents.simulator_agent.reconstruction import error_is_live_parity
+
+        rows = [
+            {"seq": 1, "messages": [{"role": "tool", "content": "Error: boom"}]},
+        ]
+        assert not error_is_live_parity(rows, None, "Error: boom")
+
+    def test_multimodal_tool_result_parts_joined(self):
+        from agents.simulator_agent.reconstruction import error_is_live_parity
+
+        rows = [
+            {
+                "seq": 5,
+                "messages": [
+                    {
+                        "role": "tool",
+                        "content": [
+                            {"type": "text", "text": "before"},
+                            {"type": "image_url", "url": "x"},
+                            {"type": "text", "text": "Error: kaput"},
+                        ],
+                    }
+                ],
+            }
+        ]
+        assert error_is_live_parity(rows, 4, "kaput")
+
+
 # ── Helper ────────────────────────────────────────────────────────────────
 
 
@@ -540,3 +633,90 @@ class TestFidelity:
         (collect-then-raise)."""
         for i in range(_MARKER.turn_frame + 1):
             assert _embedded_state(recording_lines[i]) is not None, f"line {i}"
+
+# ── abb14eca regression (cosmetic-claim incident, 2026-09-22) ───────────────
+#
+# The recording that anchors docs/brainstorms/cosmetic-verification-abstention.md:
+# sim 99% first registration → 88% plateau, HUD flash mislabeled "cosmetic"
+# (seq 110, f24), level 1 never solved. The two experiment seeds:
+#   f24: ReplayMarker(24, 106) — the cosmetic-claim turn's opening call
+#        (the walk covers seqs < 106: 5 live-parity error rows must NOT
+#        fail the walk — error_is_live_parity)
+#   f57: ReplayMarker(57, 164) — the wrong-route turn (the walk additionally
+#        crosses the frame-49 board reset: the walker must consume the
+#        pending flag + workflow.on_board_reset() at the boundary, else
+#        post-reset batches stall with the flag alive)
+# The recording is a gitignored dev artifact — both fixtures skip loudly
+# when absent.
+
+_ABB_RECORDING = Path(
+    "recordings/ls20-9607627b.simulatorfirstagent.simulatorfirst."
+    "abb14eca-e587-4aa0-ad7f-ec5cdb712e53.recording.jsonl"
+)
+_ABB_MARKERS = {
+    "f24": ReplayMarker(turn_frame=24, turn_seq=106),
+    "f57": ReplayMarker(turn_frame=57, turn_seq=164),
+}
+
+
+@pytest.fixture(scope="module", params=list(_ABB_MARKERS))
+def abb_state(request) -> Any:
+    if not _ABB_RECORDING.exists():
+        pytest.skip("gitignored dev artifact: abb14eca recording not present")
+    return reconstruct(_ABB_RECORDING, marker=_ABB_MARKERS[request.param], seed=0)
+
+
+@pytest.fixture(scope="module")
+def abb_emb(abb_state) -> Any:
+    lines = [
+        json.loads(line)
+        for line in _ABB_RECORDING.read_text().splitlines()
+        if line.strip()
+    ]
+    emb = _embedded_state(lines[abb_state.marker.turn_frame])
+    assert emb is not None, "marked line must carry embedded simulator_state"
+    return emb
+
+
+class TestAbb14ecaReconstruction:
+    def test_walk_completes_with_live_parity_errors(self, abb_state):
+        """reconstruct() raised no mismatches despite 5 recorded rows
+        erroring on re-execution (seqs 48/73/89/96/97) — all live parity."""
+        assert abb_state.legacy_mask_era is False
+
+    def test_corpus_shape_green(self, abb_state, abb_emb):
+        checks = verify_reconstruction(abb_state)
+        assert checks["corpus_shape"]["ok"] is True
+        assert checks["corpus_shape"]["embedded_n_collected_frames"] == (
+            abb_emb.n_collected_frames
+        )
+
+    def test_embedded_fidelity_green(self, abb_state, abb_emb):
+        checks = verify_reconstruction(abb_state)
+        assert checks["simulate_source_match"] is True
+        assert checks["stale_check_match"] is True
+        assert checks["has_simulate"] is True
+
+    def test_flow_match_green(self, abb_state):
+        checks = verify_reconstruction(abb_state)
+        assert checks["flow_match"]["ok"] is True
+
+    def test_seeded_sim_is_the_incident_sim(self, abb_state, request):
+        """The walk replays the set_simulate rows: my_sim2/my_sim3
+        (the 88% plateau sims) land registered at the f24 seed; my_sim3
+        stays registered at f57."""
+        seed = "f24" if abb_state.marker.turn_frame == 24 else "f57"
+        source = abb_state.sandbox._simulate_source or ""  # noqa: SLF001
+        expected = {"f24": "my_sim", "f57": "my_sim3"}[seed]
+        assert source.splitlines()[0] == f"def {expected}(grid, action):"
+
+    def test_seed_notes_carry_the_incident_beliefs(self, abb_state, request):
+        """f24 notes carry the decorative-HUD mislabels; f57 notes carry
+        the post-board-reset budget note — the exact prose the variant
+        arms must overcome."""
+        seed = "f24" if abb_state.marker.turn_frame == 24 else "f57"
+        notes = abb_state.notes.get("notes", "")
+        if seed == "f24":
+            assert "decorative" in notes.lower()
+        else:
+            assert "Budget reset" in notes
