@@ -29,6 +29,9 @@ motion_out/
 track_out/
 .local/
 
+# Experiment run artifacts (out/ traces + transcripts, regenerable)
+out/
+
 environment_files/
 
 # Debug scratch artifacts
