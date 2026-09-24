@@ -449,6 +449,46 @@ class TestSandboxFlashSurfacing:
         out2, _, _ = sb.run_code("action(2)")
         assert "FLASH:" in out2
 
+    def test_composite_event_with_new_region_prints(self):
+        """Incident 6b32987c regression: the goal-entry flash is
+        COMPOSITE — the recurring timer region plus the NEW top-box
+        region in one event. The event-level ANY-seen check suppressed
+        it (timer region matched); region granularity must print
+        because the top-box region is new."""
+        timer = {
+            "grid": _GRID,
+            "flash_event": FlashEvent(
+                cells=((53, 5, 5, 0),),
+                regions=((53, 53, 5, 5),),
+            ).as_dict(),
+        }
+        composite = {
+            "grid": _GRID,
+            "flash_event": FlashEvent(
+                cells=((53, 5, 5, 0), (9, 34, 3, 0)),
+                regions=((53, 53, 5, 5), (9, 10, 34, 34)),
+            ).as_dict(),
+        }
+        sb = _live_sandbox(_seeded(timer) + [composite])
+        sb.run_code("action(2)")  # unrecorded first action
+        out_timer, _, _ = sb.run_code("action(2)")
+        out_comp, _, _ = sb.run_code("action(2)")
+        assert "FLASH:" in out_timer
+        assert "FLASH:" in out_comp
+        assert sorted(sb._flash_events) == [0, 1]
+
+    def test_composite_event_all_regions_seen_stays_suppressed(self):
+        """The other side of region granularity: a composite event whose
+        every region repeats earlier flashes still prints nothing."""
+        composite = dict(_FLASH_RESPONSE)
+        sb = _live_sandbox(_seeded(dict(composite)) + [dict(composite)])
+        sb.run_code("action(2)")
+        out1, _, _ = sb.run_code("action(2)")
+        out2, _, _ = sb.run_code("action(2)")
+        assert "FLASH:" in out1
+        assert "FLASH:" not in out2
+        assert sorted(sb._flash_events) == [0, 1]
+
     def test_flash_on_unrecorded_transition_not_stored(self):
         """First action with prev_grid None: no corpus entry, no store key
         (the -1 corruption guard)."""

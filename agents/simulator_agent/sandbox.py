@@ -498,15 +498,27 @@ class SimulatorSandbox:
                 else None
             )
             if flash_event is not None and self._actions:
-                # Seen-check BEFORE the store write — the event must not
-                # match itself as an "earlier" flash.
-                seen = self._flash_region_seen(flash_event)
+                # New-region check BEFORE the store write — the event
+                # must not match itself as an "earlier" flash.
+                has_new_region = self._flash_has_new_region(flash_event)
                 self._flash_events[len(self._actions) - 1] = flash_event
                 # getattr default: __new__-built test sandboxes skip
                 # __init__ (house convention) — they get the historical
                 # always-surface behavior.
-                if getattr(self, "surface_flash_events", True) and not seen:
-                    print(flash_event_text(flash_event))
+                if getattr(self, "surface_flash_events", True):
+                    if has_new_region:
+                        print(flash_event_text(flash_event))
+                    else:
+                        # Observability: suppressed-but-stored flashes
+                        # are invisible in every LLM artifact — this
+                        # DEBUG line is the only live trace (incident
+                        # 6b32987c needed recording forensics to find).
+                        logger.debug(
+                            "simulatorfirst: flash stored at transition "
+                            "%d — all regions seen before, FLASH line "
+                            "suppressed",
+                            len(self._actions) - 1,
+                        )
 
             # Track last action taken
             self._action_taken = action_id
@@ -1144,18 +1156,27 @@ class SimulatorSandbox:
         self.actions_this_turn = 0
         self._action_taken = None
 
-    def _flash_region_seen(self, event: FlashEvent) -> bool:
-        """Timer-flash dedup: has any earlier flash overlapped this region?
+    def _flash_has_new_region(self, event: FlashEvent) -> bool:
+        """Timer-flash dedup at REGION granularity: does this event
+        contain any region no earlier flash overlapped?
 
-        The per-action FLASH line fires only for NEW regions (first
-        occurrence); repeats of an already-logged region — the HUD timer
-        firing every ~5 actions — stay in the store and surface via the
-        check() flash log aggregate (counts + transitions), avoiding
-        nudge-fatigue. Identity is OVERLAP (timer digits shift ±1 cell),
-        not exact bbox equality.
+        The per-action FLASH line fires when at least one region is NEW;
+        events whose every region repeats an already-logged one — the
+        HUD timer firing every ~5 actions — stay in the store and
+        surface via the check() flash log aggregate, avoiding
+        nudge-fatigue. Identity is OVERLAP (timer digits shift ±1
+        cell), not exact bbox equality.
+
+        Region granularity (incident 6b32987c): the goal-entry flash
+        is COMPOSITE — the new top-box region plus the recurring timer
+        region in one event. The previous event-level ANY-seen check
+        suppressed it because the timer region matched, hiding the
+        one flash the whole presentation effort exists to surface.
         """
-        for earlier in self._flash_events.values():
-            if any(earlier.overlaps(region) for region in event.regions):
+        for region in event.regions:
+            if not any(
+                earlier.overlaps(region) for earlier in self._flash_events.values()
+            ):
                 return True
         return False
 
