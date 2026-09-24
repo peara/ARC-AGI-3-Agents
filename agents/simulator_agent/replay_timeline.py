@@ -140,7 +140,16 @@ def _make_timeline_step_callback(
             frame = harness.env.step(game_action)
             if frame is None:
                 raise RuntimeError(f"env.step returned None for action {action_id}")
-            curr, flash_event = _extract(frame.frame)
+            # The raw env step returns numpy-backed layers (np.int8 cells);
+            # the plain-int conversion below is load-bearing — _is_board
+            # (and thus the continuity anchor logic) rejects numpy cells,
+            # which would silently degrade every post-seed extraction to
+            # the class rule (found by the flash-presentation mechanical
+            # gate).
+            layers = [
+                [[int(cell) for cell in row] for row in layer] for layer in frame.frame
+            ]
+            curr, flash_event = _extract(layers)
             prev = anchor if anchor is not None else curr
             anchor = curr
             prev_levels = harness.frames[-1].levels_completed or 0
