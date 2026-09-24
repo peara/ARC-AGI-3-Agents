@@ -1,7 +1,11 @@
 # Flash-event presentation — stable history + flash as first-class event
 
-> **Status**: Refactor COMPLETE (2026-09-23); open items 1-3 built +
-> mechanical gate PASSING (2026-09-24); real 3-arm runs NOT yet run.
+> **Status**: COMPLETE (2026-09-24). Refactor + open items + gate built;
+> **real 3-arm runs DONE** — verdict: control reproduces the dismissal
+> (confirmed), continuity de-noises but normalizes the flash (no
+> investigation), flash-aware INVESTIGATES the flash region (partial
+> H2 win: behavioral divergence without textual citation). See
+> "Results (2026-09-24 real runs)".
 > Companion to
 > [`cosmetic-verification-abstention.md`](cosmetic-verification-abstention.md)
 > (approach A validated → insufficient alone; this is the follow-up
@@ -257,12 +261,75 @@ gate — **PASSING on all three arms**, no network, ~20 s):
 - flash-aware: clean corpus + FLASH line in the DOWN's tool result +
   flash log in check() output.
 
-Real runs (NOT yet run): 3 arms × 16-call cap, ONE PROCESS AT A TIME
-(local LLM constraint, 60-130s/call → ~30-45 min/arm):
+Real runs (DONE 2026-09-24, artifacts in `out/flash_{control,continuity,aware}.{json,txt}`):
 
     uv run python scripts/experiment_flash_presentation.py --arm control --out out/flash_control.json --log out/flash_control.txt
     uv run python scripts/experiment_flash_presentation.py --arm continuity --out out/flash_continuity.json --log out/flash_continuity.txt
     uv run python scripts/experiment_flash_presentation.py --arm flash-aware --out out/flash_aware.json --log out/flash_aware.txt
+
+## Results (2026-09-24 real runs)
+
+All three arms ran to the 16-call cap on `qwen/qwen3.8-27b` (the
+`.env` LLM_MODEL; gemma was not loaded), seed (13,51), one process at a
+time. Same first two moves in every arm (recorded approach: L then
+DOWN onto the goal tile → flash at transition 17), then free behavior.
+
+| Metric | control | continuity | flash-aware |
+|---|---|---|---|
+| wall / calls | 20.4 min / 16 | 17.6 min / 16 | 19.0 min / 16 |
+| flash stored @17 | no (class) | yes, 60 cells | yes, 60 cells |
+| residual at DOWN | 70 cells | 10 cells | 10 cells |
+| attribution | "sim's collision model is slightly off (it blocked a move that reality allowed)" | "only in the decorative corner and the timer bar — NOT the goal region. The move was NOT blocked" | same 10-cell read + FLASH line in the DOWN tool result |
+| investigated rows 9-15 cols 33-39 | via full-board prints only (goal hunt) | **never once mentioned in 16 calls** | **call 7 goal hypothesis** ("delivery destination"), calls 9-16 drove the stack toward it (7 action-bearing calls, most of any arm) |
+| check() called | no | no | no |
+| end | spiral guard → EXPLORE | 3-flow guard → EXPLORE | MODEL, acting |
+
+Verdicts vs the pre-registered criteria:
+
+1. **Control reproduces the dismissal — CONFIRMED.** 70-cell diff →
+   sim-bug misattribution; spiral guard at 12 non-action calls.
+2. **H1 (de-noising) — CONFIRMED.** Continuity's clean corpus killed
+   the blocked-move misattribution (the 10-cell HUD diff was read as
+   timer tick, correctly). But the flash itself was NOT investigated:
+   call 13 re-saw the overlay pixels in the live frame and normalized
+   them as "two black HUD boxes — static decoration".
+3. **H2 (event data) — PARTIAL WIN, decisive behaviorally.** The
+   strict criterion (textual citation of the flash log) was NOT met —
+   flash_references scored 0 in all arms and no arm ever called
+   check(), so the flash log was never seen. But the behavioral
+   criterion is met by flash-aware alone: with the exception-flow
+   injection IDENTICAL between continuity and flash-aware, only the
+   flash-aware arm turned the flash region into its goal hypothesis
+   and spent its remaining budget driving there. The divergence is
+   attributable to the FLASH line.
+
+Confounds held in the writeup:
+
+- **Ground truth**: the recorded agent never completed level 1
+  (levels_completed=0 across all 100 lines; timer deaths at 49/97).
+  No arm could confirm its goal hypothesis in-window; flash-aware's
+  "delivery destination" read stays epistemically open (though the
+  flash firing exactly at goal-tile entry is strong evidence it IS
+  the goal indicator).
+- **First-call runaway**: every arm's call-1 python tool code spun
+  into the 30M line-event budget (contained as designed; identical
+  across arms, so no arm bias).
+- **Exception flow at the DOWN**: fired in both clean arms (10-cell
+  HUD diff); guidance text identical; continuity concluded "move NOT
+  blocked" from it — the arms differ only in the FLASH line.
+- **Mechanical verdict extractor**: `flash_references` scans assistant
+  text + tool args but NOT tool results (where the FLASH line lives),
+  and `blocked_entry_probes` is a coarse first-6-action-call scan —
+  read the transcripts, not just the numbers.
+
+## Next step (proposal)
+
+A hybrid before mechanical enforcement (B/C): when a flash fires and
+the model has not called check() within N calls, inject a nudge
+("FLASH fired at transition T — call check() to see the flash log
+before planning"). The gap between flash-aware's behavioral
+investigation and its missing textual citation is exactly a
+prompt-injection gap, not a perception gap.
 
 ## Original plan (pre-build, kept for the record)
 
