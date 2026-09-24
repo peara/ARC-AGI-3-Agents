@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any
 
 import numpy as np
@@ -36,6 +37,7 @@ from agents.simulator_agent.board_extraction import (
     FlashEvent,
     extract_board,
 )
+from agents.simulator_agent.config import load_config
 from agents.simulator_agent.conversation import (
     IMAGE_TOKEN_COST,
     SIM_STATE_HEADER,
@@ -111,25 +113,38 @@ class SimulatorFirstAgent(LoopAgent):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
 
+        # Runtime config (house pattern: duck_harness_agent/config.py) —
+        # YAML via SIMULATOR_CONFIG path-pointer env, kwarg > YAML > default.
+        config = load_config(os.getenv("SIMULATOR_CONFIG"))
+        self._config = config
+
         # Board extraction policy (board_extraction.py): "class" is the
         # historical settled_board rule (byte-identical, default);
         # "continuity" anchors on the previous board — flash overlays are
         # reported as FlashEvents instead of ingested as board state.
         # kwargs reach here through the harness config passthrough; the
         # default keeps every existing run byte-faithful.
-        raw_policy = kwargs.pop("board_policy", "class")
+        raw_policy = kwargs.pop("board_policy", None) or config.board_policy
         self.board_policy: BoardPolicy = (
             "continuity" if raw_policy == "continuity" else "class"
         )
         # Flash-event LLM-visibility (continuity arm isolation): False
         # keeps _flash_events stored (harness verdicts) but suppresses
         # every flash surface — the sandbox ctor flag.
-        surface_flash = kwargs.pop("surface_flash_events", True)
+        surface_flash = kwargs.pop("surface_flash_events", None)
+        if surface_flash is None:
+            surface_flash = config.surface_flash_events
         self.surface_flash_events: bool = surface_flash is not False
         # Flash event of the last extracted frame (continuity policy),
         # re-set on every _update_segmentation — read by the sandbox
         # response, never a stale carry-over.
         self._last_flash_event: FlashEvent | None = None
+
+        logger.info(
+            "simulatorfirst: config board_policy=%s surface_flash_events=%s",
+            self.board_policy,
+            self.surface_flash_events,
+        )
 
         # World model: 2-block (Notes + Plan)
         self._world_model: dict[str, str] = {"notes": "", "plan": ""}
