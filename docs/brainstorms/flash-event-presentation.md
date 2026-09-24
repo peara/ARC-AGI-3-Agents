@@ -1,11 +1,11 @@
 # Flash-event presentation — stable history + flash as first-class event
 
-> **Status**: Refactor COMPLETE (2026-09-23); experiment NOT yet run.
+> **Status**: Refactor COMPLETE (2026-09-23); open items 1-3 built +
+> mechanical gate PASSING (2026-09-24); real 3-arm runs NOT yet run.
 > Companion to
 > [`cosmetic-verification-abstention.md`](cosmetic-verification-abstention.md)
 > (approach A validated → insufficient alone; this is the follow-up
-> experiment). Built in the same session as the A-validation; run it in a
-> NEW session per the plan below.
+> experiment).
 
 ---
 
@@ -183,32 +183,88 @@ brainstorm).
   `blocked_entry_probes` (actions attempting entry from ≥2 offsets),
   `residue_trajectory` (wrong-cell counts per check in each arm)
 
-## Open items (decide before running)
+## Open items — RESOLVED (2026-09-24 build session)
 
-1. **Continuity arm surfacing switch**: the sandbox prints the FLASH
-   line unconditionally when `flash_event` is in the response. For the
-   `continuity` arm (H1 isolation) it must be suppressible — add a
-   sandbox ctor flag (e.g. `surface_flash_events: bool = True`) OR have
-   the agent omit `flash_event` from the response under that arm. Prefer
-   the ctor flag (agent-side omission changes the response contract).
-2. **Flash log**: `_flash_events` is stored but has no LLM-visible
-   aggregate surface yet (the per-action FLASH line only). For
-   flash-aware, add the correlation footer to check() output or the
-   sim-state block: "Flash log: rows 9-15 fired on transitions {17,66} —
-   actions {2:2}..." (same shape as the abstained log). Small change in
-   sandbox check()/`_build_sim_state_block`.
-3. **Timer flash noise**: 9 of the 11 abb14eca flashes are the
-   bottom-HUD timer (rows 53-62, every ~5 actions). Decide: does the
-   FLASH line fire for every overlay (and risk nudge-fatigue), or does
-   flash-aware suppress repeats of an already-logged region (region-key
-   dedup, first occurrence + count)? Recommend: log all events in
-   `_flash_events`, print the FLASH line only for NEW regions (the
-   correlation footer carries the aggregate).
-4. **Board-reset double-fire**: FLASH_RESET stacks keep the class path
-   and never emit flash events (verified) — no interaction with
-   `is_board_reset`. But the walker's continuity anchor now updates
-   through reset lines; confirm the f57-era probe covers this (it does —
-   the walk passed with the reset at line 49).
+1. **Continuity arm surfacing switch** ✅ — `surface_flash_events: bool =
+   True` ctor flag on `SimulatorSandbox`, `board_policy`-style kwarg on the
+   agent. When False: `_flash_events` is still STORED (harness verdicts read
+   it — the continuity arm's flashes must be confirmable) but every
+   LLM-visible surface is off: per-action FLASH line, check() flash log,
+   sim-state block footer (the gate asserts all three).
+2. **Flash log aggregate** ✅ — `flash_log_text()` in `board_extraction.py`
+   (per region: where, fire count, transitions, actions histogram — same
+   shape as the abstained log). Surfaces in check() output (inside the
+   truncation-protected zone, per-frame detail still prints last) and in
+   the `[Simulator state]` block via `_flash_log()`. check() also caches
+   it on `_last_check_result["flash_log"]`.
+3. **Timer-flash dedup** ✅ — identity is region OVERLAP
+   (`FlashEvent.overlaps`, timer digits shift ±1 cell): the per-action
+   FLASH line fires only for NEW regions (first occurrence), repeats stay
+   in the store + aggregate. One subtlety the tests caught: the seen-check
+   must run BEFORE the store write or the event matches itself and every
+   print is suppressed.
+4. **Board-reset double-fire** ✅ — unchanged from the original analysis:
+   FLASH_RESET/LEVEL_WIN keep the class path (no flash events), and the
+   f57-era probe covers the reset crossing at line 49.
+
+## Build-session findings (2026-09-24) — read before the real runs
+
+- **Empirical correction to the seed forensics**: at the (13,51) seed the
+  LIVE phase is MODEL (auto-advance at the frame-13 boundary, 16:21:57
+  log), NOT the walk-derived EXECUTE — the experiment script seeds the
+  live counters explicitly (phase MODEL, check_failures=0, flow_count=1,
+  fired_for=1).
+- **Empirical correction to the line-17 semantics**: the DOWN at seq 52 is
+  **goal entry, not a blocked move** — the stack top reaches (30,19)
+  (the white marker's cover position) and the 60-cell flash (top-box rows
+  9-15 white overlay + HUD digit block rows 53-62) is the game's feedback
+  on reaching the goal. Under continuity the sim residual at that
+  transition is 10 cells (HUD timer digits only); under class it is 70
+  (24 top-box + 46 HUD ingested as board state). The pre-registered
+  "blocked move / player-cells-only" prediction in the table below is
+  superseded by these calibrated numbers (the gate asserts them).
+- **Production bug found by the gate** (fixed): the walker's live branch
+  passed the raw env step's `frame.frame` (numpy-backed layers,
+  `np.int8` cells) into `extract_board` — `_is_board` rejects numpy
+  cells, silently degrading every post-seed extraction to the class rule
+  (no flash events, flashed board ingested). The fix converts to plain
+  ints before extraction; `list(row)` is NOT enough (keeps `np.int8`) —
+  `int(cell)` per cell is load-bearing.
+- **flow_match note**: at this seed `verify_reconstruction`'s
+  flow_match/phase_crosscheck are expected-honest-divergent (the final
+  transition 13 was a clean UP; the prefix's flow message is frame-12's
+  blocked LEFT which the walker replays sim-perfect with the final sim).
+  The gate relies on corpus_shape/stale_check/has_simulate only.
+
+## Harness (BUILT)
+
+`agents/simulator_agent/experiment_harness.py` — the shared machinery
+(Trace, capped + scripted LLM seams, `build_agent` incl. `board_policy`/
+`surface_flash_events` passthrough, action bridge, image substitution,
+transcript render, check-trajectory extractor). The cosmetic script is
+now a thin CLI over it (fake-LLM smoke green: rule splice verified,
+action bridge, abstention surface).
+
+`scripts/experiment_flash_presentation.py` — 3 arms (control /
+continuity / flash-aware), seed (13,51), `--gate` (fake-LLM mechanical
+gate — **PASSING on all three arms**, no network, ~20 s):
+
+- control: corpus[18] IS the flashed layer-0 board; 70-cell residual
+  incl. top-box; no flash surfaces.
+- continuity: corpus[18] is the stable layer; 60-cell flash event stored
+  at transition 17 (24 top-box cells verified); 10-cell HUD-only
+  residual; zero flash text anywhere.
+- flash-aware: clean corpus + FLASH line in the DOWN's tool result +
+  flash log in check() output.
+
+Real runs (NOT yet run): 3 arms × 16-call cap, ONE PROCESS AT A TIME
+(local LLM constraint, 60-130s/call → ~30-45 min/arm):
+
+    uv run python scripts/experiment_flash_presentation.py --arm control --out out/flash_control.json --log out/flash_control.txt
+    uv run python scripts/experiment_flash_presentation.py --arm continuity --out out/flash_continuity.json --log out/flash_continuity.txt
+    uv run python scripts/experiment_flash_presentation.py --arm flash-aware --out out/flash_aware.json --log out/flash_aware.txt
+
+## Original plan (pre-build, kept for the record)
 
 ## Cost discipline
 
