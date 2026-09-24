@@ -1,0 +1,6 @@
+# Simulator-first agent — live flash-aware run config.
+# Load with: SIMULATOR_CONFIG=config_simulator.yaml
+# House pattern: agents/duck_harness_agent/config_no_thinking.yaml
+
+board_policy: continuity
+surface_flash_events: true
