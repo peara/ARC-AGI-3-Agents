@@ -1,11 +1,11 @@
 # Flash-event presentation — stable history + flash as first-class event
 
-> **Status**: COMPLETE (2026-09-24). Refactor + open items + gate built;
-> **real 3-arm runs DONE** — verdict: control reproduces the dismissal
-> (confirmed), continuity de-noises but normalizes the flash (no
-> investigation), flash-aware INVESTIGATES the flash region (partial
-> H2 win: behavioral divergence without textual citation). See
-> "Results (2026-09-24 real runs)".
+> **Status**: COMPLETE (2026-09-24). 3-arm experiment DONE (see
+> "Results"); **live flash-aware run DONE** — config seam validated
+> live, the frame-43 flash was cited + investigated (both citation
+> criteria met, stronger than the experiment's flash-aware arm), and
+> incident 6b32987c (composite-flash dedup suppression) found + fixed.
+> See "Live flash-aware run".
 > Companion to
 > [`cosmetic-verification-abstention.md`](cosmetic-verification-abstention.md)
 > (approach A validated → insufficient alone; this is the follow-up
@@ -321,6 +321,53 @@ Confounds held in the writeup:
   text + tool args but NOT tool results (where the FLASH line lives),
   and `blocked_entry_probes` is a coarse first-6-action-call scan —
   read the transcripts, not just the numbers.
+
+## Live flash-aware run (2026-09-24, recording 6b32987c)
+
+First live game under the continuity policy + flash surfaces, via the
+yaml config seam (`SIMULATOR_CONFIG=config_simulator.yaml`,
+`main.py --agent=simulatorfirst --game=ls20`):
+
+- **80/80 actions over 2h16m** (13:59-16:16), 162 LLM calls, 0 levels
+  completed — parity with the reference recording (no run has
+  completed ls20 level 1 yet). One spiral escape at frame 6, one board
+  reset at frame 46 (class path, correct).
+- **Behavioral verdict — both citation criteria met live.** At frame
+  43 a blocked UP fired a 76-cell timer flash; the model CITED it in
+  update_notes ("When blocked, a white flash (5->0) appeared at rows
+  53-62 cols 1-10 — bottom-left region. This is likely a status
+  indicator region") and IMMEDIATELY probed the region (two
+  print_region calls). The experiment's flash-aware arm never achieved
+  textual citation — the live run did, on the first surfaced flash.
+- **The wild confirmed the composite-flash shape**: the goal-entry
+  flash at line 56 (block TL reaches (30,19), the dot) is 60 cells —
+  top-box rows 9-15 cols 33-39 (24) + HUD timer rows 53-62 (36) —
+  exactly the experiment's transition-17 prediction.
+- **Surfaces actually consumed**: only the per-action FLASH line. The
+  model never registered a simulate (set_simulate count 0), so check()
+  and the sim-state-block flash log were never exercised live —
+  consistent with the experiment (no check() calls in any arm).
+- **Final world model**: the DOT at (32,21) is the goal; the top box
+  is UNREACHABLE (block max-up is TL(15,34) — row 15 blocks passage;
+  its sparse blue marker doesn't match the block's solid blue). Plan:
+  center the block on the dot at TL(30,19) and retest. Reached
+  (30,19) twice (lines 56/58) — level did not complete; the actual
+  win condition remains open.
+
+### Incident 6b32987c — composite-flash dedup suppression (FIXED)
+
+The line-56 goal-entry flash **never printed**: `_flash_region_seen`'s
+event-level ANY-seen check saw the HUD-timer region (already flashed at
+42/43) and suppressed the whole event — including the NEW top-box
+region, the one flash the presentation effort exists to surface. The
+docstring promised region granularity ("fires only for NEW regions")
+but the code checked at event granularity.
+
+**Fix**: `_flash_has_new_region` — the FLASH line prints when ANY
+region of the event is new; a stored-but-suppressed flash now logs a
+DEBUG line (the only live trace — finding this required recording
+forensics). Regression tests pin both sides: composite-with-new-region
+prints, composite-all-seen stays suppressed. Mechanical gate re-PASS.
 
 ## Next step (proposal)
 
