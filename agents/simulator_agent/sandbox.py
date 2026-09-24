@@ -35,6 +35,7 @@ from typing import Any
 from agents.simulator_agent.board_extraction import (
     FlashEvent,
     flash_event_text,
+    flash_log_text,
 )
 from agents.simulator_agent.check import UNKNOWN, run_check
 from agents.simulator_agent.check import diagnose as diagnose_fn
@@ -227,6 +228,7 @@ class SimulatorSandbox:
         max_frames: int | None = None,
         step_env_callback: Callable[[int, dict[str, Any] | None], dict[str, Any]]
         | None = None,
+        surface_flash_events: bool = True,
     ) -> None:
         # ── Determine mode ──────────────────────────────────────────────
         if harness is not None and step_env_callback is not None:
@@ -240,6 +242,11 @@ class SimulatorSandbox:
 
         self.harness = harness
         self.timeout = timeout
+        # LLM-visibility of flash events (continuity arm isolation): when
+        # False, _flash_events is still STORED (harness verdicts read it)
+        # but no flash surface reaches the model — not the per-action
+        # FLASH line, not the check() flash log, not the sim-state block.
+        self.surface_flash_events = surface_flash_events
         self._exec_budget = int(float(timeout) * _DEFAULT_EXEC_BUDGET_PER_SECOND)
         self._step_env_callback: (
             Callable[[int, dict[str, Any] | None], dict[str, Any]] | None
@@ -490,9 +497,16 @@ class SimulatorSandbox:
                 if flash_event_raw is not None
                 else None
             )
-            if flash_event is not None:
+            if flash_event is not None and self._actions:
+                # Seen-check BEFORE the store write — the event must not
+                # match itself as an "earlier" flash.
+                seen = self._flash_region_seen(flash_event)
                 self._flash_events[len(self._actions) - 1] = flash_event
-                print(flash_event_text(flash_event))
+                # getattr default: __new__-built test sandboxes skip
+                # __init__ (house convention) — they get the historical
+                # always-surface behavior.
+                if getattr(self, "surface_flash_events", True) and not seen:
+                    print(flash_event_text(flash_event))
 
             # Track last action taken
             self._action_taken = action_id
@@ -662,7 +676,15 @@ class SimulatorSandbox:
                 verbose=True,
                 skip_transitions=self._engine_event_transitions,
             )
+            # Flash log rides check() output (truncation-protected zone:
+            # per-frame detail prints last, so the sandbox print cap eats
+            # it first — same contract as the abstained log).
+            flash_log = self._flash_log()
+            if flash_log:
+                print()
+                print(flash_log)
             self._last_check_result = result
+            self._last_check_result["flash_log"] = flash_log
             # The NOTE window is "since your last check()" — check() consumes
             # the suppressed-diff counter (agent.py renders it from this
             # cache, so the reset is invisible in the same-turn status).
@@ -1121,6 +1143,35 @@ class SimulatorSandbox:
         """
         self.actions_this_turn = 0
         self._action_taken = None
+
+    def _flash_region_seen(self, event: FlashEvent) -> bool:
+        """Timer-flash dedup: has any earlier flash overlapped this region?
+
+        The per-action FLASH line fires only for NEW regions (first
+        occurrence); repeats of an already-logged region — the HUD timer
+        firing every ~5 actions — stay in the store and surface via the
+        check() flash log aggregate (counts + transitions), avoiding
+        nudge-fatigue. Identity is OVERLAP (timer digits shift ±1 cell),
+        not exact bbox equality.
+        """
+        for earlier in self._flash_events.values():
+            if any(earlier.overlaps(region) for region in event.regions):
+                return True
+        return False
+
+    def _flash_log(self) -> str:
+        """LLM-visible flash aggregate; empty when surfacing is off."""
+        # getattr guards: __new__-built test sandboxes (house convention)
+        # and MagicMock fixtures — degrade to "absent", never raise.
+        if not getattr(self, "surface_flash_events", True):
+            return ""
+        events = getattr(self, "_flash_events", None)
+        if not isinstance(events, dict) or not events:
+            return ""
+        actions = getattr(self, "_actions", None)
+        if not isinstance(actions, list):
+            actions = []
+        return flash_log_text(events, actions)
 
     def reset_for_level_transition(self) -> None:
         """Clear per-level state after a ``LevelTransition`` hard-abort.

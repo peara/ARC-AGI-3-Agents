@@ -49,6 +49,8 @@ __all__ = [
     "FlashEvent",
     "extract_board",
     "flash_event_text",
+    "flash_log_text",
+    "region_key",
 ]
 
 BoardPolicy = Literal["class", "continuity"]
@@ -74,6 +76,24 @@ class FlashEvent:
     def transitions(self) -> Counter[tuple[int, int]]:
         """``Counter{(stable, overlay): count}`` of the cell transitions."""
         return Counter((s, o) for _, _, s, o in self.cells)
+
+    def region_keys(self) -> tuple[tuple[int, int, int, int], ...]:
+        """Dedup identity of the event's regions (timer-flash dedup).
+
+        Timer digits shift by a cell between flashes, so exact bboxes never
+        repeat — identity is OVERLAP: two regions are the same region when
+        their cell sets intersect. Returns the event's own regions (they
+        are disjoint by construction), sorted for deterministic order.
+        """
+        return tuple(sorted(self.regions))
+
+    def overlaps(self, region: tuple[int, int, int, int]) -> bool:
+        """True when ``region``'s cell set intersects one of this event's regions."""
+        r0, r1, c0, c1 = region
+        return any(
+            ev_r0 <= r1 and r0 <= ev_r1 and ev_c0 <= c1 and c0 <= ev_c1
+            for ev_r0, ev_r1, ev_c0, ev_c1 in self.regions
+        )
 
     def as_dict(self) -> dict[str, object]:
         """Serializable form for sandbox responses and recordings."""
@@ -176,6 +196,68 @@ def flash_event_text(event: FlashEvent) -> str:
         f"unchanged. Flashes are the game's state feedback: probe what "
         f"triggers them."
     )
+
+
+def region_key(event: FlashEvent) -> tuple[tuple[int, int, int, int], ...]:
+    """Identity key for timer-flash dedup (see :meth:`FlashEvent.region_keys`)."""
+    return event.region_keys()
+
+
+def flash_log_text(
+    flash_events: dict[int, FlashEvent],
+    actions: list[int],
+    *,
+    max_regions: int = 5,
+) -> str:
+    """Render the LLM-visible flash aggregate ("Flash log").
+
+    Mirrors the check() abstained-regions log: per region — where it is,
+    how many times it fired, on which transitions, from which actions.
+    Regions are deduped by OVERLAP (:meth:`FlashEvent.region_keys`), so
+    the recurring HUD-timer digits collapse to one row with a fire count
+    instead of a row per flash. Pure: renders from the store, mutates
+    nothing.
+    """
+    if not flash_events:
+        return ""
+    rows: list[tuple[tuple[int, int, int, int], list[int]]] = []
+    for transition in sorted(flash_events):
+        event = flash_events[transition]
+        for region in event.region_keys():
+            for row in rows:
+                if _regions_overlap(row[0], region):
+                    row[1].append(transition)
+                    break
+            else:
+                rows.append((region, [transition]))
+    rows.sort(key=lambda item: (-len(item[1]), item[0]))
+    lines: list[str] = []
+    for region, transitions in rows[:max_regions]:
+        r0, r1, c0, c1 = region
+        action_hist: Counter[int] = Counter(
+            actions[t] if 0 <= t < len(actions) else -1 for t in transitions
+        )
+        actions_str = ", ".join(
+            f"{action_id}: {count}" for action_id, count in sorted(action_hist.items())
+        )
+        lines.append(
+            f"  rows {r0}-{r1}, cols {c0}-{c1}: fired {len(transitions)}x — "
+            f"transitions {transitions} — actions {{{actions_str}}}"
+        )
+    header = (
+        f"Flash log ({len(flash_events)} transient overlay events — "
+        "NOT board state; the settled board continued unchanged):"
+    )
+    return "\n".join([header, *lines])
+
+
+def _regions_overlap(
+    a: tuple[int, int, int, int], b: tuple[int, int, int, int]
+) -> bool:
+    """Cell-set intersection of two bboxes (timer digits shift ±1 cell)."""
+    a_r0, a_r1, a_c0, a_c1 = a
+    b_r0, b_r1, b_c0, b_c1 = b
+    return a_r0 <= b_r1 and b_r0 <= a_r1 and a_c0 <= b_c1 and b_c0 <= a_c1
 
 
 # ── internals ───────────────────────────────────────────────────────────────

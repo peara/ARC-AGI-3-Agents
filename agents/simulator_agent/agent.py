@@ -121,6 +121,11 @@ class SimulatorFirstAgent(LoopAgent):
         self.board_policy: BoardPolicy = (
             "continuity" if raw_policy == "continuity" else "class"
         )
+        # Flash-event LLM-visibility (continuity arm isolation): False
+        # keeps _flash_events stored (harness verdicts) but suppresses
+        # every flash surface — the sandbox ctor flag.
+        surface_flash = kwargs.pop("surface_flash_events", True)
+        self.surface_flash_events: bool = surface_flash is not False
         # Flash event of the last extracted frame (continuity policy),
         # re-set on every _update_segmentation — read by the sandbox
         # response, never a stale carry-over.
@@ -176,6 +181,7 @@ class SimulatorFirstAgent(LoopAgent):
         self._sandbox = SimulatorSandbox(
             step_env_callback=self._step_env_callback,
             timeout=30.0,
+            surface_flash_events=self.surface_flash_events,
         )
 
         # Workflow phase controller
@@ -1245,6 +1251,15 @@ class SimulatorFirstAgent(LoopAgent):
             lines.append(source)
         else:
             lines.append("simulate: registered (source not captured this session)")
+        # Flash aggregate (flash-aware arm): same shape as the check()
+        # abstained log — regions, fire counts, transitions, actions.
+        # isinstance guards: MagicMock fixtures degrade to "absent" (B1).
+        flash_log = getattr(sandbox, "_flash_log", None)
+        if callable(flash_log):
+            log = flash_log()
+            if isinstance(log, str) and log:
+                lines.append("")
+                lines.append(log)
         return "\n".join(lines)
 
     def _inject_sim_state_block(self, messages: list[dict[str, Any]]) -> None:

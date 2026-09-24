@@ -23,15 +23,19 @@ from typing import Any
 
 import pytest
 
+from agents.simulator_agent.agent import SimulatorFirstAgent
 from agents.simulator_agent.board_extraction import (
     FlashEvent,
     extract_board,
     flash_event_text,
+    flash_log_text,
+    region_key,
 )
 from agents.simulator_agent.frame_layers import (
     classify_stack,
     settled_board,
 )
+from agents.simulator_agent.sandbox import SimulatorSandbox
 
 pytestmark = pytest.mark.unit
 
@@ -247,3 +251,248 @@ class TestFlashEventRender:
         assert FlashEvent.from_dict(None) is None
         assert FlashEvent.from_dict({"cells": "no"}) is None
         assert FlashEvent.from_dict({"cells": [["x"]], "regions": []}) is None
+
+
+# ── Region dedup (timer-flash identity) ────────────────────────────────────
+
+
+class TestRegionDedup:
+    def test_overlaps_detects_shifted_timer_digits(self):
+        """Timer digits shift ±1 cell between flashes — identity is overlap."""
+        ev = FlashEvent(
+            cells=((53, 5, 5, 0), (53, 6, 5, 0)),
+            regions=((53, 53, 5, 6),),
+        )
+        assert ev.overlaps((53, 53, 6, 7)) is True  # shifted by one cell
+        assert ev.overlaps((53, 53, 8, 9)) is False  # disjoint digits
+        assert ev.overlaps((0, 0, 0, 0)) is False
+
+    def test_region_key_is_sorted_bboxes(self):
+        ev = FlashEvent(
+            cells=((53, 5, 5, 0), (9, 34, 3, 0)),
+            regions=((53, 53, 5, 5), (9, 9, 34, 34)),
+        )
+        assert region_key(ev) == ((9, 9, 34, 34), (53, 53, 5, 5))
+
+
+# ── Flash log aggregate (flash_log_text) ────────────────────────────────────
+
+
+def _timer_event(col: int = 5) -> FlashEvent:
+    """HUD-timer-shaped flash: rows 53-62, one digit at ``col``."""
+    cells = tuple(
+        (r, c, 5, 0)
+        for r in range(53, 63)
+        for c in range(col, col + 2)
+        if (r + c) % 3  # digit-ish pattern
+    )
+    return FlashEvent(
+        cells=cells,
+        regions=((53, 62, col, col + 1),),
+    )
+
+
+class TestFlashLogText:
+    def test_empty_store_renders_empty(self):
+        assert flash_log_text({}, []) == ""
+
+    def test_repeated_timer_flashes_collapse_to_one_region_row(self):
+        """Three timer flashes at shifted columns + one top-box flash →
+        one timer row (3 fires) + one top-box row (1 fire), sorted by fire
+        count."""
+        events: dict[int, FlashEvent] = {
+            4: _timer_event(5),
+            9: _timer_event(6),  # shifted digit — same region
+            14: _timer_event(5),
+            20: FlashEvent(
+                cells=((9, 34, 3, 0),),
+                regions=((9, 9, 34, 34),),
+            ),
+        }
+        actions = [2] * 25
+        text = flash_log_text(events, actions)
+        assert text.startswith("Flash log (4 transient overlay events")
+        assert "fired 3x" in text
+        assert "transitions [4, 9, 14]" in text
+        assert "fired 1x" in text
+        # Most-fired region first
+        timer_pos = text.find("fired 3x")
+        box_pos = text.find("fired 1x")
+        assert timer_pos < box_pos
+        # Both surfaces carry the not-board-state caveat
+        assert "NOT board state" in text
+
+    def test_actions_histogram_per_region(self):
+        events = {
+            0: _timer_event(5),
+            3: _timer_event(6),
+        }
+        actions = [2, 2, 2, 7, 7]
+        text = flash_log_text(events, actions)
+        assert "actions {2: 1, 7: 1}" in text
+
+    def test_out_of_range_transition_index_degrades(self):
+        """A flash stored at a transition beyond the actions list (the
+        unrecorded-transition guard in sandbox.py) must render, not crash."""
+        events = {12: _timer_event(5)}
+        text = flash_log_text(events, [2, 2])
+        assert "fired 1x" in text
+
+    def test_purity_over_the_store(self):
+        events = {4: _timer_event(5)}
+        snapshot = dict(events)
+        flash_log_text(events, [2])
+        assert events == snapshot
+
+
+# ── abb14eca real aggregate ────────────────────────────────────────────────
+
+
+class TestAbb14ecaFlashLog:
+    def test_timer_flashes_collapse_top_box_stays_distinct(self, abb_lines):
+        """The real recording: 11 events — the 9 timer flashes collapse to
+        ~2 digit regions, the 2 top-box flashes stay distinct rows."""
+        prev: list[list[int]] | None = None
+        events: dict[int, FlashEvent] = {}
+        actions = [line["data"].get("action_taken", 2) or 2 for line in abb_lines]
+        for i, line in enumerate(abb_lines):
+            stack = line["data"]["frame"]
+            board, event = extract_board(stack, prev, "continuity")
+            prev = board
+            if event is not None:
+                events[i] = event
+        assert len(events) == 11
+        text = flash_log_text(events, actions)
+        assert "11 transient overlay events" in text
+        rows = [ln for ln in text.splitlines() if ln.startswith("  rows")]
+        # Top-box (2 fires) ranks above every timer digit (1 fire each,
+        # since digit shifts move them out of overlap) — pre-registered
+        # expectation: 9 timer events, 2 top-box; dedup can only merge
+        # shifted-overlapping digits.
+        assert any("fired 2x" in ln and "rows 9-15" in ln for ln in rows)
+
+
+# ── Sandbox surfacing surfaces (flag + dedup print) ────────────────────────
+
+
+def _live_sandbox(
+    responses: list[dict[str, Any]], surface: bool = True
+) -> SimulatorSandbox:
+    """Live-mode sandbox over scripted callback responses."""
+    queue = list(responses)
+
+    def callback(action_id: int, action_data: Any) -> dict[str, Any]:
+        return queue.pop(0) if queue else {"grid": _GRID}
+
+    return SimulatorSandbox(
+        step_env_callback=callback, surface_flash_events=surface
+    )
+
+
+_GRID = [[3] * 64 for _ in range(64)]
+_FLASH = FlashEvent(
+    cells=((9, 34, 3, 0), (10, 34, 3, 0)),
+    regions=((9, 10, 34, 34),),
+)
+_FLASH_RESPONSE = {"grid": _GRID, "flash_event": _FLASH.as_dict()}
+
+
+def _seeded(response: dict[str, Any]) -> list[dict[str, Any]]:
+    """Response list where the flash rides the SECOND action.
+
+    The first live action has prev_grid None (no corpus anchor — the real
+    agent seeds _current_frame via update_state() before the tool loop),
+    so a flash there is unrecorded and correctly not stored."""
+    return [{"grid": _GRID}, response]
+
+
+class TestSandboxFlashSurfacing:
+    """Surfacing asserts on run_code's RETURNED output — the worker thread
+    swaps sys.stdout to its own buffer, so capsys never sees tool prints
+    (the real seam is what the LLM's tool result shows)."""
+
+    def test_flag_off_stores_but_never_prints(self):
+        sb = _live_sandbox(
+            _seeded(_FLASH_RESPONSE) + [{"grid": _GRID}], surface=False
+        )
+        out, _, _ = sb.run_code("action(2)")
+        out, _, _ = sb.run_code("action(2)")
+        assert sb._flash_events == {0: _FLASH}
+        assert "FLASH:" not in out
+
+    def test_flag_on_prints_flash_line(self):
+        sb = _live_sandbox(_seeded(_FLASH_RESPONSE))
+        sb.run_code("action(2)")
+        out, _, _ = sb.run_code("action(2)")
+        assert "FLASH: 2 cells" in out
+
+    def test_repeat_region_suppresses_second_line_but_keeps_store(self):
+        sb = _live_sandbox(_seeded(dict(_FLASH_RESPONSE)) + [dict(_FLASH_RESPONSE)])
+        sb.run_code("action(2)")
+        out1, _, _ = sb.run_code("action(2)")
+        out2, _, _ = sb.run_code("action(2)")
+        assert "FLASH:" in out1
+        assert "FLASH:" not in out2
+        assert sorted(sb._flash_events) == [0, 1]
+
+    def test_new_region_prints_again(self):
+        other = {
+            "grid": _GRID,
+            "flash_event": FlashEvent(
+                cells=((53, 5, 5, 0),),
+                regions=((53, 53, 5, 5),),
+            ).as_dict(),
+        }
+        sb = _live_sandbox(_seeded(dict(_FLASH_RESPONSE)) + [other])
+        sb.run_code("action(2)")
+        _, _, _ = sb.run_code("action(2)")
+        out2, _, _ = sb.run_code("action(2)")
+        assert "FLASH:" in out2
+
+    def test_flash_on_unrecorded_transition_not_stored(self):
+        """First action with prev_grid None: no corpus entry, no store key
+        (the -1 corruption guard)."""
+        sb = _live_sandbox([dict(_FLASH_RESPONSE)])
+        out, _, _ = sb.run_code("action(2)")
+        assert sb._flash_events == {}
+        assert "FLASH:" not in out
+
+
+class TestSandboxFlashLogInCheck:
+    def test_check_prints_flash_log_when_surfacing_on(self):
+        sb = _live_sandbox(_seeded(_FLASH_RESPONSE))
+        sb.run_code("action(2)")
+        sb.run_code("action(2)")
+        sb.run_code("set_simulate(lambda g, a: g)")
+        out, _, _ = sb.run_code("check()")
+        assert "Flash log" in out
+        assert sb._last_check_result["flash_log"] != ""
+
+    def test_check_flash_log_suppressed_when_flag_off(self):
+        sb = _live_sandbox(_seeded(_FLASH_RESPONSE), surface=False)
+        sb.run_code("action(2)")
+        sb.run_code("action(2)")
+        sb.run_code("set_simulate(lambda g, a: g)")
+        out, _, _ = sb.run_code("check()")
+        assert "Flash log" not in out
+        assert sb._last_check_result["flash_log"] == ""
+
+    def test_sim_state_block_carries_flash_log(self):
+        agent = SimulatorFirstAgent.__new__(SimulatorFirstAgent)
+        agent._sandbox = _live_sandbox(_seeded(_FLASH_RESPONSE))
+        agent._sandbox.run_code("action(2)")
+        agent._sandbox.run_code("action(2)")
+        agent._sandbox.run_code("set_simulate(lambda g, a: g)")
+        block = agent._build_sim_state_block()
+        assert block is not None
+        assert "Flash log" in block
+
+    def test_sim_state_block_flash_log_off_via_sandbox_flag(self):
+        agent = SimulatorFirstAgent.__new__(SimulatorFirstAgent)
+        agent._sandbox = _live_sandbox(_seeded(_FLASH_RESPONSE), surface=False)
+        agent._sandbox.run_code("action(2)")
+        agent._sandbox.run_code("action(2)")
+        agent._sandbox.run_code("set_simulate(lambda g, a: g)")
+        block = agent._build_sim_state_block()
+        assert block is not None
+        assert "Flash log" not in block
